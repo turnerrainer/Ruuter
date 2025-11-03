@@ -1,0 +1,3 @@
+response:
+  return: "Hello, World!"
+  next: end

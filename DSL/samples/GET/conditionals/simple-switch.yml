@@ -1,0 +1,33 @@
+check_age:
+  assign:
+    age: ${parseFloat(incoming.params.age)}
+  next: validate
+
+validate:
+  switch:
+    - condition: ${age >= 18}
+      next: adult
+    - condition: ${age >= 13}
+      next: teen
+  next: child
+
+adult:
+  return:
+    category: "adult"
+    age: ${age}
+    message: "You are an adult"
+  next: end
+
+teen:
+  return:
+    category: "teenager"
+    age: ${age}
+    message: "You are a teenager"
+  next: end
+
+child:
+  return:
+    category: "child"
+    age: ${age}
+    message: "You are a child"
+  next: end

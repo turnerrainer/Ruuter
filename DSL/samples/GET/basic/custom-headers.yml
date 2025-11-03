@@ -1,0 +1,8 @@
+response:
+  status: 200
+  headers:
+    X-Custom-Header: "Custom Value"
+    X-API-Version: "1.0"
+  return:
+    message: "Response with custom headers"
+  next: end

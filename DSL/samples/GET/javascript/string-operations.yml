@@ -1,0 +1,21 @@
+extract_text:
+  assign:
+    text: ${incoming.params.text || "Hello World"}
+  next: process
+
+process:
+  assign:
+    result:
+      original: ${text}
+      uppercase: ${text.toUpperCase()}
+      lowercase: ${text.toLowerCase()}
+      length: ${text.length}
+      reversed: ${text.split('').reverse().join('')}
+      words: ${text.split(' ')}
+      firstChar: ${text.charAt(0)}
+      lastChar: ${text.charAt(text.length - 1)}
+  next: respond
+
+respond:
+  return: ${result}
+  next: end

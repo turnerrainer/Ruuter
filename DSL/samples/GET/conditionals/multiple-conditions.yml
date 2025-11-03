@@ -1,0 +1,41 @@
+extract_params:
+  assign:
+    role: ${incoming.params.role}
+    authenticated: ${incoming.params.authenticated === 'true'}
+  next: check_access
+
+check_access:
+  switch:
+    - condition: ${!authenticated}
+      next: unauthorized
+    - condition: ${role === 'admin'}
+      next: admin_access
+    - condition: ${role === 'user'}
+      next: user_access
+  next: invalid_role
+
+unauthorized:
+  status: 401
+  return:
+    error: "Authentication required"
+  next: end
+
+admin_access:
+  return:
+    access: "full"
+    role: "admin"
+    permissions: ["read", "write", "delete"]
+  next: end
+
+user_access:
+  return:
+    access: "limited"
+    role: "user"
+    permissions: ["read"]
+  next: end
+
+invalid_role:
+  status: 403
+  return:
+    error: "Invalid role"
+  next: end

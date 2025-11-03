@@ -1,0 +1,22 @@
+generate_timestamps:
+  assign:
+    now: ${Date.now()}
+    date: ${new Date().toISOString()}
+  next: calculate_dates
+
+calculate_dates:
+  assign:
+    timestamps:
+      current_ms: ${now}
+      current_iso: ${date}
+      unix_seconds: ${Math.floor(now / 1000)}
+      year: ${new Date().getFullYear()}
+      month: ${new Date().getMonth() + 1}
+      day: ${new Date().getDate()}
+      hours: ${new Date().getHours()}
+      minutes: ${new Date().getMinutes()}
+  next: respond
+
+respond:
+  return: ${timestamps}
+  next: end

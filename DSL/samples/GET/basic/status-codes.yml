@@ -1,0 +1,6 @@
+response:
+  status: 200
+  return:
+    message: "Success"
+    code: 200
+  next: end

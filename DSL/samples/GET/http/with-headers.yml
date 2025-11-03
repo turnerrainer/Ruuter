@@ -1,0 +1,13 @@
+fetch_with_auth:
+  call: http.get
+  args:
+    url: "https://api.example.com/protected"
+    headers:
+      Authorization: "Bearer ${incoming.headers.token}"
+      X-API-Key: "[#API_KEY]"
+  result: protected_data
+  next: respond
+
+respond:
+  return: ${protected_data.response.body}
+  next: end

@@ -1,0 +1,17 @@
+build_object:
+  assign:
+    user_data:
+      profile:
+        firstName: "Jane"
+        lastName: "Smith"
+        age: 28
+      settings:
+        theme: "dark"
+        notifications: true
+      metadata:
+        created: ${Date.now()}
+  next: respond
+
+respond:
+  return: ${user_data}
+  next: end

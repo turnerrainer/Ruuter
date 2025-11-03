@@ -1,0 +1,14 @@
+assign_vars:
+  assign:
+    name: "John Doe"
+    age: 30
+    city: "Tallinn"
+  next: return_result
+
+return_result:
+  return:
+    user:
+      name: ${name}
+      age: ${age}
+      city: ${city}
+  next: end

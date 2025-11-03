@@ -1,0 +1,28 @@
+extract_params:
+  assign:
+    page: ${Math.max(1, parseInt(incoming.params.page || '1'))}
+    size: ${Math.max(1, Math.min(100, parseInt(incoming.params.size || '20')))}
+  next: calculate
+
+calculate:
+  assign:
+    pagination:
+      page: ${page}
+      size: ${size}
+      offset: ${(page - 1) * size}
+      limit: ${size}
+  next: build_response
+
+build_response:
+  assign:
+    result:
+      pagination: ${pagination}
+      links:
+        self: ${'/samples/advanced/pagination?page=' + page + '&size=' + size}
+        next: ${'/samples/advanced/pagination?page=' + (page + 1) + '&size=' + size}
+        prev: ${page > 1 ? '/samples/advanced/pagination?page=' + (page - 1) + '&size=' + size : null}
+  next: respond
+
+respond:
+  return: ${result}
+  next: end

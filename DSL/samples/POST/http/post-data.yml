@@ -1,0 +1,19 @@
+send_data:
+  call: http.post
+  args:
+    url: "https://jsonplaceholder.typicode.com/posts"
+    body:
+      title: ${incoming.body.title}
+      body: ${incoming.body.content}
+      userId: 1
+    headers:
+      Content-Type: "application/json"
+  result: post_result
+  next: respond
+
+respond:
+  status: 201
+  return:
+    message: "Data posted successfully"
+    response: ${post_result.response.body}
+  next: end

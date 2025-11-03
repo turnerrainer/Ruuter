@@ -1,0 +1,12 @@
+fetch_data:
+  call: http.get
+  args:
+    url: "https://jsonplaceholder.typicode.com/users/1"
+  result: api_response
+  next: respond
+
+respond:
+  return:
+    status: "success"
+    data: ${api_response.response.body}
+  next: end

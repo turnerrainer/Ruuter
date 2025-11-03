@@ -1,0 +1,19 @@
+extract_data:
+  assign:
+    input_data: ${incoming.body}
+  next: transform
+
+transform:
+  assign:
+    transformed:
+      original: ${input_data}
+      keys: ${Object.keys(input_data)}
+      values: ${Object.values(input_data)}
+      count: ${Object.keys(input_data).length}
+      json_string: ${JSON.stringify(input_data)}
+      has_name: ${input_data.hasOwnProperty('name')}
+  next: respond
+
+respond:
+  return: ${transformed}
+  next: end

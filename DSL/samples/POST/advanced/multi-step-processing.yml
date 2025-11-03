@@ -1,0 +1,41 @@
+validate_input:
+  switch:
+    - condition: ${!incoming.body.data}
+      next: missing_data
+  next: extract_data
+
+extract_data:
+  assign:
+    raw_data: ${incoming.body.data}
+    metadata:
+      received_at: ${Date.now()}
+      source: "api"
+  next: process_data
+
+process_data:
+  assign:
+    processed:
+      data: ${raw_data}
+      metadata: ${metadata}
+      processed_at: ${Date.now()}
+      processing_time: ${Date.now() - metadata.received_at}
+  next: enrich_data
+
+enrich_data:
+  assign:
+    enriched:
+      result: ${processed}
+      status: "success"
+      version: "1.0"
+  next: respond
+
+respond:
+  status: 200
+  return: ${enriched}
+  next: end
+
+missing_data:
+  status: 400
+  return:
+    error: "Missing required field: data"
+  next: end

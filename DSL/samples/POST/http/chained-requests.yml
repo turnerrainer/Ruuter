@@ -1,0 +1,26 @@
+get_user:
+  call: http.get
+  args:
+    url: "https://jsonplaceholder.typicode.com/users/${incoming.body.userId}"
+  result: user_data
+  next: get_posts
+
+get_posts:
+  call: http.get
+  args:
+    url: "https://jsonplaceholder.typicode.com/posts"
+    query:
+      userId: ${incoming.body.userId}
+  result: user_posts
+  next: combine_data
+
+combine_data:
+  assign:
+    combined:
+      user: ${user_data.response.body}
+      posts: ${user_posts.response.body}
+  next: respond
+
+respond:
+  return: ${combined}
+  next: end

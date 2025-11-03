@@ -1,0 +1,24 @@
+create_array:
+  assign:
+    numbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  next: process_array
+
+process_array:
+  assign:
+    result:
+      original: ${numbers}
+      length: ${numbers.length}
+      first: ${numbers[0]}
+      last: ${numbers[numbers.length - 1]}
+      sum: ${numbers.reduce((a, b) => a + b, 0)}
+      average: ${numbers.reduce((a, b) => a + b, 0) / numbers.length}
+      max: ${Math.max(...numbers)}
+      min: ${Math.min(...numbers)}
+      reversed: ${numbers.slice().reverse()}
+      doubled: ${numbers.map(n => n * 2)}
+      evens: ${numbers.filter(n => n % 2 === 0)}
+  next: respond
+
+respond:
+  return: ${result}
+  next: end

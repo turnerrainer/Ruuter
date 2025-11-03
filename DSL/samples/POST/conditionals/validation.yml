@@ -1,0 +1,34 @@
+extract_data:
+  assign:
+    username: ${incoming.body.username}
+    email: ${incoming.body.email}
+  next: validate
+
+validate:
+  switch:
+    - condition: ${!username || username.length < 3}
+      next: invalid_username
+    - condition: ${!email || !email.includes('@')}
+      next: invalid_email
+  next: success
+
+invalid_username:
+  status: 400
+  return:
+    error: "Username must be at least 3 characters"
+  next: end
+
+invalid_email:
+  status: 400
+  return:
+    error: "Invalid email format"
+  next: end
+
+success:
+  status: 200
+  return:
+    message: "Validation passed"
+    data:
+      username: ${username}
+      email: ${email}
+  next: end

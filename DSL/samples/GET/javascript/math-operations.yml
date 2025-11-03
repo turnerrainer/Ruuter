@@ -1,0 +1,35 @@
+extract_numbers:
+  assign:
+    a: ${parseFloat(incoming.params.a)}
+    b: ${parseFloat(incoming.params.b)}
+  next: validate
+
+validate:
+  switch:
+    - condition: ${Number.isNaN(a) || Number.isNaN(b)}
+      next: bad_request
+  next: calculate
+
+calculate:
+  assign:
+    result:
+      a: ${a}
+      b: ${b}
+      sum: ${a + b}
+      difference: ${a - b}
+      product: ${a * b}
+      quotient: ${b !== 0 ? a / b : null}
+      average: ${(a + b) / 2}
+      max: ${Math.max(a, b)}
+      min: ${Math.min(a, b)}
+  next: respond
+
+respond:
+  return: ${result}
+  next: end
+
+bad_request:
+  status: 400
+  return:
+    error: "Please provide valid numbers for 'a' and 'b'"
+  next: end

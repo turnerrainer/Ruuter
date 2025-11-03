@@ -1,0 +1,27 @@
+step1:
+  assign:
+    initial_value: 10
+  next: step2
+
+step2:
+  assign:
+    doubled: ${initial_value * 2}
+  next: step3
+
+step3:
+  assign:
+    squared: ${doubled * doubled}
+  next: step4
+
+step4:
+  assign:
+    final_result:
+      initial: ${initial_value}
+      after_doubling: ${doubled}
+      after_squaring: ${squared}
+      total_operations: 3
+  next: respond
+
+respond:
+  return: ${final_result}
+  next: end

@@ -1,0 +1,29 @@
+log_start:
+  log: "Request processing started for user: ${incoming.params.userId}"
+  next: process
+
+process:
+  assign:
+    user_id: ${incoming.params.userId}
+    timestamp: ${Date.now()}
+  next: log_processing
+
+log_processing:
+  log: "Processing user ID: ${user_id} at ${timestamp}"
+  next: complete
+
+complete:
+  assign:
+    result:
+      userId: ${user_id}
+      processedAt: ${timestamp}
+      status: "completed"
+  next: log_complete
+
+log_complete:
+  log: "Request processing completed successfully"
+  next: respond
+
+respond:
+  return: ${result}
+  next: end

@@ -1,0 +1,14 @@
+extract_body:
+  assign:
+    username: ${incoming.body.username}
+    email: ${incoming.body.email}
+  next: respond
+
+respond:
+  status: 201
+  return:
+    created:
+      username: ${username}
+      email: ${email}
+    timestamp: ${Date.now()}
+  next: end

@@ -1,0 +1,13 @@
+extract_params:
+  assign:
+    user_id: ${incoming.params.id}
+    user_name: ${incoming.params.name}
+  next: respond
+
+respond:
+  return:
+    received:
+      id: ${user_id}
+      name: ${user_name}
+    message: "Received parameters successfully"
+  next: end
