@@ -1,0 +1,11 @@
+# Reusable template - fetches user profile
+fetch_user:
+  call: http.get
+  args:
+    url: "https://jsonplaceholder.typicode.com/users/${incoming.params.userId}"
+  result: user_data
+  next: respond
+
+respond:
+  return: ${user_data.response.body}
+  next: end

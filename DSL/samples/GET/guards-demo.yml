@@ -1,0 +1,15 @@
+# Demonstration of guard functionality
+respond:
+  return:
+    message: "Guards are DSL files with .guard.yml extension"
+    explanation:
+      - "Guards run before the main DSL"
+      - "If guard returns non-200 status, main DSL is blocked"
+      - "Guards are hierarchical - parent path guards apply to child paths"
+    examples:
+      protected: "GET /samples/protected/data requires Bearer token"
+      admin: "POST /samples/admin/* requires admin role"
+    usage:
+      protected: "curl -H 'Authorization: Bearer your-token-here' http://localhost:8080/samples/protected/data"
+      admin: "curl -X POST -H 'Authorization: Bearer token' -H 'x-user-role: admin' http://localhost:8080/samples/admin/delete-user"
+  next: end

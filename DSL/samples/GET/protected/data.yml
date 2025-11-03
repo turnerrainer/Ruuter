@@ -1,0 +1,7 @@
+# Protected endpoint - guard must pass first
+respond:
+  return:
+    message: "This is protected data"
+    timestamp: ${Date.now()}
+    user: "authenticated-user"
+  next: end

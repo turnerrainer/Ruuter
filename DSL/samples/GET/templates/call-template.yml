@@ -1,0 +1,20 @@
+# Example of calling another DSL as template
+call_user_template:
+  template: "samples/GET/templates/user-profile"
+  request_type: "GET"
+  query:
+    userId: ${incoming.params.id}
+  result: user_result
+  next: enrich
+
+enrich:
+  assign:
+    enriched:
+      user: ${user_result}
+      fetched_at: ${Date.now()}
+      requested_by: ${incoming.params.requester}
+  next: respond
+
+respond:
+  return: ${enriched}
+  next: end

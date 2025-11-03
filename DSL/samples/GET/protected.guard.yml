@@ -1,0 +1,39 @@
+# Guard for GET /samples/protected/*
+# Checks authentication before allowing access
+
+check_auth_header:
+  switch:
+    - condition: ${!incoming.headers.authorization}
+      next: unauthorized
+  next: validate_token
+
+validate_token:
+  assign:
+    token: ${incoming.headers.authorization}
+  next: check_token
+
+check_token:
+  switch:
+    - condition: ${!token.startsWith('Bearer ')}
+      next: invalid_token
+    - condition: ${token.length < 20}
+      next: invalid_token
+  next: authorized
+
+authorized:
+  status: 200
+  return:
+    message: "Guard passed"
+  next: end
+
+unauthorized:
+  status: 401
+  return:
+    error: "Authorization header required"
+  next: end
+
+invalid_token:
+  status: 401
+  return:
+    error: "Invalid token format"
+  next: end

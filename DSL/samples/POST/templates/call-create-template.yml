@@ -1,0 +1,27 @@
+# Example of calling create template
+validate_input:
+  switch:
+    - condition: ${!incoming.body.name}
+      next: missing_name
+  next: call_template
+
+call_template:
+  template: "samples/POST/templates/create-entity"
+  request_type: "POST"
+  body:
+    name: ${incoming.body.name}
+    type: ${incoming.body.type || "default"}
+  result: created_entity
+  next: respond
+
+respond:
+  return:
+    success: true
+    entity: ${created_entity}
+  next: end
+
+missing_name:
+  status: 400
+  return:
+    error: "Name is required"
+  next: end

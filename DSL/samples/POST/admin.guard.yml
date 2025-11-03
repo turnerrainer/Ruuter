@@ -1,0 +1,37 @@
+# Guard for POST /samples/admin/*
+# Checks for admin role
+
+check_auth:
+  switch:
+    - condition: ${!incoming.headers.authorization}
+      next: unauthorized
+  next: check_role
+
+check_role:
+  assign:
+    role: ${incoming.headers['x-user-role']}
+  next: validate_role
+
+validate_role:
+  switch:
+    - condition: ${role !== 'admin'}
+      next: forbidden
+  next: authorized
+
+authorized:
+  status: 200
+  return:
+    message: "Admin guard passed"
+  next: end
+
+unauthorized:
+  status: 401
+  return:
+    error: "Authentication required"
+  next: end
+
+forbidden:
+  status: 403
+  return:
+    error: "Admin role required"
+  next: end

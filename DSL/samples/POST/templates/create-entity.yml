@@ -1,0 +1,15 @@
+# Reusable template - creates entity with metadata
+prepare_entity:
+  assign:
+    entity:
+      data: ${incoming.body}
+      metadata:
+        created_at: ${Date.now()}
+        created_by: "system"
+        version: 1
+  next: respond
+
+respond:
+  status: 201
+  return: ${entity}
+  next: end

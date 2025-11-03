@@ -1,0 +1,26 @@
+# Admin-only endpoint - requires admin guard to pass
+validate_user_id:
+  switch:
+    - condition: ${!incoming.body.userId}
+      next: missing_user_id
+  next: simulate_delete
+
+simulate_delete:
+  assign:
+    deleted_user:
+      userId: ${incoming.body.userId}
+      deleted_at: ${Date.now()}
+      deleted_by: "admin"
+  next: respond
+
+respond:
+  return:
+    success: true
+    deleted: ${deleted_user}
+  next: end
+
+missing_user_id:
+  status: 400
+  return:
+    error: "userId is required"
+  next: end
