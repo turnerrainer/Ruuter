@@ -7,19 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-docker-support] - 2025-11-03
+
+### Added
+- Docker support with multi-stage builds
+- docker-compose.yml for easy deployment
+- .dockerignore for optimized builds
+- Health check endpoint in Docker
+- Volume mounts for DSL and constants
+- Non-root user in Docker image
+- Docker documentation in README
+
+### Changed
+- Updated README with Docker instructions
+- Improved quick start guide
+
 ## [0.2.0-functional-core] - 2025-11-03
 
 ### Added
 - Complete DSL parser with YAML support
 - File-based routing system
 - JavaScript engine integration (Boa)
-- All core step types:
-  - Assign (variable assignment)
-  - Return (response generation)
-  - HTTP (GET/POST/PUT/DELETE)
-  - Switch (conditional logic)
-  - Log (logging)
-  - Template (placeholder)
+- All core step types (assign, return, http, switch, log, template)
 - HTTP client with timeout support
 - Execution context with variable storage
 - Constants.ini support
@@ -28,12 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Guards system (basic structure)
 - Axum web server with health check
 - Tracing/logging infrastructure
-
-### Notes
-- Functional core implementation complete
-- Template step needs recursive DSL execution
-- Guards not fully implemented
-- Ready for basic DSL execution
 
 ## [0.1.0-rust-foundation] - 2025-11-03
 

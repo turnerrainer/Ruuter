@@ -2,7 +2,7 @@
 
 **Rust implementation of Ruuter - Declarative REST Router**
 
-Version: 0.2.0-functional-core
+Version: 0.3.0-docker-support
 Author: Rainer Türner
 Status: Functional Core Complete
 
@@ -16,17 +16,26 @@ Status: Functional Core Complete
 - ✅ Constants.ini support
 - ✅ Configuration system
 - ✅ Error handling
+- ✅ Docker support
 - ⚠️ Template step (basic)
 - ⚠️ Guards system (placeholder)
 
 ## Quick Start
 
+### Docker (Recommended)
+
 ```bash
-cargo build
-cargo run
+docker-compose up -d
 ```
 
 Server starts on `http://localhost:8080`
+
+### Local Build
+
+```bash
+cargo build --release
+cargo run --release
+```
 
 ## Example DSL
 
@@ -38,6 +47,25 @@ response:
 ```
 
 Access: `GET http://localhost:8080/samples/ping`
+
+Health check: `GET http://localhost:8080/health`
+
+## Docker Configuration
+
+The Docker image uses multi-stage builds for minimal size:
+- Build stage: Rust 1.75
+- Runtime stage: Debian slim
+- Non-root user for security
+- Volume mounts for DSL files and constants
+
+### Volumes
+
+- `./DSL:/app/DSL:ro` - DSL files (read-only)
+- `./constants.ini:/app/constants.ini:ro` - Constants (read-only)
+
+### Environment
+
+- `RUST_LOG=info` - Logging level (debug, info, warn, error)
 
 ## Documentation
 
