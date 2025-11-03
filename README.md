@@ -2,53 +2,52 @@
 
 **Rust implementation of Ruuter - Declarative REST Router**
 
-Version: 0.1.0-rust-foundation
+Version: 0.2.0-functional-core
 Author: Rainer Türner
-Status: Early Development
+Status: Functional Core Complete
 
-## About
+## Features
 
-Ruuter-RS is a complete Rust rewrite of the Java-based Ruuter declarative REST routing engine. It maintains 100% compatibility with existing Ruuter DSL files while providing significant performance improvements and lower resource usage.
+- ✅ File-system-based REST routing
+- ✅ YAML DSL parser
+- ✅ JavaScript expression evaluation (Boa engine)
+- ✅ HTTP client (GET/POST/PUT/DELETE)
+- ✅ All core step types (assign, return, http, switch, log)
+- ✅ Constants.ini support
+- ✅ Configuration system
+- ✅ Error handling
+- ⚠️ Template step (basic)
+- ⚠️ Guards system (placeholder)
 
-### Key Features (Planned)
-- File-system-based REST routing
-- YAML DSL for endpoint definition
-- JavaScript expression evaluation
-- HTTP client with full REST support
-- Guards for authentication/authorization
-- Template system for DSL composition
-- Hot reload support
-- OpenTelemetry tracing
-- OpenSearch logging integration
-
-## Project Status
-
-This is the initial foundation release. Core features are under active development.
-
-See [docs/todo.md](docs/todo.md) for detailed roadmap.
-
-## Building
-
-Requires Rust 1.75+
+## Quick Start
 
 ```bash
 cargo build
 cargo run
-cargo test
 ```
+
+Server starts on `http://localhost:8080`
+
+## Example DSL
+
+```yaml
+# DSL/samples/GET/ping.yml
+response:
+  status: 202
+  return: pong
+```
+
+Access: `GET http://localhost:8080/samples/ping`
 
 ## Documentation
 
-- [Development TODO](docs/todo.md) - Development roadmap and proposed improvements
-- [CHANGELOG.md](CHANGELOG.md) - Version history
+- [Development TODO](docs/todo.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## Original Project
 
-This is a Rust implementation of Ruuter, originally developed at the Information System Authority of Estonia (RIA).
-
-Original Java repository: https://github.com/buerokratt/Ruuter
-Reference implementation: /home/rainer/Desktop/Buerostack/Ruuter
+Rust rewrite of: https://github.com/buerokratt/Ruuter
 
 ## License
 
-MIT License - See LICENSE file
+MIT License

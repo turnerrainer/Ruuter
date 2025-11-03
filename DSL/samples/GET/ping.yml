@@ -1,0 +1,6 @@
+response:
+  status: 202
+  headers:
+    XPingStatusHeader: pong delivered
+  return: pong
+  next: end
