@@ -6,9 +6,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod assign;
+pub mod engine;
 pub mod http;
+pub mod iterate;
 pub mod log;
 pub mod return_step;
+pub mod state;
 pub mod switch;
 pub mod template;
 
@@ -21,7 +24,57 @@ pub enum DslStep {
     Switch(SwitchStep),
     Log(LogStep),
     Template(TemplateStep),
+    State(StateStep),
+    Iterate(IterateStep),
     Declaration(DeclarationStep),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IterateStep {
+    /// Expression that evaluates to a list. Each element is bound to
+    /// the variable named by `as` and `do` runs once per element.
+    pub iterate: IterateBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IterateBody {
+    pub over: Value,
+    #[serde(rename = "as")]
+    pub item_var: String,
+    #[serde(rename = "do")]
+    pub body: Vec<DslStep>,
+    /// Optional aggregate. If set, the value of this expression is
+    /// collected (per-item) and bound into the parent context under
+    /// `into`. The expression sees the iteration variable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collect: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub into: Option<String>,
+    /// Cap on the number of items iterated. Defaults to 10_000 in the
+    /// executor — set lower for tight bounds, higher for known-large lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateStep {
+    pub state: StateOp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateOp {
+    /// Read `key` from the project-scoped store into context variable `into`.
+    /// Missing keys bind `null`.
+    Get { key: String, into: String },
+    /// Write `value` (evaluated through the script engine) under `key`.
+    Set { key: String, value: Value },
+    /// Remove `key`. No error if absent.
+    Delete { key: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -37,8 +90,10 @@ pub struct AssignStep {
 pub struct ReturnStep {
     #[serde(rename = "return")]
     pub return_value: Value,
+    /// HTTP status: literal u16 OR a script expression like
+    /// `${upstream.response.status}` that evaluates to a u16.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
+    pub status: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,8 +119,11 @@ pub struct HttpStep {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HttpArgs {
     pub url: String,
+    /// Body — any JSON value. Object (map), array, or scalar all work.
+    /// Use a YAML mapping for explicit fields, or `${incoming.body}` to
+    /// pass the inbound body through verbatim.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<HashMap<String, Value>>,
+    pub body: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,7 +170,7 @@ pub struct TemplateStep {
 }
 
 pub trait StepExecutor {
-    async fn execute(&self, context: &ExecutionContext) -> Result<StepResult>;
+    fn execute(&self, context: &ExecutionContext) -> impl std::future::Future<Output = Result<StepResult>> + Send;
 }
 
 #[derive(Debug, Clone)]
