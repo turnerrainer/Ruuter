@@ -23,6 +23,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
@@ -60,7 +62,25 @@ async fn connect_and_drain(
     dispatcher: &TriggerDispatcher,
     registry: &WsRegistry,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (ws, response) = tokio_tungstenite::connect_async(&cfg.url).await?;
+    // Build a request object so we can attach upgrade headers (auth tokens etc.)
+    // before handing it to tungstenite.
+    let mut request = cfg.url.as_str().into_client_request()?;
+    for (k, v) in cfg.headers.iter() {
+        let header_value = HeaderValue::from_str(v).map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                "invalid header value for '{}': {}", k, e
+            ))
+        })?;
+        let header_name: tokio_tungstenite::tungstenite::http::HeaderName =
+            k.parse().map_err(|e| {
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "invalid header name '{}': {}", k, e
+                ))
+            })?;
+        request.headers_mut().insert(header_name, header_value);
+    }
+
+    let (ws, response) = tokio_tungstenite::connect_async(request).await?;
     info!(
         %project, %name,
         status = response.status().as_u16(),

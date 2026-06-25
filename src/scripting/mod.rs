@@ -6,8 +6,47 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 
-static SCRIPT_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
 static LINE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
+
+/// Find every balanced `${...}` segment in `s`. Returns (start, end, inner)
+/// where `start..end` covers the whole `${...}` and `inner` is the script
+/// body between braces. Properly nests on inner `{...}` (JS object literals).
+fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < n {
+        if bytes[i] == b'$' && bytes[i + 1] == b'{' {
+            let start = i;
+            let mut depth = 1i32;
+            let mut j = i + 2;
+            while j < n {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let inner = s[i + 2..j].to_string();
+                            out.push((start, j + 1, inner));
+                            i = j + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            if depth != 0 {
+                // Unbalanced — skip past the `$` and try again.
+                i = start + 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
 
 pub struct ScriptEngine;
 
@@ -55,9 +94,11 @@ fn evaluate_with(input: &Value, boa: &mut BoaContext) -> Result<Value> {
 
 fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
     // Whole-string single-expression form: `${...}` — preserve native type.
-    if let Some(caps) = SCRIPT_PATTERN.captures(s) {
-        if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], boa);
+    let segs = find_script_segments(s);
+    if segs.len() == 1 {
+        let (start, end, ref inner) = segs[0];
+        if start == 0 && end == s.len() {
+            return execute_js(inner, boa);
         }
     }
     if let Some(caps) = LINE_PATTERN.captures(s) {
@@ -68,23 +109,28 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
 
     // Mixed string — interpolate every `${...}` and stringify the result.
     let mut last_err: Option<RuuterError> = None;
-    let replaced = SCRIPT_PATTERN.replace_all(s, |caps: &regex::Captures| {
-        match execute_js(&caps[1], boa) {
-            Ok(Value::String(out)) => out,
-            Ok(other) => other.to_string(),
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0usize;
+    for (start, end, inner) in &segs {
+        out.push_str(&s[cursor..*start]);
+        match execute_js(inner, boa) {
+            Ok(Value::String(s2)) => out.push_str(&s2),
+            Ok(other) => out.push_str(&other.to_string()),
             Err(e) => {
                 if last_err.is_none() {
                     last_err = Some(e);
                 }
-                caps[0].to_string()
+                out.push_str(&s[*start..*end]);
             }
         }
-    });
+        cursor = *end;
+    }
+    out.push_str(&s[cursor..]);
 
     if let Some(e) = last_err {
         return Err(e);
     }
-    Ok(Value::String(replaced.to_string()))
+    Ok(Value::String(out))
 }
 
 fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {

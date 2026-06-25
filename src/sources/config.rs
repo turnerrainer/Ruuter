@@ -16,6 +16,12 @@ pub enum SourceConfig {
 pub struct WsSourceConfig {
     pub url: String,
 
+    /// Headers sent on the WS upgrade request. Values run through the
+    /// same `[#constant]` substitution as `url`. Required for
+    /// auth-on-upgrade integrations like Andmela (`X-Andmela-Token`).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+
     /// JSON frames sent immediately after the WS handshake completes.
     /// Replayed after every successful reconnect.
     #[serde(default)]
@@ -82,6 +88,14 @@ pub fn resolve_constants(
     out.url = sub(&out.url, constants)?;
     out.dispatch.channel = sub(&out.dispatch.channel, constants)?;
     out.dispatch.key = sub(&out.dispatch.key, constants)?;
+
+    let mut resolved_headers: HashMap<String, String> = HashMap::with_capacity(out.headers.len());
+    for (k, v) in out.headers.into_iter() {
+        let kk = sub(&k, constants)?;
+        let vv = sub(&v, constants)?;
+        resolved_headers.insert(kk, vv);
+    }
+    out.headers = resolved_headers;
 
     for action in &mut out.on_connect {
         match action {
