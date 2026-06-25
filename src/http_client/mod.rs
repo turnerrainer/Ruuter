@@ -4,9 +4,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct HttpClient {
     client: Client,
-    default_timeout: Duration,
+    pub default_timeout: Duration,
 }
 
 impl HttpClient {
@@ -37,13 +38,21 @@ impl HttpClient {
 
         if let Some(q) = query {
             for (k, v) in q {
-                request = request.query(&[(k.as_str(), v.to_string())]);
+                let s = match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                request = request.query(&[(k.as_str(), s)]);
             }
         }
 
         if let Some(h) = headers {
             for (k, v) in h {
-                request = request.header(k.as_str(), v.to_string());
+                let s = match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                request = request.header(k.as_str(), s);
             }
         }
 
