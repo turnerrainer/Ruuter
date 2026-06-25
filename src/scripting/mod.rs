@@ -21,24 +21,37 @@ fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
             let start = i;
             let mut depth = 1i32;
             let mut j = i + 2;
+            let mut in_str: Option<u8> = None;
+            let mut escape = false;
             while j < n {
-                match bytes[j] {
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            let inner = s[i + 2..j].to_string();
-                            out.push((start, j + 1, inner));
-                            i = j + 1;
-                            break;
-                        }
+                let b = bytes[j];
+                if let Some(q) = in_str {
+                    if escape {
+                        escape = false;
+                    } else if b == b'\\' {
+                        escape = true;
+                    } else if b == q {
+                        in_str = None;
                     }
-                    _ => {}
+                } else {
+                    match b {
+                        b'"' | b'\'' | b'`' => in_str = Some(b),
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let inner = s[i + 2..j].to_string();
+                                out.push((start, j + 1, inner));
+                                i = j + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 j += 1;
             }
             if depth != 0 {
-                // Unbalanced — skip past the `$` and try again.
                 i = start + 1;
             }
         } else {
