@@ -1,0 +1,33 @@
+# Sample CronManager job definition.
+#
+# This file is NOT loaded by Ruuter — it lives here only as documentation
+# illustrating the CronManager → Ruuter integration pattern. The real
+# file belongs in the CronManager deployment's DSL directory.
+#
+# CronManager runs at http://cronmanager:9010 in a typical Buerostack
+# stack; it reads YAML job definitions from its own DSL/ tree and fires
+# scheduled HTTP requests at the configured URLs.
+#
+# See: /home/rainer/Desktop/Buerostack/CronManager/README.md
+
+heartbeat_ping:
+  # Quartz cron expression: every minute on the second
+  trigger: "0 */1 * * * ?"
+  type: http
+  method: POST
+  url: http://ruuter:8080/samples/scheduled/heartbeat
+  headers:
+    Content-Type: application/json
+    # Production: include a shared secret here that the Ruuter-side
+    # `scheduled.guard.yml` verifies. Without that guard, ANY caller
+    # can POST to the scheduled endpoint.
+    # X-Internal-Caller: cronmanager-shared-secret
+  body: '{"reason": "scheduled-heartbeat"}'
+
+daily_reconcile:
+  # 03:30 every day, server-local time
+  trigger: "0 30 3 * * ?"
+  type: http
+  method: POST
+  url: http://ruuter:8080/samples/scheduled/heartbeat
+  body: '{"reason": "daily-reconcile"}'

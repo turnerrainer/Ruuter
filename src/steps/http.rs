@@ -24,7 +24,6 @@ impl HttpStepExecutor {
     }
 }
 
-#[async_trait::async_trait]
 impl StepExecutor for HttpStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         let method = self.parse_method()?;
@@ -35,11 +34,7 @@ impl StepExecutor for HttpStepExecutor {
         )?;
 
         let body = if let Some(b) = &self.step.args.body {
-            let mut evaluated = HashMap::new();
-            for (k, v) in b {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            Some(evaluated)
+            Some(self.script_engine.evaluate(b, context)?)
         } else {
             None
         };

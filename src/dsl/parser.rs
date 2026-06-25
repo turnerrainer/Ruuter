@@ -1,6 +1,7 @@
 use crate::dsl::{Dsl, DeclarationStep};
 use crate::steps::DslStep;
 use crate::{Result, RuuterError};
+use indexmap::IndexMap;
 use regex::Regex;
 use serde_yaml::Value as YamlValue;
 use std::collections::HashMap;
@@ -20,7 +21,9 @@ impl DslParser {
         let content = fs::read_to_string(path)?;
         let replaced = self.replace_constants(&content);
 
-        let yaml: HashMap<String, YamlValue> = serde_yaml::from_str(&replaced)?;
+        // IndexMap preserves source order — the entry step is whatever
+        // comes first in the YAML, as the Ruuter DSL contract requires.
+        let yaml: IndexMap<String, YamlValue> = serde_yaml::from_str(&replaced)?;
         let steps = self.parse_steps(yaml)?;
 
         Ok(Dsl::new(steps))
@@ -31,14 +34,15 @@ impl DslParser {
 
         re.replace_all(content, |caps: &regex::Captures| {
             let key = &caps[1];
-            self.constants.get(key)
-                .map(|v| v.as_str())
-                .unwrap_or(&caps[0])
+            match self.constants.get(key) {
+                Some(v) => v.clone(),
+                None => caps[0].to_string(),
+            }
         }).to_string()
     }
 
-    fn parse_steps(&self, yaml: HashMap<String, YamlValue>) -> Result<HashMap<String, DslStep>> {
-        let mut steps = HashMap::new();
+    fn parse_steps(&self, yaml: IndexMap<String, YamlValue>) -> Result<IndexMap<String, DslStep>> {
+        let mut steps = IndexMap::with_capacity(yaml.len());
 
         for (name, value) in yaml {
             let step = self.parse_step(&name, value)?;

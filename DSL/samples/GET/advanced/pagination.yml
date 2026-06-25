@@ -18,9 +18,9 @@ build_response:
     result:
       pagination: ${pagination}
       links:
-        self: ${'/samples/advanced/pagination?page=' + page + '&size=' + size}
-        next: ${'/samples/advanced/pagination?page=' + (page + 1) + '&size=' + size}
-        prev: ${page > 1 ? '/samples/advanced/pagination?page=' + (page - 1) + '&size=' + size : null}
+        self: "${'/samples/advanced/pagination?page=' + page + '&size=' + size}"
+        next: "${'/samples/advanced/pagination?page=' + (page + 1) + '&size=' + size}"
+        prev: "${page > 1 ? '/samples/advanced/pagination?page=' + (page - 1) + '&size=' + size : null}"
   next: respond
 
 respond:

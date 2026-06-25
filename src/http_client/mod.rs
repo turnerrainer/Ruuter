@@ -27,7 +27,7 @@ impl HttpClient {
         &self,
         method: Method,
         url: &str,
-        body: Option<&HashMap<String, Value>>,
+        body: Option<&Value>,
         query: Option<&HashMap<String, Value>>,
         headers: Option<&HashMap<String, Value>>,
         timeout: Option<Duration>,

@@ -1,0 +1,16 @@
+# Companion endpoint to /scheduled/heartbeat — reads back the
+# timestamp the cron job wrote. Useful for verifying the integration
+# end-to-end without inspecting Ruuter logs.
+
+read_state:
+  state:
+    get:
+      key: "heartbeat.last_seen_ms"
+      into: last_seen
+  next: respond
+
+respond:
+  return:
+    last_seen_ms: "${last_seen}"
+    age_ms: "${last_seen == null ? null : Date.now() - last_seen}"
+  next: end

@@ -1,0 +1,79 @@
+# Stock-bar trigger — runs once per inbound bar frame from the
+# stock-feed WS source. ONE DSL handles every symbol (the `_default`
+# fallback when no per-symbol override exists), so subscribing to 200
+# tickers doesn't require 200 DSL files.
+#
+# The frame shape is the source's raw JSON, so `incoming.body.*` holds
+# Alpaca's per-bar fields:
+#   S  — symbol         (e.g. "AAPL")
+#   o  — open price
+#   h  — high price
+#   l  — low price
+#   c  — close price
+#   v  — volume
+#   t  — bar timestamp (RFC3339)
+#
+# Pipeline:
+#   1. Compute the intraday change vs. the last-seen close (state store).
+#   2. Update the last-close for next bar.
+#   3. If |change| crosses ALERT_THRESHOLD_PCT, fire a POST webhook.
+#   4. Otherwise, exit silently.
+
+compute:
+  assign:
+    symbol: "${incoming.body.S}"
+    close: "${incoming.body.c}"
+    high: "${incoming.body.h}"
+    low: "${incoming.body.l}"
+    volume: "${incoming.body.v}"
+    bar_time: "${incoming.body.t}"
+  next: load_prev
+
+load_prev:
+  state:
+    get:
+      key: "stock:${symbol}:last_close"
+      into: "prev_close"
+  next: compute_change
+
+compute_change:
+  assign:
+    # pct change vs prior bar; 0 on first sighting so we don't alert
+    # spuriously when we have no baseline yet.
+    change_pct: "${prev_close ? ((close - prev_close) / prev_close) * 100 : 0}"
+    threshold_pct: "0.5"
+  next: store_close
+
+store_close:
+  state:
+    set:
+      key: "stock:${symbol}:last_close"
+      value: "${close}"
+  next: gate
+
+gate:
+  switch:
+    - condition: "${Math.abs(change_pct) >= threshold_pct}"
+      next: alert
+  next: end
+
+alert:
+  call: http.post
+  args:
+    # Replace with your alerting endpoint (Slack incoming webhook,
+    # PagerDuty events API, a downstream Ruuter project, etc.).
+    url: "[#stock_alert_webhook]"
+    content_type: "application/json"
+    body:
+      symbol: "${symbol}"
+      close: "${close}"
+      change_pct: "${change_pct}"
+      bar_time: "${bar_time}"
+      volume: "${volume}"
+      message: "${symbol} moved ${change_pct.toFixed(2)}% to ${close}"
+  result: webhook_result
+  next: log_alert
+
+log_alert:
+  log: "stock alert fired: ${symbol} ${change_pct.toFixed(2)}% @ ${close} (webhook status ${webhook_result.response.status})"
+  next: end

@@ -1,0 +1,18 @@
+# WebSocket echo endpoint.
+#
+# Clients connect to:  ws://localhost:8080/samples/echo
+# Every inbound frame is echoed back to the same connection.
+#
+# `incoming.body` is the parsed JSON of the inbound frame (when the
+# frame is JSON; non-JSON text frames arrive under `incoming.body.value`).
+# `incoming.connection_id` is the per-client id assigned at upgrade.
+
+reply:
+  ws_send:
+    # `to` is optional — when omitted, ws_send targets the connection
+    # this DSL run was triggered by (the originating client).
+    payload:
+      type: "echo"
+      received: "${incoming.body}"
+      connection_id: "${incoming.connection_id}"
+  next: end

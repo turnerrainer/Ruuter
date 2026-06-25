@@ -1,0 +1,49 @@
+# Sample stock-data WebSocket source.
+# Rename to `stock-feed.yml` to enable.
+#
+# Modeled on Alpaca's market-data WS (any feed with the same shape
+# works — Polygon, Finnhub, IEX, Coinbase, …).
+#
+# Inbound frames look like:
+#   [{"T":"b","S":"AAPL","o":192.1,"h":192.5,"l":191.8,"c":192.3,"v":12345,"t":"2026-06-25T13:00:00Z"}, ...]
+#
+# `dispatch.channel = "$.T"` extracts the message type ("b" for bar,
+# "t" for trade, "q" for quote). `dispatch.key = "$.S"` extracts the
+# symbol. The dispatcher then resolves:
+#   DSL/<project>/triggers/<channel>/<key>.yml      (per-symbol overrides)
+#   DSL/<project>/triggers/<channel>/_default.yml   (fallback — used here)
+#
+# Subscribing to hundreds of symbols at once: list them in the
+# `subscribe` payload. One DSL (_default.yml) handles all of them.
+
+kind: websocket
+url: "wss://stream.data.alpaca.markets/v2/iex"
+
+on_connect:
+  - send_json:
+      action: auth
+      key: "[#alpaca_api_key]"
+      secret: "[#alpaca_api_secret]"
+  - send_json:
+      action: subscribe
+      bars:
+        - "AAPL"
+        - "MSFT"
+        - "NVDA"
+        - "GOOGL"
+        - "AMZN"
+        - "META"
+        - "TSLA"
+        - "BRK.B"
+        - "AVGO"
+        - "LLY"
+        # … add as many as the upstream allows (Alpaca caps at ~200)
+
+dispatch:
+  channel: "$.T"
+  key: "$.S"
+
+reconnect:
+  initial_backoff_ms: 1000
+  max_backoff_ms: 60000
+  jitter: true

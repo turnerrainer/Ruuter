@@ -18,7 +18,6 @@ impl LogStepExecutor {
     }
 }
 
-#[async_trait::async_trait]
 impl StepExecutor for LogStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         let message = self.script_engine.evaluate(

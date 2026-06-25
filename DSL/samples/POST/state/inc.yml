@@ -1,0 +1,23 @@
+read_counter:
+  state:
+    get:
+      key: "counter"
+      into: current
+  next: bump
+
+bump:
+  assign:
+    next_value: "${(current == null ? 0 : current) + 1}"
+  next: write_counter
+
+write_counter:
+  state:
+    set:
+      key: "counter"
+      value: "${next_value}"
+  next: respond
+
+respond:
+  return:
+    counter: "${next_value}"
+  next: end

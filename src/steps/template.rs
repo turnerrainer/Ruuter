@@ -17,7 +17,6 @@ impl TemplateStepExecutor {
     }
 }
 
-#[async_trait::async_trait]
 impl StepExecutor for TemplateStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         // Template execution would require recursive DSL execution

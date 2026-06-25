@@ -1,0 +1,30 @@
+# Example WebSocket source — disabled by default (filename has .disabled
+# suffix so the loader skips it). Rename to `example-ws.yml` and point
+# `url` at a real WS endpoint to enable.
+#
+# Constants referenced as [#name] are pulled from constants.ini.
+
+kind: websocket
+url: "[#example_ws_url]"
+
+# Frames sent immediately after handshake, replayed after every reconnect.
+on_connect:
+  - send_json:
+      action: auth
+      key: "[#example_api_key]"
+  - send_json:
+      action: subscribe
+      topics: ["echo"]
+
+# Inbound JSON dispatch: extract `(channel, key)` via dot-paths.
+# The resulting trigger DSL is looked up at:
+#   DSL/<project>/triggers/<channel>/<key>.yml
+# with `_default.yml` as fallback.
+dispatch:
+  channel: "$.channel"
+  key:     "$.key"
+
+reconnect:
+  initial_backoff_ms: 500
+  max_backoff_ms: 60000
+  jitter: true

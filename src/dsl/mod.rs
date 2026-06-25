@@ -1,13 +1,13 @@
 use crate::steps::DslStep;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 pub mod loader;
 pub mod parser;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Dsl {
-    pub steps: HashMap<String, DslStep>,
+    pub steps: IndexMap<String, DslStep>,
     #[serde(skip)]
     pub declaration: Option<DeclarationStep>,
 }
@@ -26,7 +26,7 @@ pub struct DeclarationStep {
 }
 
 impl Dsl {
-    pub fn new(steps: HashMap<String, DslStep>) -> Self {
+    pub fn new(steps: IndexMap<String, DslStep>) -> Self {
         let declaration = steps
             .values()
             .find_map(|step| {

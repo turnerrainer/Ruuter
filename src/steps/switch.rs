@@ -17,7 +17,6 @@ impl SwitchStepExecutor {
     }
 }
 
-#[async_trait::async_trait]
 impl StepExecutor for SwitchStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         for condition in &self.step.switch {

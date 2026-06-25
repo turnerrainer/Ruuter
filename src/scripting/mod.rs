@@ -111,6 +111,10 @@ fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()
             .map(|(k, v)| (k.clone(), Value::String(v.clone())))
             .collect()
     ));
+    incoming.insert("connection_id", match context.connection_id() {
+        Some(id) => Value::String(id.to_string()),
+        None => Value::Null,
+    });
 
     let incoming_json = serde_json::to_string(&incoming)?;
     boa.eval(Source::from_bytes(&format!("var incoming = {};", incoming_json)))

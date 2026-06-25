@@ -17,7 +17,6 @@ impl AssignStepExecutor {
     }
 }
 
-#[async_trait::async_trait]
 impl StepExecutor for AssignStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         for (key, value) in &self.step.assign {

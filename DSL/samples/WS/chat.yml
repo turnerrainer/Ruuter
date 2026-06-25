@@ -1,0 +1,47 @@
+# Stateful WS chat: tracks each client's nickname in the project state
+# store and tags every broadcast with the sender's name.
+#
+# Frame contract from clients:
+#   { "type": "set_name", "name": "alice" }
+#   { "type": "msg", "text": "hello" }
+#
+# Per-connection state is keyed by `chat:<connection_id>:name` so two
+# clients don't see each other's names.
+
+route:
+  switch:
+    - condition: "${incoming.body.type === 'set_name'}"
+      next: save_name
+    - condition: "${incoming.body.type === 'msg'}"
+      next: load_name
+  next: end
+
+save_name:
+  state:
+    set:
+      key: "chat:${incoming.connection_id}:name"
+      value: "${incoming.body.name}"
+  next: ack_name
+
+ack_name:
+  ws_send:
+    payload:
+      type: "name_set"
+      name: "${incoming.body.name}"
+  next: end
+
+load_name:
+  state:
+    get:
+      key: "chat:${incoming.connection_id}:name"
+      into: "sender_name"
+  next: fanout
+
+fanout:
+  ws_send:
+    broadcast_prefix: "client:"
+    payload:
+      type: "msg"
+      from: "${sender_name || 'anonymous'}"
+      text: "${incoming.body.text}"
+  next: end

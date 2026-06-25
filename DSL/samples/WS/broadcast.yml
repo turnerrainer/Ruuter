@@ -1,0 +1,18 @@
+# WebSocket broadcast endpoint.
+#
+# Clients connect to:  ws://localhost:8080/samples/broadcast
+# Every inbound frame is fanned out to EVERY connected client
+# (including the sender). Useful as a chat-room sketch or a fan-out
+# notification bus.
+#
+# `broadcast_prefix: "client:"` matches every server-accepted WS
+# connection. Source-WS sinks (registered as "source:...") are excluded.
+
+fanout:
+  ws_send:
+    broadcast_prefix: "client:"
+    payload:
+      type: "broadcast"
+      from: "${incoming.connection_id}"
+      msg: "${incoming.body}"
+  next: end

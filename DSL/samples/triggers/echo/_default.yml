@@ -1,0 +1,10 @@
+log_event:
+  log: "samples/echo trigger fired: ${JSON.stringify(incoming.body)}"
+  next: store
+
+store:
+  state:
+    set:
+      key: "last_event"
+      value: "${incoming.body}"
+  next: end

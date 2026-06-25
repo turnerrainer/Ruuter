@@ -1,0 +1,11 @@
+read_counter:
+  state:
+    get:
+      key: "counter"
+      into: current
+  next: respond
+
+respond:
+  return:
+    counter: "${current}"
+  next: end

@@ -14,6 +14,7 @@ pub mod return_step;
 pub mod state;
 pub mod switch;
 pub mod template;
+pub mod ws_send;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -26,6 +27,7 @@ pub enum DslStep {
     Template(TemplateStep),
     State(StateStep),
     Iterate(IterateStep),
+    WsSend(WsSendStep),
     Declaration(DeclarationStep),
 }
 
@@ -150,6 +152,32 @@ pub struct LogStep {
     pub log: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WsSendStep {
+    pub ws_send: WsSendArgs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WsSendArgs {
+    /// Connection id to send to. Evaluated as a script expression.
+    /// May resolve to a string (single recipient) or an array of
+    /// strings (fan-out). When omitted, the current
+    /// `context.connection_id()` is used — typical pattern inside a
+    /// WS server DSL replying to the originating client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Value>,
+    /// JSON payload. Evaluated through the script engine, so any
+    /// `${...}` expressions inside resolve against context.
+    pub payload: Value,
+    /// Optional broadcast filter. If set, `to` is ignored and the
+    /// payload is broadcast to every connection whose id starts with
+    /// this prefix. Useful for room-style fan-out (e.g. `client:`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broadcast_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

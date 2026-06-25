@@ -1,0 +1,51 @@
+# Per-symbol override — runs ONLY for AAPL bars; every other symbol
+# falls through to `_default.yml`. Useful when one asset deserves a
+# different threshold, a different alert channel, or extra correlation
+# with other state.
+#
+# Concrete divergence from the default here: tighter 0.25% threshold
+# (AAPL is the bellwether — small moves matter) and a dedicated
+# webhook endpoint so paging routes can be split.
+
+compute:
+  assign:
+    close: "${incoming.body.c}"
+    bar_time: "${incoming.body.t}"
+  next: load_prev
+
+load_prev:
+  state:
+    get:
+      key: "stock:AAPL:last_close"
+      into: "prev_close"
+  next: compute_change
+
+compute_change:
+  assign:
+    change_pct: "${prev_close ? ((close - prev_close) / prev_close) * 100 : 0}"
+  next: store_close
+
+store_close:
+  state:
+    set:
+      key: "stock:AAPL:last_close"
+      value: "${close}"
+  next: gate
+
+gate:
+  switch:
+    - condition: "${Math.abs(change_pct) >= 0.25}"
+      next: alert
+  next: end
+
+alert:
+  call: http.post
+  args:
+    url: "[#aapl_alert_webhook]"
+    content_type: "application/json"
+    body:
+      symbol: "AAPL"
+      close: "${close}"
+      change_pct: "${change_pct}"
+      bar_time: "${bar_time}"
+  next: end

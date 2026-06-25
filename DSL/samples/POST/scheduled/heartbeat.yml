@@ -1,0 +1,22 @@
+# Sample scheduled-work endpoint. This is a regular Ruuter HTTP DSL;
+# the schedule lives in CronManager (see DSL/samples/cronmanager-jobs/).
+#
+# CronManager hits POST /samples/scheduled/heartbeat on its configured
+# cron expression; this DSL stores a "last seen" timestamp in state.
+#
+# Production deployments should pair this route with a guard at
+# DSL/samples/POST/scheduled.guard.yml that verifies the caller is
+# CronManager (e.g. checking an X-Internal-Caller shared secret).
+
+record_seen:
+  state:
+    set:
+      key: "heartbeat.last_seen_ms"
+      value: "${Date.now()}"
+  next: respond
+
+respond:
+  return:
+    ok: true
+    seen_at_ms: "${Date.now()}"
+  next: end
