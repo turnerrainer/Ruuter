@@ -1,119 +1,52 @@
-# Ruuter-RS Development TODO
+# Ruuter-RS state of play
 
-## Version: 0.1.0-rust-foundation
+**Current version:** 0.4.0 · **Last refreshed:** 2026-07-14.
 
-### Project Goals
-Complete Rust rewrite of Java-based Ruuter maintaining 100% DSL compatibility while improving performance and resource efficiency.
+## What ships today
 
-## Current Version Features
-- [x] Project structure initialized
-- [x] Git repository setup with dev branch
-- [x] Initial dependencies configured
-- [ ] Core implementation pending
+- File-system-based REST routing (`DSL/<project>/<METHOD>/<path>.yml`).
+- WebSocket server endpoints (`DSL/<project>/WS/<path>.yml`) with
+  per-connection identity and `ws_send` for replies / fan-out.
+- WebSocket sources (`DSL/<project>/sources/<name>.yml`) → trigger
+  dispatch (`DSL/<project>/triggers/<channel>/<key>.yml`) under a
+  restarting source supervisor.
+- Step types: `assign`, `return`, `http` (get/post/put/patch/delete),
+  `switch`, `log`, `state`, `iterate`, `ws_send`; `template` is a
+  placeholder (see task 027).
+- Guards (`<stem>.guard.yml`) — per-directory pre-execution DSLs.
+- JavaScript expression evaluation (Boa) with runtime limits.
+- `constants.ini` `[#KEY]` substitution.
+- OpenAPI 3.1 spec auto-generated from every DSL at
+  `GET /_/openapi.json`.
+- Framework security surface (all configurable via `ruuter.yaml`):
+  CSRF Origin/Referer allow-list, Idempotency-Key cache, SSRF
+  allow-list, response-size cap, upstream status filter, method
+  allow-list, response-default-headers, CORS.
+- W3C traceparent adoption/echo + `X-Trace-Id` on every response;
+  auto-forwarded on outbound HTTP calls. OTel OTLP export opt-in.
+- Docker: multi-stage build, `tini`, non-root, `read_only`,
+  `no-new-privileges`, `cap_drop: ALL`, mem/cpu limits.
 
 ## Roadmap
 
-### Phase 1: Foundation (v0.1.x)
-- [ ] Core DSL parser with serde_yaml
-- [ ] Basic HTTP server with Axum
-- [ ] File-system-based routing
-- [ ] Simple return step implementation
-- [ ] Basic configuration loading
+The actual roadmap is the numbered tickets under `tasks/`:
 
-### Phase 2: Steps Implementation (v0.2.x)
-- [ ] Assign step (variable assignment)
-- [ ] HTTP steps (GET, POST, PUT, DELETE)
-- [ ] Switch step (conditionals)
-- [ ] Return step (full implementation)
-- [ ] Log step
+- `tasks/backlog/` — filed, unstarted.
+- `tasks/in-progress/` — being worked.
+- `tasks/in-review/` — implementation landed, awaiting review.
+- `tasks/acceptance-testing/` — reviewed, awaiting test sign-off.
+- `tasks/done/` — completed.
+- `tasks/blocked/` — filed but held pending an upstream decision.
 
-### Phase 3: JavaScript Engine (v0.3.x)
-- [ ] Boa engine integration
-- [ ] Variable substitution ${...}
-- [ ] JavaScript expression evaluation
-- [ ] Context bindings (incoming, step results)
-- [ ] Optional chaining support
+If a piece of work isn't in one of those queues, it's not planned.
 
-### Phase 4: Advanced Features (v0.4.x)
-- [ ] Template step (recursive DSL calls)
-- [ ] Guards system
-- [ ] Declaration step + OpenAPI generation
-- [ ] Constants.ini support
-- [ ] Multi-project namespaces
+## Design invariants (do NOT drift)
 
-### Phase 5: Production Features (v0.5.x)
-- [ ] Hot reload with file watching
-- [ ] OpenTelemetry integration
-- [ ] OpenSearch logging
-- [ ] Error handling (local + global DSLs)
-- [ ] CORS configuration
-- [ ] Security features (allowlists, filtering)
-
-### Phase 6: Performance & Optimization (v0.6.x)
-- [ ] Connection pooling
-- [ ] DSL caching
-- [ ] Async parallel execution
-- [ ] Memory optimization
-- [ ] Benchmark suite
-
-### Phase 7: Testing & Validation (v0.7.x)
-- [ ] Unit tests for all steps
-- [ ] Integration tests
-- [ ] DSL compatibility tests
-- [ ] Performance benchmarks vs Java
-- [ ] Load testing
-
-### Phase 8: Production Ready (v0.8.x)
-- [ ] Docker support
-- [ ] Documentation complete
-- [ ] Migration guide
-- [ ] Example DSLs
-- [ ] Production deployment guide
-
-## Proposed Improvements Over Java Version
-
-### Performance
-- Faster startup time (target: <2s vs Java's 5-10s)
-- Lower memory footprint (target: <50MB vs Java's 200MB+)
-- Higher throughput (target: >10k req/sec)
-- Better resource utilization
-
-### Developer Experience
-- Better error messages with context
-- Type-safe configuration
-- Improved debugging support
-- Hot reload without JVM overhead
-
-### Features to Consider
-- [ ] GraphQL endpoint generation from DSLs
-- [ ] WebSocket support via DSL
-- [ ] Built-in rate limiting
-- [ ] Request/response transformation pipelines
-- [ ] Plugin system for custom steps
-- [ ] DSL validation CLI tool
-- [ ] Interactive DSL debugger
-- [ ] Metrics dashboard
-- [ ] Health check endpoints with detailed status
-- [ ] A/B testing support via DSL
-
-### Architecture Improvements
-- [ ] Trait-based step system for extensibility
-- [ ] Zero-copy optimizations where possible
-- [ ] Lazy evaluation of JavaScript expressions
-- [ ] Compile-time DSL validation option
-- [ ] Step execution tracing for debugging
-
-## Known Limitations from Java Version to Address
-- Sequential execution only (add parallel support)
-- No caching for HTTP calls (add with TTL)
-- Limited error context (improve with Rust's error handling)
-- No request batching (consider adding)
-
-## Breaking Changes to Consider
-None planned - maintaining full DSL compatibility is priority.
-
-## Notes
-- Follow existing DSL structure strictly
-- All improvements should be additive, not breaking
-- Performance gains should not sacrifice correctness
-- Document all deviations from Java implementation
+- Ruuter is a dumb pipe. It routes, guards, and translates — it does
+  not do IAM, does not fetch secrets, does not know about Resql
+  schemas. Cross-component knowledge belongs in the DSL, not the
+  framework.
+- Every response gets `traceparent` + `X-Trace-Id` for correlation.
+- Every framework-enforced hardening (CSRF, SSRF, size cap, method
+  filter) has a safe default so an operator who ignores the config
+  gets sensible behaviour.

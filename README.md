@@ -1,41 +1,36 @@
 # Ruuter-RS
 
-**Rust implementation of Ruuter - Declarative REST Router**
+Rust implementation of Ruuter — a declarative REST/WebSocket router
+driven by YAML DSLs on disk.
 
-Version: 0.4.0
-Author: Rainer Türner
-Status: Functional Core Complete
+**Version:** 0.4.0 · **License:** MIT · **Author:** Rainer Türner
 
-## Features
+## Set up from scratch
 
-- ✅ File-system-based REST routing
-- ✅ YAML DSL parser
-- ✅ JavaScript expression evaluation (Boa engine)
-- ✅ HTTP client (GET/POST/PUT/DELETE)
-- ✅ All core step types (assign, return, http, switch, log, state, iterate, ws_send)
-- ✅ Constants.ini support
-- ✅ Configuration system
-- ✅ Error handling
-- ✅ Docker support
-- ✅ WebSocket sources (consume upstream feeds → trigger DSLs)
-- ✅ WebSocket server (accept inbound WS clients → run WS DSLs per frame)
-- ✅ `ws_send` step (reply to caller / fan-out / send upstream)
-- ✅ Guards (`*.guard.yml` per-directory)
-- ⚠️ Template step (basic)
-
-## Quick Start
-
-Docker is the supported workflow; the local `cargo` path is for IDE
-type-checking only.
+Prerequisites: Docker + Docker Compose.
 
 ```bash
+git clone <this-repo> ruuter-rs
+cd ruuter-rs
 docker compose up -d --build
 ```
 
-Server starts on `http://localhost:8080`. Health check at
-`GET /health`.
+- Serves on `http://localhost:8080`.
+- Health check: `curl http://localhost:8080/health` → `{"status":"ok",...}`.
+- Sample route: `curl http://localhost:8080/samples/ping` → `"pong"`.
+- OpenAPI spec (auto-generated from every DSL): `curl http://localhost:8080/_/openapi.json`.
 
-## Example HTTP DSL
+To wipe and rebuild after code changes:
+
+```bash
+docker compose down
+docker compose up -d --build --force-recreate
+```
+
+## How it works
+
+A DSL file at `DSL/<project>/<METHOD>/<path>.yml` becomes the route
+`<METHOD> /<project>/<path>`. Example:
 
 ```yaml
 # DSL/samples/GET/ping.yml
@@ -44,162 +39,113 @@ response:
   return: pong
 ```
 
-Access: `GET http://localhost:8080/samples/ping`
+Reachable at `GET /samples/ping`.
 
-## WebSocket server
+### Step types
 
-Drop a DSL at `DSL/<project>/WS/<path>.yml` and clients can connect
-to `ws://localhost:8080/<project>/<path>`. The DSL is invoked once
-per inbound frame. Inside the DSL:
+`assign`, `return`, `http` (`http.get`/`post`/`put`/`patch`/`delete`),
+`switch`, `log`, `state`, `iterate`, `ws_send`, `template`.
+See `DSL/samples/README.md` for worked examples of each.
 
-- `incoming.body` — parsed JSON of the inbound frame (or
-  `incoming.body.value` for non-JSON text)
-- `incoming.connection_id` — per-client id (namespace `client:<hex>`)
-- `incoming.headers` / `incoming.params` — handshake headers and
-  query string (snapshotted at upgrade, identical across frames)
+### Guards
 
-Reply to the originating client:
+`<stem>.guard.yml` next to a directory protects every DSL under it.
+A guard returning `status >= 400` short-circuits the request.
 
-```yaml
-reply:
-  ws_send:
-    payload: { type: "echo", got: "${incoming.body}" }
-```
+### WebSocket server
 
-Fan-out to every connected client:
+Drop `DSL/<project>/WS/<path>.yml` and clients connect at
+`ws://localhost:8080/<project>/<path>`. The DSL runs once per inbound
+frame with `incoming.body`, `incoming.connection_id`, `incoming.headers`,
+`incoming.params`. Reply via `ws_send`.
 
-```yaml
-fanout:
-  ws_send:
-    broadcast_prefix: "client:"
-    payload: { from: "${incoming.connection_id}", msg: "${incoming.body}" }
-```
+### WebSocket sources (consume upstream)
 
-Send to a specific connection id (resolved from a script expression):
-
-```yaml
-direct:
-  ws_send:
-    to: "${target_cid}"
-    payload: { type: "dm", text: "${incoming.body.text}" }
-```
-
-Worked samples: `DSL/samples/WS/{echo,broadcast,chat}.yml`.
-
-## WebSocket sources (consume upstream feeds)
-
-Configure an outbound WS source at `DSL/<project>/sources/<name>.yml`:
-
-```yaml
-kind: websocket
-url: "wss://stream.data.alpaca.markets/v2/iex"
-on_connect:
-  - send_json: { action: auth, key: "[#alpaca_api_key]", secret: "[#alpaca_api_secret]" }
-  - send_json: { action: subscribe, bars: ["AAPL", "MSFT", "..."] }
-dispatch:
-  channel: "$.T"   # dot-path → trigger channel
-  key:     "$.S"   # dot-path → trigger key
-```
-
-Each inbound frame dispatches to
-`DSL/<project>/triggers/<channel>/<key>.yml` (with `_default.yml` as
-fallback). The same `StepEngine` runs the DSL — every step type
-(`assign`, `state`, `http`, `switch`, `ws_send`, …) is available, so
-ONE `_default.yml` can serve hundreds of symbols. The source's own
-outbound sink is registered as `source:<project>:<name>` so a trigger
-DSL can `ws_send` back upstream (e.g. mid-stream subscription updates).
-
-Worked stock-monitoring sample (criteria-gated POST alert):
-`DSL/samples/triggers/stock-bars/_default.yml` with a per-symbol
-override at `AAPL.yml` and the source template at
+Configure at `DSL/<project>/sources/<name>.yml`; each inbound frame
+dispatches to `DSL/<project>/triggers/<channel>/<key>.yml` (with
+`_default.yml` as fallback). See
 `DSL/samples/sources/stock-feed.yml.disabled`.
 
-## Docker Configuration
+## Configuration
 
-The Docker image uses multi-stage builds for minimal size:
-- Build stage: Rust 1.75
-- Runtime stage: Debian slim
-- Non-root user for security
-- Volume mounts for DSL files and constants
+Layout:
 
-### Volumes
+- `DSL/` — routes/guards/triggers/sources/WS DSLs (mounted read-only).
+- `constants.ini` — `[#KEY]` values referenced from DSLs (mounted RO).
+- `ruuter.yaml` — operator config file (optional, see below).
+- `docker-compose.yml` — deployment; container is hardened
+  (`read_only`, `no-new-privileges`, `cap_drop: ALL`, mem/cpu limits).
+- Environment: `RUST_LOG=info|debug|warn|error`.
 
-- `./DSL:/app/DSL:ro` - DSL files (read-only)
-- `./constants.ini:/app/constants.ini:ro` - Constants (read-only)
+### Constants and secrets
 
-### Environment
+DSLs reference `[#KEY]` values from a `constants.ini` file mounted
+into the container (read-only). Section headers (`[DSL]`, etc.) are
+accepted for Java-Ruuter compatibility but do not scope keys — every
+`KEY=value` line is flat. Comments start with `#`. Missing keys
+referenced from a WS source config error at load time; missing keys
+in a DSL body are substituted as literal `[#KEY]` (visible at runtime).
 
-- `RUST_LOG=info` - Logging level (debug, info, warn, error)
+**Secrets management is out of scope.** Ruuter reads constants from a
+file — it does NOT fetch from Vault, KMS, Docker secrets, or any
+external store. Mount the resolved secrets file at
+`/app/constants.ini` (or bind a Vault-agent-rendered file over it).
+Rotation, sourcing, and access control are the deployment pipeline's
+job, not the framework's.
 
-## Documentation
+### Config file resolution
 
-- [Development TODO](docs/todo.md)
-- [CHANGELOG.md](CHANGELOG.md)
+At boot Ruuter looks for a YAML config file in this priority:
 
-## Buerostack integration
+1. `--config <path>` CLI flag.
+2. `RUUTER_CONFIG=<path>` env var.
+3. `./ruuter.yaml` or `./ruuter.yml` in the working directory.
+4. Built-in defaults if none of the above exists.
 
-Ruuter is one component of the broader Buerostack architecture. It owns:
+A worked example with every top-level knob lives at
+`DSL/samples/ruuter.yaml.example` — copy to `./ruuter.yaml` and edit.
 
-- HTTP request routing and reverse-proxy duties
-- WebSocket server endpoints (`DSL/<project>/WS/<path>.yml`) with
-  per-connection identity and `ws_send` for replies / fan-out
-- Event-trigger dispatch for non-HTTP push sources (WebSocket today)
-- Ephemeral, in-process state for hot signal-processing work
-- Pre-execution guards (`*.guard.yml`) for auth / allowlist / validation
+The full config surface (CORS, CSRF Origin allow-list, Idempotency-Key
+cache, SSRF allow-list, response-size cap, method allow-list, Boa
+runtime limits, etc.) is documented in `src/config/mod.rs`. Every
+setting has a safe default; only override what you need.
 
-It does NOT own:
+## Observability
 
-- **Scheduled work** — that's [CronManager](../CronManager/). See below.
-- **Persistent storage** — that's [Resql](../Resql/), SQL files → REST.
-- **Identity / JWT issuance** — that's [TIM](../TIM/).
-- **Payload shaping between services** — that's [DataMapper](../DataMapper/).
-
-### Scheduled jobs (CronManager → Ruuter)
-
-Schedules live in CronManager, which fires HTTP requests on cron expressions.
-Ruuter exposes the work as a normal HTTP DSL.
-
-1. Define the scheduled endpoint in Ruuter:
-   `DSL/<project>/POST/scheduled/<job>.yml`
-2. Define the job in CronManager:
-   ```yaml
-   my_job:
-     trigger: "0 */5 * * * ?"   # every 5 minutes
-     type: http
-     method: POST
-     url: http://ruuter:8080/<project>/scheduled/<job>
-   ```
-3. (Production) protect the endpoint with a guard verifying a shared secret
-   so external callers cannot trigger it:
-   `DSL/<project>/POST/scheduled.guard.yml`
-
-A worked sample lives in `DSL/samples/POST/scheduled/heartbeat.yml`
-with the companion CronManager job at
-`DSL/samples/cronmanager-jobs/heartbeat.yaml`.
-
-### Observability
-
-OpenTelemetry tracing is wired but inactive by default. To enable:
+OpenTelemetry OTLP export is opt-in:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
 OTEL_SERVICE_NAME=ruuter-rs \
-docker-compose up
+docker compose up -d --build
 ```
 
-W3C TraceContext (`traceparent` / `tracestate`) propagation is configured
-to match the rest of the Buerostack components.
+W3C traceparent is adopted or generated on every request and echoed
+back with `X-Trace-Id`; outbound HTTP calls forward it automatically.
 
-### Admin endpoint
+## Admin endpoint
 
-`GET /_/sources` returns the source supervisor's view of every event
-source's health (status, restart count, last error). Off by default —
-enable with `RUUTER_ADMIN_ENABLED=true`.
+`GET /_/sources` reports the source supervisor's health. Off by
+default; enable with `RUUTER_ADMIN_ENABLED=true`.
 
-## Original Project
+## Buerostack integration
 
-Rust rewrite of: https://github.com/buerokratt/Ruuter
+Ruuter owns HTTP routing, WebSocket endpoints, event-trigger dispatch,
+ephemeral in-process state, and pre-execution guards. It does **not**
+own: scheduled work (CronManager), persistent storage (Resql),
+identity/JWT (TIM), inter-service payload shaping (DataMapper).
 
-## License
+For CronManager → Ruuter scheduled jobs, define the endpoint in Ruuter
+(`DSL/<project>/POST/scheduled/<job>.yml`) and a matching HTTP job in
+CronManager. Protect production endpoints with a guard verifying a
+shared secret. Worked sample:
+`DSL/samples/POST/scheduled/heartbeat.yml` +
+`DSL/samples/cronmanager-jobs/heartbeat.yaml`.
 
-MIT License
+## Documentation
+
+- **[Book (mdBook)](./book/src/SUMMARY.md)** — full LLM-oriented reference. Build locally with `mdbook serve book`; browses at http://localhost:3000. Auto-deployed to GitHub Pages on push to `main` (see `.github/workflows/docs.yml`).
+- [DSL reference (single page)](docs/DSL_REFERENCE.md) — same content, single Markdown file.
+- [CHANGELOG.md](CHANGELOG.md)
+- [Development TODO](docs/todo.md)
+- Original Java Ruuter: https://github.com/buerokratt/Ruuter

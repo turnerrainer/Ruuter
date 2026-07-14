@@ -2,6 +2,23 @@
 
 Comprehensive examples demonstrating all Ruuter DSL features.
 
+> For a tight, LLM-focused reference of every step, guard convention,
+> config knob, and framework endpoint, see
+> [`docs/DSL_REFERENCE.md`](../../docs/DSL_REFERENCE.md).
+
+## New in 0.4.0
+
+| Route | Demonstrates |
+|---|---|
+| `GET  /samples/things[/…]`                     | Path parameters — one DSL serves `/things`, `/things/{id}`, `/things/{id}/{sub}` (task 018) |
+| `GET  /samples/vault/secret`                   | In-folder guard convention `.guard.yml` (task 019) |
+| `POST /samples/ops/restart`                    | Folder-wide guard (stacking, back-compat) |
+| `POST /samples/ops/inject-fault/trigger`       | Bespoke guard override via `declaration.override_ancestors` (task 020) |
+| `GET  /samples/http/patch-request`             | `http.patch` step (task 023) |
+| `POST /samples/advanced/iterate-batch`         | `iterate` step with `collect` / `into` |
+| `POST /samples/idempotent-transfer`            | Framework Idempotency-Key handling (client sends header) |
+| `DSL/samples/ruuter.yaml.example`              | Operator config with every knob |
+
 ## Basic Samples
 
 ### GET /samples/ping
