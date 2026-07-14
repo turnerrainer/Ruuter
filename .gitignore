@@ -26,6 +26,12 @@ coverage/
 *.war
 build/
 
+# mdBook output
+/book/book/
+
+# Claude Code working state
+/.claude/
+
 # Environment
 .env
 .env.local

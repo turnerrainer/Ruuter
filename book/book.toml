@@ -1,0 +1,25 @@
+[book]
+title = "Ruuter-RS"
+authors = ["Rainer Türner"]
+description = "Reference for third-party clients authoring DSLs against Ruuter-RS 0.4.0."
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = ""
+edit-url-template = ""
+site-url = "/ruuter-rs/"
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+
+[output.html.playground]
+runnable = false
