@@ -1,0 +1,18 @@
+# In-folder guard (Java-Ruuter parity). File name is literally
+# `.guard.yml` (or `.guard`) inside the folder it protects. Guards
+# every DSL under `vault/`. Sibling `<stem>.guard.yml` still works too.
+
+check:
+  switch:
+    - condition: "${!incoming.headers['x-vault-token']}"
+      next: deny
+  next: ok
+
+ok:
+  return: { passed: true }
+  next: end
+
+deny:
+  status: 401
+  return: { error: "vault: missing x-vault-token header" }
+  next: end

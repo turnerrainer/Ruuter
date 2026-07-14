@@ -1,0 +1,13 @@
+# Bespoke guard override — REPLACES the folder-wide `.guard.yml`
+# rather than stacking on it. `declaration.override_ancestors: true`
+# is the opt-in marker. Use when a specific endpoint has different
+# privilege than its folder siblings (here: production-disabled).
+
+declaration:
+  override_ancestors: true
+
+deny:
+  status: 403
+  return:
+    error: "inject-fault is disabled in production"
+  next: end

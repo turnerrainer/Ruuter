@@ -1,0 +1,12 @@
+# Folder-wide guard: every POST /samples/ops/* needs Bearer token.
+# The one exception (`inject-fault`) overrides this — see sibling
+# `inject-fault.guard.yml`.
+
+check:
+  switch:
+    - condition: "${!incoming.headers['authorization']}"
+      next: deny
+  next: ok
+
+ok: { return: { auth: true }, next: end }
+deny: { status: 401, return: { error: "ops: bearer token required" }, next: end }

@@ -1,0 +1,31 @@
+# Iterate step. Runs `do:` once per element of `over:`, binding the
+# element to `as:`. When `collect:` is set, values from each iteration
+# are gathered under `into:` in the parent context. `max_items:` caps
+# the loop; a `return:` inside the body short-circuits the outer DSL.
+
+setup:
+  assign:
+    orders: "${incoming.body.orders || []}"
+  next: work
+
+work:
+  iterate:
+    over: "${orders}"
+    as: order
+    max_items: 100
+    do:
+      - assign:
+          net: "${order.qty * order.price}"
+      # Skipping error handling here for brevity — real DSLs would
+      # push errors into a separate `errors:` array via a second
+      # `collect`.
+    # Parens are required: bare `{...}` at the start of a JS expression
+    # is parsed as a BLOCK. `({...})` forces object-literal parsing.
+    collect: "${({ id: order.id, net: net })}"
+    into: totals
+  next: reply
+
+reply:
+  return: { count: "${totals.length}", totals: "${totals}" }
+  status: 200
+  next: end

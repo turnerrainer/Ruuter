@@ -1,0 +1,62 @@
+# Sample Ruuter-RS operator config. Copy to ./ruuter.yaml, or point at
+# it via --config <path> / RUUTER_CONFIG=<path>. Every field has a safe
+# built-in default — omit any section to inherit defaults.
+
+config_path: ./DSL
+port: 8080
+http_request_timeout: 15000       # ms
+max_step_recursions: 10000
+http_response_size_limit: 16777216   # bytes (16 MiB)
+
+# Upstream response-status filter. Empty = accept every status. Non-empty
+# = reject responses whose status is not in the list (the http.* step
+# returns an HttpRequest error).
+http_codes_allow_list: []
+
+# Merged into every response. DSL-set headers win.
+response_default_headers:
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
+cors:
+  allowed_origins: []             # e.g. ["https://admin.example.com"]
+  allow_credentials: false
+
+incoming_requests:
+  allowed_method_types: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+internal_requests:
+  disabled: false                 # true = block all outbound HTTP
+  allowed_urls: []                # URL prefixes; empty = any URL
+  allowed_ips: []                 # bare-IP host allowlist
+
+csrf:
+  # Empty = check bypassed (same-origin / SameSite cookie is enough).
+  # Non-empty = state-changing methods must carry Origin/Referer in list.
+  allowed_origins: []
+  enforce_on_methods: [POST, PUT, PATCH, DELETE]
+
+idempotency:
+  enabled: true
+  ttl_seconds: 86400              # 24 h
+  methods: [POST, PUT, PATCH, DELETE]
+
+optimistic_concurrency:
+  # true = state-changing methods without If-Match get 428.
+  require_if_match: false
+  enforce_on_methods: [PUT, PATCH, DELETE]
+
+scripting:
+  max_loop_iterations: 1000000
+  max_stack_size: 400
+
+dsl:
+  allowed_filetypes: [.yml, .yaml]
+  processed_filetypes: [.yml, .yaml]
+  allow_dsl_reloading: false
+
+logging:
+  display_request_content: false
+  display_response_content: false
+  print_stack_trace: false
+  meaningful_errors: false

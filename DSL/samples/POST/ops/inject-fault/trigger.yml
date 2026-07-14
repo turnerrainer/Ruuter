@@ -1,0 +1,6 @@
+# POST /samples/ops/inject-fault/trigger — permanently blocked in prod
+# by the override guard above (even with a valid bearer token).
+
+respond:
+  return: { fired: true }
+  next: end

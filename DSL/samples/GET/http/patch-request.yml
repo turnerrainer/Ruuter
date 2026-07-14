@@ -1,0 +1,23 @@
+# Sample: http.patch step. Body + headers are treated identically to
+# http.post. `result` binds the response as
+# `<name>.response.{status,body,headers}` into the caller's context.
+
+update:
+  call: http.patch
+  args:
+    url: "https://httpbin.org/patch"
+    headers:
+      X-Client: "ruuter-rs"
+    body:
+      note: "ratcheted"
+      when: "${new Date().toISOString()}"
+  result: upstream
+  timeout: 3000
+  next: reply
+
+reply:
+  return:
+    upstream_status: "${upstream.response.status}"
+    upstream_body:   "${upstream.response.body}"
+  status: 200
+  next: end

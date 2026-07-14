@@ -1,0 +1,30 @@
+# Idempotency-Key is handled at the framework layer — the DSL is
+# unaware of it. Client sends `Idempotency-Key: <uuid>`; the first
+# call runs this DSL, subsequent calls with the same key replay the
+# cached response with `Idempotency-Replayed: true` and don't re-run
+# the DSL. Enabled by default (config: idempotency.enabled=true,
+# ttl=24h, methods=[POST,PUT,PATCH,DELETE]).
+#
+# curl -X POST http://localhost:8080/samples/idempotent-transfer \
+#   -H 'Idempotency-Key: 7b1e9c5f-3f8f-4c8f-9f8f-4c8f9f8f4c8f' \
+#   -H 'Content-Type: application/json' \
+#   -d '{"from":"A","to":"B","amount":100}'
+# Second call with the same key → identical body, plus
+#   Idempotency-Replayed: true
+
+record:
+  state:
+    set:
+      key: "transfer_last_id"
+      value: "${incoming.body.from + '->' + incoming.body.to + ':' + incoming.body.amount}"
+  next: reply
+
+reply:
+  return:
+    accepted: true
+    from: "${incoming.body.from}"
+    to: "${incoming.body.to}"
+    amount: "${incoming.body.amount}"
+    ref: "txn-${Date.now()}"
+  status: 202
+  next: end

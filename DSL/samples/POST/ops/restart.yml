@@ -1,0 +1,6 @@
+# POST /samples/ops/restart — protected by the FOLDER guard only.
+# Needs Authorization header.
+
+respond:
+  return: { restarted: true }
+  next: end

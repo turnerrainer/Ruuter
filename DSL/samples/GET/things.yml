@@ -1,0 +1,29 @@
+# Sample: path parameters. One DSL serves multiple URL shapes.
+#   GET /samples/things              → pathParams=[]         list mode
+#   GET /samples/things/abc-123      → pathParams=[abc-123]  detail mode
+#   GET /samples/things/abc-123/legs → pathParams=[abc-123, legs]
+#
+# `incoming.params.pathParams` is a JS array (URL order preserved).
+
+route:
+  switch:
+    - condition: "${incoming.params.pathParams.length === 0}"
+      next: list
+    - condition: "${incoming.params.pathParams.length === 1}"
+      next: detail
+  next: sub
+
+list:
+  return: { mode: "list", items: ["a", "b", "c"] }
+  next: end
+
+detail:
+  return: { mode: "detail", id: "${incoming.params.pathParams[0]}" }
+  next: end
+
+sub:
+  return:
+    mode: "sub"
+    id: "${incoming.params.pathParams[0]}"
+    subresource: "${incoming.params.pathParams[1]}"
+  next: end
