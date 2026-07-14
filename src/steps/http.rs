@@ -1,5 +1,5 @@
 use crate::context::ExecutionContext;
-use crate::http_client::{HttpClient, HttpResponse};
+use crate::http_client::HttpClient;
 use crate::scripting::ScriptEngine;
 use crate::steps::{HttpStep, StepExecutor, StepResult};
 use crate::{Result, RuuterError};
@@ -49,15 +49,25 @@ impl StepExecutor for HttpStepExecutor {
             None
         };
 
-        let headers = if let Some(h) = &self.step.args.headers {
+        let mut headers = if let Some(h) = &self.step.args.headers {
             let mut evaluated = HashMap::new();
             for (k, v) in h {
                 evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
             }
-            Some(evaluated)
+            evaluated
         } else {
-            None
+            HashMap::new()
         };
+
+        // Auto-forward traceparent unless the DSL already set one — every
+        // Buerostack component participates in W3C tracecontext by default
+        // (PATTERNS.md §4).
+        if !headers.keys().any(|k| k.eq_ignore_ascii_case("traceparent")) {
+            if let Some(tp) = context.traceparent() {
+                headers.insert("traceparent".to_string(), Value::String(tp.to_string()));
+            }
+        }
+        let headers = if headers.is_empty() { None } else { Some(headers) };
 
         let timeout = self.step.timeout.map(Duration::from_millis);
 
@@ -93,6 +103,7 @@ impl HttpStepExecutor {
             "http.get" => Ok(Method::GET),
             "http.post" => Ok(Method::POST),
             "http.put" => Ok(Method::PUT),
+            "http.patch" => Ok(Method::PATCH),
             "http.delete" => Ok(Method::DELETE),
             _ => Err(RuuterError::InvalidStep(format!("Unknown HTTP method: {}", self.step.call))),
         }

@@ -4,6 +4,7 @@
 //! event originated.
 
 use crate::context::ExecutionContext;
+use crate::dsl::loader::HttpDsls;
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
 use crate::steps::{
@@ -14,12 +15,17 @@ use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct StepEngine {
     http_client: HttpClient,
     ws_registry: WsRegistry,
     max_iterations: u32,
+    /// Shared handle to the loaded HTTP DSL tree. Used by the
+    /// template step to look up callee DSLs at runtime. `None` = template
+    /// step still works as a placeholder (logs a warning and advances).
+    dsls: Option<Arc<HttpDsls>>,
 }
 
 #[derive(Debug)]
@@ -39,7 +45,19 @@ impl StepEngine {
             // per-step bound; this is a sanity cap on top-level step
             // transitions only.
             max_iterations: 10_000,
+            dsls: None,
         }
+    }
+
+    /// Attach a shared handle to the loaded HTTP DSL tree so the
+    /// template step can resolve callee DSLs at runtime.
+    pub fn with_dsls(mut self, dsls: Arc<HttpDsls>) -> Self {
+        self.dsls = Some(dsls);
+        self
+    }
+
+    pub fn dsls(&self) -> Option<&Arc<HttpDsls>> {
+        self.dsls.as_ref()
     }
 
     /// Attach a shared WS registry. The engine needs this so the
@@ -134,7 +152,7 @@ impl StepEngine {
                 log::LogStepExecutor::new(s.clone()).execute(context).await
             }
             DslStep::Template(s) => {
-                template::TemplateStepExecutor::new(s.clone()).execute(context).await
+                template::TemplateStepExecutor::new(s.clone(), self.clone()).execute(context).await
             }
             DslStep::State(s) => {
                 state::StateStepExecutor::new(s.clone()).execute(context).await
@@ -146,7 +164,11 @@ impl StepEngine {
                 ws_send::WsSendStepExecutor::new(s.clone(), self.ws_registry.clone()).execute(context).await
             }
             DslStep::Declaration(_) => {
-                Ok(crate::steps::StepResult::with_next("end".to_string()))
+                // Declaration is DSL metadata (OpenAPI hints,
+                // override_ancestors flag, …). Treat as a no-op step —
+                // fall through to the next step in source order rather
+                // than terminating the run.
+                Ok(crate::steps::StepResult::new())
             }
         }
     }

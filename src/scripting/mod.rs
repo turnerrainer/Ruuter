@@ -61,11 +61,42 @@ fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
-pub struct ScriptEngine;
+#[derive(Clone, Copy, Debug)]
+pub struct ScriptLimits {
+    pub max_loop_iterations: u64,
+    pub max_stack_size: usize,
+}
+
+impl Default for ScriptLimits {
+    fn default() -> Self {
+        Self {
+            max_loop_iterations: 1_000_000,
+            max_stack_size: 400,
+        }
+    }
+}
+
+static DEFAULT_LIMITS: once_cell::sync::OnceCell<ScriptLimits> = once_cell::sync::OnceCell::new();
+
+/// Install process-wide default limits. Called once at boot from `main` with
+/// the operator's `scripting` config. Subsequent calls are ignored — the
+/// intent is a boot-time contract, not a runtime knob.
+pub fn install_default_limits(limits: ScriptLimits) {
+    let _ = DEFAULT_LIMITS.set(limits);
+}
+
+pub struct ScriptEngine {
+    limits: ScriptLimits,
+}
 
 impl ScriptEngine {
     pub fn new() -> Self {
-        Self
+        let limits = DEFAULT_LIMITS.get().copied().unwrap_or_default();
+        Self { limits }
+    }
+
+    pub fn with_limits(limits: ScriptLimits) -> Self {
+        Self { limits }
     }
 
     /// Evaluate `input` against `context`. Builds a single Boa context for the
@@ -73,6 +104,10 @@ impl ScriptEngine {
     /// expression found inside `input` (recursing through objects and arrays).
     pub fn evaluate(&self, input: &Value, context: &ExecutionContext) -> Result<Value> {
         let mut boa = BoaContext::default();
+        boa.runtime_limits_mut()
+            .set_loop_iteration_limit(self.limits.max_loop_iterations);
+        boa.runtime_limits_mut()
+            .set_recursion_limit(self.limits.max_stack_size);
         setup_bindings(&mut boa, context)?;
         evaluate_with(input, &mut boa)
     }

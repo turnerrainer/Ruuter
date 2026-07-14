@@ -4,6 +4,7 @@ use ruuter_rs::{
     http_client::HttpClient,
     observability,
     router::DslRouter,
+    scripting::{self, ScriptLimits},
     sources,
     state::StateStore,
     steps::engine::StepEngine,
@@ -24,9 +25,24 @@ async fn main() {
         info!("OpenTelemetry exporter active");
     }
 
-    // Load configuration
-    let config = AppConfig::default();
-    info!("Configuration loaded");
+    // Load configuration (file if resolvable, defaults otherwise)
+    let (config, config_source) = match AppConfig::load_or_default() {
+        Ok(pair) => pair,
+        Err(e) => {
+            error!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+    match &config_source {
+        Some(p) => info!("Loaded config from {}", p.display()),
+        None => info!("Using built-in default config (no ruuter.yaml found)"),
+    }
+
+    // Install script-engine limits before any ScriptEngine::new() runs.
+    scripting::install_default_limits(ScriptLimits {
+        max_loop_iterations: config.scripting.max_loop_iterations,
+        max_stack_size: config.scripting.max_stack_size,
+    });
 
     // Load constants
     let constants = match load_constants("./constants.ini") {
@@ -72,10 +88,21 @@ async fn main() {
     // (`ws_send` step) all hold a clone of this same Arc-backed map.
     let ws_registry = WsRegistry::new();
 
+    // Wrap the loaded HTTP DSL tree in an Arc so both the router and
+    // the step engine can share it without duplicating memory. The
+    // engine uses this handle to resolve `template:` step callees at
+    // runtime.
+    let shared_http_dsls = Arc::new(loaded.http);
+
     // Shared step engine — same DSL semantics for HTTP routes and
     // event triggers. Carries the WS registry so `ws_send` works.
-    let http_client = HttpClient::new(config.http_request_timeout);
-    let engine = StepEngine::new(http_client).with_ws_registry(ws_registry.clone());
+    let http_client = HttpClient::new(&config);
+    let mut engine = StepEngine::new(http_client)
+        .with_ws_registry(ws_registry.clone())
+        .with_dsls(shared_http_dsls.clone());
+    if let Some(n) = config.max_step_recursions {
+        engine = engine.with_max_iterations(n);
+    }
 
     let trigger_dispatcher = Arc::new(TriggerDispatcher::new(
         loaded.triggers,
@@ -105,13 +132,16 @@ async fn main() {
         supervisor_arc.as_ref(),
     );
 
-    // Build router
-    let router = DslRouter::new(
-        loaded.http,
+    // Build router (which internally generates the OpenAPI spec from the
+    // HTTP DSL tree and serves it at GET /_/openapi.json). Shares the
+    // same Arc<HttpDsls> the engine uses for template lookup.
+    let router = DslRouter::from_arc(
+        shared_http_dsls,
         loaded.guards,
         config.clone(),
         state,
         ws_registry,
+        engine.clone(),
     );
     let mut app = router.build_axum_router();
 

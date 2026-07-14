@@ -7,11 +7,12 @@
 
 use ruuter_rs::config::AppConfig;
 use ruuter_rs::dsl::loader::DslLoader;
+use ruuter_rs::http_client::HttpClient;
 use ruuter_rs::router::DslRouter;
 use ruuter_rs::state::StateStore;
+use ruuter_rs::steps::engine::StepEngine;
 use ruuter_rs::ws::WsRegistry;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 fn build_router_with_dsl(project: &str, method: &str, path: &str, body: &str) -> DslRouter {
@@ -25,7 +26,9 @@ fn build_router_with_dsl(project: &str, method: &str, path: &str, body: &str) ->
 
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let dsls = loader.load_all().expect("load dsls");
-    DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), WsRegistry::new())
+    let ws_registry = WsRegistry::new();
+    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), ws_registry, engine)
 }
 
 fn uuid() -> String {
@@ -108,7 +111,9 @@ respond:
     cfg.config_path = tmp.clone();
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let dsls = loader.load_all().expect("load");
-    let router = DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), WsRegistry::new());
+    let ws_registry = WsRegistry::new();
+    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    let router = DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), ws_registry, engine);
 
     // Project A writes "x" = "alpha".
     let a = router.execute_dsl(

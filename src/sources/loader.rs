@@ -59,7 +59,7 @@ fn load_project_sources(
             .to_string();
 
         let body = fs::read_to_string(&path)?;
-        let cfg: SourceConfig = serde_yaml::from_str(&body)
+        let cfg: SourceConfig = serde_yml::from_str(&body)
             .map_err(|e| RuuterError::DslParse(format!(
                 "source {}/{}: {}", project, name, e
             )))?;

@@ -23,6 +23,13 @@ pub struct DeclarationStep {
     pub allowed_body: Option<Vec<String>>,
     pub allowed_header: Option<Vec<String>>,
     pub allowed_params: Option<Vec<String>>,
+    /// Task 020 — when `Some(true)` on a guard DSL, this guard REPLACES
+    /// all ancestor guards for the routes it protects (rather than
+    /// stacking on top of them). Used when a specific endpoint has
+    /// materially different privilege than its siblings — e.g. a
+    /// stricter admin gate that shouldn't be additive to a folder-wide
+    /// "authenticated" check.
+    pub override_ancestors: Option<bool>,
 }
 
 impl Dsl {

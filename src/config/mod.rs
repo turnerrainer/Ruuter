@@ -16,6 +16,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub http_codes_allow_list: Vec<u16>,
 
+    /// Cap on the number of step transitions a single DSL run may perform
+    /// before the engine aborts the run. Guards against infinite `next:`
+    /// loops. `iterate` has its own per-step bound; this is a sanity cap on
+    /// top-level transitions.
     #[serde(default)]
     pub max_step_recursions: Option<u32>,
 
@@ -42,6 +46,137 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub internal_requests: InternalRequestsConfig,
+
+    #[serde(default)]
+    pub csrf: CsrfConfig,
+
+    #[serde(default)]
+    pub idempotency: IdempotencyConfig,
+
+    #[serde(default)]
+    pub scripting: ScriptingConfig,
+
+    #[serde(default)]
+    pub optimistic_concurrency: OptimisticConcurrencyConfig,
+}
+
+/// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag
+/// value is aggregate-specific (Resql state_id) so Ruuter cannot validate
+/// it — but it CAN reject state-changing requests that arrive without any
+/// If-Match header at all. The DSL then validates the token against its
+/// aggregate state via a Resql query.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct OptimisticConcurrencyConfig {
+    /// When true, PUT / PATCH / DELETE without an `If-Match` header get
+    /// 428 Precondition Required (RFC 6585). Default false — the DSL is
+    /// still responsible for actually validating the token.
+    #[serde(default)]
+    pub require_if_match: bool,
+
+    /// Methods that must carry `If-Match`. Only consulted when
+    /// `require_if_match` is true.
+    #[serde(default = "default_ifmatch_methods")]
+    pub enforce_on_methods: Vec<String>,
+}
+
+fn default_ifmatch_methods() -> Vec<String> {
+    vec![
+        "PUT".to_string(),
+        "PATCH".to_string(),
+        "DELETE".to_string(),
+    ]
+}
+
+/// Server-side CSRF stance for state-changing methods. Implements
+/// PATTERNS.md §1: an Origin/Referer allow-list check on POST/PUT/PATCH/DELETE.
+/// When `allowed_origins` is empty the check is bypassed — useful for
+/// single-tenant admin surfaces that are behind a same-origin reverse
+/// proxy and rely on `SameSite=Strict` cookies alone.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct CsrfConfig {
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+
+    /// Methods that trigger the Origin/Referer check. Default:
+    /// POST/PUT/PATCH/DELETE.
+    #[serde(default = "default_csrf_methods")]
+    pub enforce_on_methods: Vec<String>,
+}
+
+fn default_csrf_methods() -> Vec<String> {
+    vec![
+        "POST".to_string(),
+        "PUT".to_string(),
+        "PATCH".to_string(),
+        "DELETE".to_string(),
+    ]
+}
+
+/// Framework-level Idempotency-Key handling. Implements PATTERNS.md §2.
+/// Backend is an in-process TTL cache; upgrade to Redis / Postgres is
+/// on-request-only for the framework, not per-DSL.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IdempotencyConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default = "default_idempotency_ttl_seconds")]
+    pub ttl_seconds: u64,
+
+    /// Methods eligible for deduplication when an Idempotency-Key header
+    /// is present. GET is intentionally not in the list.
+    #[serde(default = "default_idempotency_methods")]
+    pub methods: Vec<String>,
+}
+
+fn default_true() -> bool { true }
+fn default_idempotency_ttl_seconds() -> u64 { 24 * 60 * 60 }
+fn default_idempotency_methods() -> Vec<String> {
+    vec![
+        "POST".to_string(),
+        "PUT".to_string(),
+        "PATCH".to_string(),
+        "DELETE".to_string(),
+    ]
+}
+
+impl Default for IdempotencyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            ttl_seconds: default_idempotency_ttl_seconds(),
+            methods: default_idempotency_methods(),
+        }
+    }
+}
+
+/// Guardrails for the embedded JavaScript engine. The Boa runtime is
+/// synchronous and cannot be cooperatively cancelled once evaluation
+/// begins, so we impose CPU-bounded caps rather than wall-clock ones.
+///
+/// A DSL author writing `${while(true){}}` will hit `max_loop_iterations`
+/// and fail the evaluation rather than hang the tokio worker.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScriptingConfig {
+    /// Boa loop-iteration cap per `${...}` / `$= ... =$` evaluation.
+    #[serde(default = "default_script_max_loop_iterations")]
+    pub max_loop_iterations: u64,
+
+    /// Maximum JS call stack depth. Guards against unbounded recursion.
+    #[serde(default = "default_script_max_stack_size")]
+    pub max_stack_size: usize,
+}
+
+fn default_script_max_loop_iterations() -> u64 { 1_000_000 }
+fn default_script_max_stack_size() -> usize { 400 }
+
+impl Default for ScriptingConfig {
+    fn default() -> Self {
+        Self {
+            max_loop_iterations: default_script_max_loop_iterations(),
+            max_stack_size: default_script_max_stack_size(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -120,7 +255,14 @@ fn default_processed_filetypes() -> Vec<String> {
 }
 
 fn default_allowed_methods() -> Vec<String> {
-    vec!["GET".to_string(), "POST".to_string()]
+    vec![
+        "GET".to_string(),
+        "POST".to_string(),
+        "PUT".to_string(),
+        "PATCH".to_string(),
+        "DELETE".to_string(),
+        "OPTIONS".to_string(),
+    ]
 }
 
 impl Default for DslConfig {
@@ -148,9 +290,10 @@ impl Default for AppConfig {
             config_path: default_config_path(),
             port: default_port(),
             stop_in_case_of_exception: true,
-            http_codes_allow_list: vec![200, 201, 202],
-            max_step_recursions: Some(10),
-            http_response_size_limit: Some(256 * 1024),
+            // Empty = accept every upstream status (matches Java default).
+            http_codes_allow_list: Vec::new(),
+            max_step_recursions: Some(10_000),
+            http_response_size_limit: Some(16 * 1024 * 1024),
             http_request_timeout: default_http_request_timeout(),
             cors: CorsConfig::default(),
             dsl: DslConfig::default(),
@@ -158,7 +301,74 @@ impl Default for AppConfig {
             incoming_requests: IncomingRequestsConfig::default(),
             response_default_headers: HashMap::new(),
             internal_requests: InternalRequestsConfig::default(),
+            csrf: CsrfConfig::default(),
+            idempotency: IdempotencyConfig::default(),
+            scripting: ScriptingConfig::default(),
+            optimistic_concurrency: OptimisticConcurrencyConfig::default(),
         }
+    }
+}
+
+/// Where to look for the operator's config file, in priority order.
+/// The first path that exists wins; if none exist, `AppConfig::default()`
+/// is returned by the caller.
+fn config_search_paths() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    // 1. --config <path>
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--config" && i + 1 < args.len() {
+            out.push(PathBuf::from(&args[i + 1]));
+            break;
+        }
+        if let Some(rest) = args[i].strip_prefix("--config=") {
+            out.push(PathBuf::from(rest));
+            break;
+        }
+        i += 1;
+    }
+    // 2. RUUTER_CONFIG env
+    if let Ok(p) = std::env::var("RUUTER_CONFIG") {
+        if !p.is_empty() {
+            out.push(PathBuf::from(p));
+        }
+    }
+    // 3. conventional cwd locations
+    out.push(PathBuf::from("./ruuter.yaml"));
+    out.push(PathBuf::from("./ruuter.yml"));
+    out
+}
+
+impl AppConfig {
+    /// Resolve, load, and return the operator's AppConfig. Falls back to
+    /// `AppConfig::default()` when no config file is found on any of the
+    /// conventional paths.
+    ///
+    /// Returns a tuple `(config, source)` — `source` is `Some(path)` when
+    /// a file was loaded, `None` when defaults were used. Caller logs the
+    /// choice at INFO so ops can see which config took effect.
+    pub fn load_or_default() -> crate::Result<(Self, Option<PathBuf>)> {
+        for path in config_search_paths() {
+            if path.exists() {
+                let body = std::fs::read_to_string(&path).map_err(|e| {
+                    crate::RuuterError::Config(format!(
+                        "reading config file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                let cfg: AppConfig = serde_yml::from_str(&body).map_err(|e| {
+                    crate::RuuterError::Config(format!(
+                        "parsing config file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                return Ok((cfg, Some(path)));
+            }
+        }
+        Ok((Self::default(), None))
     }
 }
 
@@ -172,7 +382,6 @@ pub fn load_constants(path: &str) -> crate::Result<HashMap<String, String>> {
 
     let reader = BufReader::new(file);
     let mut constants = HashMap::new();
-    let mut current_section = String::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -182,8 +391,10 @@ pub fn load_constants(path: &str) -> crate::Result<HashMap<String, String>> {
             continue;
         }
 
+        // Section headers ([DSL], etc.) are accepted for compatibility with
+        // the original Java constants.ini format but do not scope keys —
+        // DSL references keys flat as `[#KEY]`.
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            current_section = trimmed[1..trimmed.len() - 1].to_string();
             continue;
         }
 

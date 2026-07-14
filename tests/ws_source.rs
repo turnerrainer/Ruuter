@@ -62,7 +62,7 @@ fn build_dispatcher(triggers: &[(&str, &str, &str, &str)]) -> (Arc<TriggerDispat
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
     let state = StateStore::new();
-    let engine = StepEngine::new(HttpClient::new(cfg.http_request_timeout));
+    let engine = StepEngine::new(HttpClient::new(&cfg));
     let d = Arc::new(TriggerDispatcher::new(
         loaded.triggers, state.clone(), engine,
     ));
@@ -92,6 +92,7 @@ respond:
 
     let cfg = WsSourceConfig {
         url: format!("ws://127.0.0.1:{}", port),
+        headers: HashMap::new(),
         on_connect: vec![],
         dispatch: DispatchConfig {
             channel: "$.T".to_string(),
@@ -137,6 +138,7 @@ write:
 
     let cfg = WsSourceConfig {
         url: format!("ws://127.0.0.1:{}", port),
+        headers: HashMap::new(),
         on_connect: vec![],
         dispatch: DispatchConfig {
             channel: "$.T".into(),
@@ -183,6 +185,7 @@ async fn ws_source_sends_on_connect_payloads() {
 
     let cfg = WsSourceConfig {
         url: format!("ws://127.0.0.1:{}", port),
+        headers: HashMap::new(),
         on_connect: vec![
             OnConnectAction::SendJson(json!({"action": "auth", "key": "K"})),
             OnConnectAction::SendJson(json!({"action": "subscribe", "bars": ["AAPL"]})),
@@ -214,6 +217,7 @@ fn config_constant_substitution_resolves_known_and_errors_on_missing() {
 
     let cfg = WsSourceConfig {
         url: "[#ws_url]".into(),
+        headers: HashMap::new(),
         on_connect: vec![
             OnConnectAction::SendJson(json!({"key": "[#api_key]"})),
         ],
@@ -269,7 +273,7 @@ reconnect:
   max_backoff_ms: 30000
   jitter: false
 "#;
-    let parsed: SourceConfig = serde_yaml::from_str(yaml).unwrap();
+    let parsed: SourceConfig = serde_yml::from_str(yaml).unwrap();
     match parsed {
         SourceConfig::WebSocket(ws) => {
             assert_eq!(ws.url, "wss://example.com/v2");

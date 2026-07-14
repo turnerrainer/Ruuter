@@ -3,7 +3,7 @@ use crate::dsl::{parser::DslParser, Dsl};
 use crate::{Result, RuuterError};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Project-name → method → DSL-key → Dsl (HTTP routes).
 pub type HttpDsls = HashMap<String, HashMap<String, HashMap<String, Dsl>>>;
@@ -15,7 +15,9 @@ pub type TriggerDsls = HashMap<(String, String), HashMap<String, Dsl>>;
 pub type GuardDsls = HashMap<String, HashMap<String, Dsl>>;
 
 /// Reserved per-project subdirectory names — NOT treated as HTTP methods.
-const RESERVED_SUBDIRS: &[&str] = &["triggers", "sources"];
+/// `cronmanager-jobs` holds companion configs for the sibling CronManager
+/// service; it is documented in samples but does not produce Ruuter routes.
+const RESERVED_SUBDIRS: &[&str] = &["triggers", "sources", "cronmanager-jobs"];
 
 #[derive(Default)]
 pub struct LoadedProjects {
@@ -189,6 +191,12 @@ impl DslLoader {
     }
 
     fn is_processable_file(&self, path: &Path) -> bool {
+        // Accept the Java-Ruuter convention `<dir>/.guard` (no extension).
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name == ".guard" || name == ".guard.yml" || name == ".guard.yaml" {
+                return true;
+            }
+        }
         path.extension()
             .and_then(|e| e.to_str())
             .map(|ext| {
@@ -202,8 +210,24 @@ impl DslLoader {
     fn is_guard_file(&self, path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .map(|name| name.contains(".guard."))
+            .map(|name| {
+                // In-folder Java convention: `.guard` (extension-less) or
+                // `.guard.yml`, both in the folder they protect.
+                name == ".guard"
+                    || name == ".guard.yml"
+                    || name == ".guard.yaml"
+                    // Sibling Rust convention: `<stem>.guard.yml` next to
+                    // the folder they protect.
+                    || name.contains(".guard.")
+            })
             .unwrap_or(false)
+    }
+
+    /// True for `.guard` / `.guard.yml` / `.guard.yaml` — the in-folder
+    /// Java convention that keys off the containing directory rather than
+    /// a filename stem.
+    fn is_in_folder_guard(name: &str) -> bool {
+        name == ".guard" || name == ".guard.yml" || name == ".guard.yaml"
     }
 
     fn build_dsl_key(&self, path: &Path, base_path: &Path, method: &str) -> Result<String> {
@@ -218,25 +242,47 @@ impl DslLoader {
         Ok(format!("{}/{}", method, path_str))
     }
 
-    /// Build a guard key from a `<stem>.guard.yml` file. The guard at
-    /// `<method>/path/<stem>.guard.yml` becomes key `<METHOD>/path/<stem>`
-    /// — the same shape as a normal DSL key, identifying the
-    /// directory the guard protects.
+    /// Build a guard key. Two conventions are supported:
+    ///
+    /// - **Sibling** (Rust convention): `<method>/path/<stem>.guard.yml`
+    ///   → key `<METHOD>/path/<stem>` (protects every DSL under the
+    ///   same-named sibling folder).
+    /// - **In-folder** (Java parity): `<method>/path/<dir>/.guard` (or
+    ///   `.guard.yml` / `.guard.yaml`) → key `<METHOD>/path/<dir>`
+    ///   (protects everything in and under `<dir>`).
+    ///
+    /// Both shapes produce the same `<METHOD>/path/<stem>` key so
+    /// `applicable_guards`'s prefix match works identically for both.
     fn build_guard_key(&self, path: &Path, base_path: &Path, method: &str) -> Result<String> {
         let rel_path = path.strip_prefix(base_path)
             .map_err(|_| RuuterError::FileNotFound("Invalid path".to_string()))?;
         let file_name = path.file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| RuuterError::FileNotFound("Invalid guard name".into()))?;
-        // Strip the trailing `.guard.<ext>` suffix.
-        let stem = file_name
-            .rsplitn(3, '.')
-            .nth(2)
-            .ok_or_else(|| RuuterError::FileNotFound("Malformed guard filename".into()))?;
+
         let parent = rel_path.parent()
             .and_then(|p| p.to_str())
             .unwrap_or("");
         let dir_part = parent.replace('\\', "/");
+
+        // In-folder guard — key = containing directory. `parent` is what
+        // the guard protects; nothing to append. When placed directly
+        // under the method root (`POST/.guard.yml`) the key is just the
+        // method (no trailing slash) so the prefix match works.
+        if Self::is_in_folder_guard(file_name) {
+            return if dir_part.is_empty() {
+                Ok(method.to_string())
+            } else {
+                Ok(format!("{}/{}", method, dir_part))
+            };
+        }
+
+        // Sibling guard — strip the trailing `.guard.<ext>` suffix from
+        // the filename to get the protected sibling-folder stem.
+        let stem = file_name
+            .rsplitn(3, '.')
+            .nth(2)
+            .ok_or_else(|| RuuterError::FileNotFound("Malformed guard filename".into()))?;
         let path_str = if dir_part.is_empty() {
             stem.to_string()
         } else {

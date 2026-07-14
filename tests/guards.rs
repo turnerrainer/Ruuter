@@ -7,8 +7,10 @@
 
 use ruuter_rs::config::AppConfig;
 use ruuter_rs::dsl::loader::DslLoader;
+use ruuter_rs::http_client::HttpClient;
 use ruuter_rs::router::DslRouter;
 use ruuter_rs::state::StateStore;
+use ruuter_rs::steps::engine::StepEngine;
 use ruuter_rs::ws::WsRegistry;
 use std::collections::HashMap;
 
@@ -28,7 +30,9 @@ fn build(files: &[(&str, &str)]) -> DslRouter {
     cfg.config_path = tmp;
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
-    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), WsRegistry::new())
+    let ws_registry = WsRegistry::new();
+    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), ws_registry, engine)
 }
 
 #[tokio::test]
@@ -262,4 +266,236 @@ ok: { return: { side: "B" }, next: end }
     ).await.unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["side"], "B");
+}
+
+// ─── Java-parity: in-folder guards ─────────────────────────────────────
+// Task 019. A `.guard.yml` (or `.guard`) inside the folder it protects
+// is a Java Ruuter convention. Rust previously silently dropped these.
+
+#[tokio::test]
+async fn in_folder_guard_yml_protects_its_directory() {
+    let router = build(&[
+        ("svc/GET/protected/.guard.yml", r#"
+deny:
+  status: 401
+  return: { error: "locked from inside" }
+  next: end
+"#),
+        ("svc/GET/protected/data.yml", r#"
+ok: { return: { secret: "shhh" }, next: end }
+"#),
+    ]);
+
+    let r = router.execute_dsl(
+        "svc", "GET", "protected/data",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 401);
+    assert_eq!(r.value.unwrap()["error"], "locked from inside");
+}
+
+#[tokio::test]
+async fn in_folder_guard_stacks_with_ancestor_sibling_guard() {
+    // Sibling guard on `api` folder + in-folder guard on `api/admin` —
+    // both must pass. Proves the two conventions cooperate.
+    let router = build(&[
+        ("svc/GET/api.guard.yml", r#"
+check:
+  switch:
+    - condition: "${!incoming.headers['authorization']}"
+      next: deny
+  next: ok
+ok: { return: { passed: outer }, next: end }
+deny: { status: 401, return: { error: "no auth" }, next: end }
+"#),
+        ("svc/GET/api/admin/.guard.yml", r#"
+check:
+  switch:
+    - condition: "${incoming.headers['x-role'] !== 'admin'}"
+      next: deny
+  next: ok
+ok: { return: { passed: inner }, next: end }
+deny: { status: 403, return: { error: "admin only" }, next: end }
+"#),
+        ("svc/GET/api/admin/users.yml", r#"
+ok: { return: { users: ["alice"] }, next: end }
+"#),
+    ]);
+
+    // outer fails → 401
+    let r = router.execute_dsl(
+        "svc", "GET", "api/admin/users",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 401);
+
+    // outer passes, inner fails → 403
+    let mut h = HashMap::new();
+    h.insert("authorization".into(), "Bearer x".into());
+    h.insert("x-role".into(), "user".into());
+    let r = router.execute_dsl(
+        "svc", "GET", "api/admin/users",
+        HashMap::new(), HashMap::new(), h, "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 403);
+
+    // both pass → 200
+    let mut h = HashMap::new();
+    h.insert("authorization".into(), "Bearer x".into());
+    h.insert("x-role".into(), "admin".into());
+    let r = router.execute_dsl(
+        "svc", "GET", "api/admin/users",
+        HashMap::new(), HashMap::new(), h, "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(r.value.unwrap()["users"][0], "alice");
+}
+
+// ─── Task 020: bespoke guard override ─────────────────────────────────
+
+#[tokio::test]
+async fn override_guard_replaces_ancestor_guards() {
+    // Outer guard requires x-token; inner guard on /api/inject-fault
+    // is stricter (403 unconditionally) AND declares override_ancestors.
+    // Result: inner runs, outer skipped.
+    let router = build(&[
+        ("svc/GET/api.guard.yml", r#"
+check:
+  switch:
+    - condition: "${!incoming.headers['x-token']}"
+      next: deny
+  next: ok
+ok: { return: { passed: outer }, next: end }
+deny: { status: 401, return: { error: "no token" }, next: end }
+"#),
+        ("svc/GET/api/inject-fault.guard.yml", r#"
+declaration:
+  override_ancestors: true
+
+deny:
+  status: 403
+  return: { error: "inject-fault disabled in prod" }
+  next: end
+"#),
+        ("svc/GET/api/inject-fault/trigger.yml", r#"
+ok: { return: { fired: true }, next: end }
+"#),
+    ]);
+
+    // Even WITH x-token, override guard runs → 403. Outer skipped.
+    let mut h = HashMap::new();
+    h.insert("x-token".into(), "valid".into());
+    let r = router.execute_dsl(
+        "svc", "GET", "api/inject-fault/trigger",
+        HashMap::new(), HashMap::new(), h, "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 403);
+    assert_eq!(r.value.unwrap()["error"], "inject-fault disabled in prod");
+}
+
+#[tokio::test]
+async fn override_absent_means_stack_semantics_unchanged() {
+    // Same shape as above but no override_ancestors — both guards must
+    // pass. Back-compat check.
+    let router = build(&[
+        ("svc/GET/api.guard.yml", r#"
+check:
+  switch:
+    - condition: "${!incoming.headers['x-token']}"
+      next: deny
+  next: ok
+ok: { return: { passed: outer }, next: end }
+deny: { status: 401, return: { error: "no token" }, next: end }
+"#),
+        ("svc/GET/api/careful.guard.yml", r#"
+check:
+  switch:
+    - condition: "${incoming.headers['x-role'] !== 'admin'}"
+      next: deny
+  next: ok
+ok: { return: { passed: inner }, next: end }
+deny: { status: 403, return: { error: "admin only" }, next: end }
+"#),
+        ("svc/GET/api/careful/action.yml", r#"
+ok: { return: { ran: true }, next: end }
+"#),
+    ]);
+
+    // With token but not admin → outer passes, inner denies.
+    let mut h = HashMap::new();
+    h.insert("x-token".into(), "valid".into());
+    h.insert("x-role".into(), "user".into());
+    let r = router.execute_dsl(
+        "svc", "GET", "api/careful/action",
+        HashMap::new(), HashMap::new(), h, "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 403);
+    assert_eq!(r.value.unwrap()["error"], "admin only");
+}
+
+#[tokio::test]
+async fn override_only_affects_routes_it_matches() {
+    // Override on api/inject-fault must not touch api/normal.
+    let router = build(&[
+        ("svc/GET/api.guard.yml", r#"
+deny: { status: 401, return: { error: "outer" }, next: end }
+"#),
+        ("svc/GET/api/inject-fault.guard.yml", r#"
+declaration:
+  override_ancestors: true
+ok: { return: { override_ran: true }, next: end }
+"#),
+        ("svc/GET/api/inject-fault/x.yml", r#"
+ok: { return: { path: fault }, next: end }
+"#),
+        ("svc/GET/api/normal/y.yml", r#"
+ok: { return: { path: normal }, next: end }
+"#),
+    ]);
+
+    // inject-fault path: override runs → returns OK, outer bypassed.
+    let r = router.execute_dsl(
+        "svc", "GET", "api/inject-fault/x",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(r.value.unwrap()["path"], "fault");
+
+    // normal path: outer still runs, denies 401.
+    let r = router.execute_dsl(
+        "svc", "GET", "api/normal/y",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 401);
+    assert_eq!(r.value.unwrap()["error"], "outer");
+}
+
+#[tokio::test]
+async fn in_folder_guard_doesnt_protect_sibling_folders() {
+    let router = build(&[
+        ("svc/GET/locked/.guard.yml", r#"
+deny: { status: 401, return: { error: "locked" }, next: end }
+"#),
+        ("svc/GET/locked/x.yml", r#"
+ok: { return: { area: locked }, next: end }
+"#),
+        ("svc/GET/open/y.yml", r#"
+ok: { return: { area: open }, next: end }
+"#),
+    ]);
+
+    // locked/x → guarded
+    let r = router.execute_dsl(
+        "svc", "GET", "locked/x",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 401);
+
+    // open/y → unaffected
+    let r = router.execute_dsl(
+        "svc", "GET", "open/y",
+        HashMap::new(), HashMap::new(), HashMap::new(), "test".into(),
+    ).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(r.value.unwrap()["area"], "open");
 }

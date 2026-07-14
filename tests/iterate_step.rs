@@ -2,8 +2,10 @@
 
 use ruuter_rs::config::AppConfig;
 use ruuter_rs::dsl::loader::DslLoader;
+use ruuter_rs::http_client::HttpClient;
 use ruuter_rs::router::DslRouter;
 use ruuter_rs::state::StateStore;
+use ruuter_rs::steps::engine::StepEngine;
 use ruuter_rs::ws::WsRegistry;
 use std::collections::HashMap;
 
@@ -23,7 +25,9 @@ fn build(files: &[(&str, &str)]) -> DslRouter {
     cfg.config_path = tmp;
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
-    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), WsRegistry::new())
+    let ws_registry = WsRegistry::new();
+    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), ws_registry, engine)
 }
 
 #[tokio::test]

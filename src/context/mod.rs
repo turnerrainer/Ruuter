@@ -17,6 +17,10 @@ pub struct ExecutionContext {
     /// (optionally) source-WS frames; `None` for HTTP and cron-driven
     /// runs. `ws_send` without an explicit `to` uses this id.
     connection_id: Option<String>,
+    /// W3C `traceparent` (PATTERNS.md §4). Adopted from the incoming
+    /// request when present, otherwise generated at request entry.
+    /// http_client forwards it on every outbound call by default.
+    traceparent: Option<String>,
 }
 
 impl ExecutionContext {
@@ -26,6 +30,7 @@ impl ExecutionContext {
         headers: HashMap<String, String>,
         origin: String,
     ) -> Self {
+        let traceparent = headers.get("traceparent").cloned();
         Self {
             variables: Arc::new(RwLock::new(HashMap::new())),
             request_body: body,
@@ -35,6 +40,7 @@ impl ExecutionContext {
             project: String::new(),
             state: StateStore::new(),
             connection_id: None,
+            traceparent,
         }
     }
 
@@ -49,6 +55,7 @@ impl ExecutionContext {
         project: String,
         state: StateStore,
     ) -> Self {
+        let traceparent = headers.get("traceparent").cloned();
         Self {
             variables: Arc::new(RwLock::new(HashMap::new())),
             request_body: body,
@@ -58,6 +65,7 @@ impl ExecutionContext {
             project,
             state,
             connection_id: None,
+            traceparent,
         }
     }
 
@@ -69,8 +77,38 @@ impl ExecutionContext {
         self
     }
 
+    pub fn with_traceparent(mut self, tp: impl Into<String>) -> Self {
+        self.traceparent = Some(tp.into());
+        self
+    }
+
     pub fn connection_id(&self) -> Option<&str> {
         self.connection_id.as_deref()
+    }
+
+    pub fn traceparent(&self) -> Option<&str> {
+        self.traceparent.as_deref()
+    }
+
+    /// Extract the 32-hex trace id from an adopted traceparent, or return
+    /// `None` if we don't have a well-formed one. Used to populate the
+    /// `X-Trace-Id` response header.
+    pub fn trace_id(&self) -> Option<String> {
+        let tp = self.traceparent.as_deref()?;
+        // Format: 00-<trace_id 32 hex>-<span_id 16 hex>-<flags 2 hex>
+        let parts: Vec<&str> = tp.splitn(4, '-').collect();
+        if parts.len() == 4 && parts[1].len() == 32 {
+            Some(parts[1].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Explicitly set the traceparent — used by the router when it needs
+    /// to generate a fresh one for a request that arrived without a
+    /// `traceparent` header.
+    pub fn set_traceparent(&mut self, tp: String) {
+        self.traceparent = Some(tp);
     }
 
     pub fn project(&self) -> &str {

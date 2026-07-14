@@ -16,11 +16,14 @@ pub enum RuuterError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
+    #[error("HTTP request rejected: {0}")]
+    HttpRequest(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_yml::Error),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

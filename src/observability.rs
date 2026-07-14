@@ -16,7 +16,7 @@ use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     runtime::Tokio,
-    trace::{Config, TracerProvider},
+    trace::TracerProvider,
     Resource,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -56,11 +56,9 @@ pub fn init() -> Option<TracerProvider> {
 
             let provider = TracerProvider::builder()
                 .with_batch_exporter(exporter, Tokio)
-                .with_config(
-                    Config::default().with_resource(Resource::new(vec![
-                        KeyValue::new("service.name", service_name.clone()),
-                    ])),
-                )
+                .with_resource(Resource::new(vec![
+                    KeyValue::new("service.name", service_name.clone()),
+                ]))
                 .build();
             let tracer = provider.tracer(service_name);
             let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);

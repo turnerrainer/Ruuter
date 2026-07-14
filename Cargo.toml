@@ -14,8 +14,8 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+serde_yml = "0.0.12"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 boa_engine = "0.19"
 config = "0.14"
 tracing = "0.1"
@@ -38,6 +38,7 @@ indexmap = { version = "2.5", features = ["serde"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "url"] }
 url = "2.5"
 rand = "0.8"
+sha2 = "0.10"
 
 [dev-dependencies]
 mockito = "1.5"

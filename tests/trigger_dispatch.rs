@@ -30,7 +30,7 @@ fn build_dispatcher_with(triggers: &[(&str, &str, &str, &str)]) -> Arc<TriggerDi
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().expect("load");
     let state = StateStore::new();
-    let engine = StepEngine::new(HttpClient::new(cfg.http_request_timeout));
+    let engine = StepEngine::new(HttpClient::new(&cfg));
     Arc::new(TriggerDispatcher::new(loaded.triggers, state, engine))
 }
 
