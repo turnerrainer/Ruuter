@@ -1,0 +1,51 @@
+mode: trigger-inject
+
+constants:
+  stock_alert_webhook: "{MOCK}/alerts"
+
+http_rewrite: {}
+
+tests:
+  - name: first bar for a symbol sets last_close without alerting
+    trigger:
+      project: samples
+      channel: stock-bars
+      key: MSFT
+      payload: { S: "MSFT", c: 400.0, h: 401, l: 399, v: 1000, t: "2026-06-25T13:00:00Z" }
+    verify_state:
+      - { project: samples, key: "stock:MSFT:last_close", value: 400.0 }
+    verify_mocks: []
+
+  - name: seeded prev + small move stores new close, does not alert
+    setup:
+      state:
+        - { project: samples, key: "stock:MSFT:last_close", value: 400.0 }
+    trigger:
+      project: samples
+      channel: stock-bars
+      key: MSFT
+      payload: { S: "MSFT", c: 400.2, h: 400.3, l: 400.0, v: 500, t: "2026-06-25T13:01:00Z" }
+    verify_state:
+      - { project: samples, key: "stock:MSFT:last_close", value: 400.2 }
+    verify_mocks: []
+
+  - name: seeded prev + big move triggers alert webhook
+    setup:
+      state:
+        - { project: samples, key: "stock:MSFT:last_close", value: 400.0 }
+      mocks:
+        - url_matches: "/alerts"
+          method: POST
+          status: 200
+          body: { ok: true }
+    trigger:
+      project: samples
+      channel: stock-bars
+      key: MSFT
+      payload: { S: "MSFT", c: 405.0, h: 405.5, l: 400.0, v: 2000, t: "2026-06-25T13:02:00Z" }
+    verify_state:
+      - { project: samples, key: "stock:MSFT:last_close", value: 405.0 }
+    verify_mocks:
+      - url_matches: "/alerts"
+        count: 1
+        body_matches: { symbol: "MSFT", close: 405.0 }

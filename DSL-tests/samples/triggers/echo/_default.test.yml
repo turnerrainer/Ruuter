@@ -1,0 +1,32 @@
+mode: trigger-inject
+
+tests:
+  - name: fires for any key, stores last_event in state
+    trigger:
+      project: samples
+      channel: echo
+      key: any-key
+      payload: { hello: "world", count: 3 }
+    verify_state:
+      - project: samples
+        key: last_event
+        value: { hello: "world", count: 3 }
+
+  - name: also fires for another key (via _default fallback)
+    trigger:
+      project: samples
+      channel: echo
+      key: entirely-different
+      payload: { alpha: 1 }
+    verify_state:
+      - project: samples
+        key: last_event
+        value: { alpha: 1 }
+
+  - name: unknown channel is not dispatched
+    trigger:
+      project: samples
+      channel: not-a-channel
+      key: k
+      payload: {}
+      expect_dispatched: false

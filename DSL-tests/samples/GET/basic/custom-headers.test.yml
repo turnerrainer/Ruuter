@@ -1,0 +1,11 @@
+mode: inprocess
+
+tests:
+  - name: sets custom response headers
+    request: { method: GET, path: /samples/basic/custom-headers }
+    expect:
+      status: 200
+      body: { message: "Response with custom headers" }
+      headers:
+        X-Custom-Header: "Custom Value"
+        X-API-Version: "1.0"

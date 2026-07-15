@@ -1,0 +1,35 @@
+mode: inprocess
+
+tests:
+  - name: happy path calls create-entity template
+    request:
+      method: POST
+      path: /samples/templates/call-create-template
+      headers: { content-type: "application/json" }
+      body: { name: "widget", type: "gadget" }
+    expect:
+      status: 200
+      body_matches:
+        success: true
+        entity: "$type:object"
+
+  - name: type defaults to 'default' when omitted
+    request:
+      method: POST
+      path: /samples/templates/call-create-template
+      headers: { content-type: "application/json" }
+      body: { name: "widget" }
+    expect:
+      status: 200
+      body_matches:
+        success: true
+
+  - name: missing name -> 400
+    request:
+      method: POST
+      path: /samples/templates/call-create-template
+      headers: { content-type: "application/json" }
+      body: {}
+    expect:
+      status: 400
+      body: { error: "Name is required" }

@@ -1,0 +1,46 @@
+mode: inprocess
+
+tests:
+  - name: valid numbers
+    request:
+      method: GET
+      path: /samples/javascript/math-operations
+      query: { a: "10", b: "4" }
+    expect:
+      status: 200
+      body:
+        a: 10
+        b: 4
+        sum: 14
+        difference: 6
+        product: 40
+        quotient: 2.5
+        average: 7
+        max: 10
+        min: 4
+
+  - name: division by zero returns null quotient
+    request:
+      method: GET
+      path: /samples/javascript/math-operations
+      query: { a: "5", b: "0" }
+    expect:
+      status: 200
+      body_matches:
+        sum: 5
+        product: 0
+        quotient: null
+
+  - name: non-numeric input triggers script error
+    # The `parseFloat("hello")` in the first assign yields NaN, which
+    # the engine cannot serialise into a variable — the run errors
+    # before reaching the Number.isNaN guard. Documented as the DSL's
+    # actual behaviour today; a future engine could coerce NaN → null
+    # to let the guard fire.
+    request:
+      method: GET
+      path: /samples/javascript/math-operations
+      query: { a: "hello", b: "1" }
+    expect:
+      status: 500
+      body_matches: { error: "$regex:Invalid number" }

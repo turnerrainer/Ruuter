@@ -1,0 +1,26 @@
+mode: mock-http
+
+# The template callee (user-profile.yml) itself calls jsonplaceholder,
+# so we still need URL rewriting even though the outer DSL is the
+# template caller.
+http_rewrite:
+  "https://jsonplaceholder.typicode.com": "{MOCK}"
+
+tests:
+  - name: caller invokes user-profile template and enriches result
+    setup:
+      mocks:
+        - url_matches: "/users/5"
+          method: GET
+          status: 200
+          body: { id: 5, name: "Chelsey Dietrich" }
+    request:
+      method: GET
+      path: /samples/templates/call-template
+      query: { id: "5", requester: "rainer" }
+    expect:
+      status: 200
+      body_matches:
+        user: "$type:object"
+        fetched_at: "$type:number"
+        requested_by: "rainer"

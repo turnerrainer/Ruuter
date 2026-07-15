@@ -1,0 +1,20 @@
+mode: ws-client
+
+tests:
+  - name: echoes each frame back to sender
+    ws:
+      path: /samples/echo
+      send:
+        - { hello: "world" }
+      expect_frames:
+        - { type: "echo", received: { hello: "world" }, connection_id: "$type:string" }
+
+  - name: echoes second frame independently
+    ws:
+      path: /samples/echo
+      send:
+        - { first: true }
+        - { second: true }
+      expect_frames:
+        - { type: "echo", received: { first: true } }
+        - { type: "echo", received: { second: true } }

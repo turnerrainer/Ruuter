@@ -1,0 +1,14 @@
+mode: inprocess
+
+tests:
+  - name: returns processed result with user id
+    request:
+      method: GET
+      path: /samples/advanced/logging-demo
+      query: { userId: "u-42" }
+    expect:
+      status: 200
+      body_matches:
+        userId: "u-42"
+        status: "completed"
+        processedAt: "$type:number"

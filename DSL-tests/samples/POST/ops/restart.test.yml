@@ -1,0 +1,20 @@
+# Guarded by DSL/samples/POST/ops/.guard.yml — needs Authorization
+# header. The bespoke-override guard for inject-fault does NOT stack
+# here (it's scoped to POST/ops/inject-fault/*).
+mode: inprocess
+
+tests:
+  - name: no auth -> 401 from folder guard
+    request: { method: POST, path: /samples/ops/restart }
+    expect:
+      status: 401
+      body: { error: "ops: bearer token required" }
+
+  - name: with auth reaches endpoint
+    request:
+      method: POST
+      path: /samples/ops/restart
+      headers: { authorization: "Bearer secret" }
+    expect:
+      status: 200
+      body: { restarted: true }

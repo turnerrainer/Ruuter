@@ -1,6 +1,8 @@
 # Example of calling another DSL as template
 call_user_template:
-  template: "samples/GET/templates/user-profile"
+  # Path is relative to <project>/<METHOD>/ — the loader keys DSLs as
+  # `<METHOD>/<relative-path>` under the project. See src/steps/template.rs.
+  template: "templates/user-profile"
   request_type: "GET"
   query:
     userId: ${incoming.params.id}

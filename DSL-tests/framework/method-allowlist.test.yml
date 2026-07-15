@@ -1,0 +1,12 @@
+# Framework: incoming_requests.allowed_method_types defaults to
+# GET/POST/PUT/PATCH/DELETE/OPTIONS. Everything else 405. Ruuter
+# denies before routing so an unknown method on a known path returns
+# 405 (not 404, which is what our fallback-404 test covers for
+# GET/POST/etc). TRACE is not in the default allow-list.
+mode: inprocess
+
+tests:
+  - name: OPTIONS on unknown path is allowed by the method allowlist (still 404 by router)
+    request: { method: OPTIONS, path: /samples/ping }
+    expect:
+      status: 404

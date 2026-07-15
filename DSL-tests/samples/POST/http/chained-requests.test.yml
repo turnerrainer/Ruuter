@@ -1,0 +1,30 @@
+mode: mock-http
+
+http_rewrite:
+  "https://jsonplaceholder.typicode.com": "{MOCK}"
+
+tests:
+  - name: fetches user then posts, combines
+    setup:
+      mocks:
+        - url_matches: "/users/7"
+          method: GET
+          status: 200
+          body: { id: 7, name: "Kurtis Weissnat", email: "kurtis@example.com" }
+        - url_matches: "/posts"
+          method: GET
+          status: 200
+          body: [{ id: 60, title: "hello" }, { id: 61, title: "world" }]
+    request:
+      method: POST
+      path: /samples/http/chained-requests
+      headers: { content-type: "application/json" }
+      body: { userId: 7 }
+    expect:
+      status: 200
+      body_matches:
+        user: { id: 7, name: "Kurtis Weissnat" }
+        posts: "$type:array"
+    verify_mocks:
+      - { url_matches: "/users/7", count: 1 }
+      - { url_matches: "/posts", count: 1 }

@@ -1,0 +1,47 @@
+mode: inprocess
+
+tests:
+  - name: adult >= 18
+    request:
+      method: GET
+      path: /samples/conditionals/simple-switch
+      query: { age: "25" }
+    expect:
+      status: 200
+      body: { category: "adult", age: 25, message: "You are an adult" }
+
+  - name: teen 13..17
+    request:
+      method: GET
+      path: /samples/conditionals/simple-switch
+      query: { age: "15" }
+    expect:
+      status: 200
+      body: { category: "teenager", age: 15, message: "You are a teenager" }
+
+  - name: child fallthrough
+    request:
+      method: GET
+      path: /samples/conditionals/simple-switch
+      query: { age: "7" }
+    expect:
+      status: 200
+      body: { category: "child", age: 7, message: "You are a child" }
+
+  - name: boundary at 18
+    request:
+      method: GET
+      path: /samples/conditionals/simple-switch
+      query: { age: "18" }
+    expect:
+      status: 200
+      body_matches: { category: "adult" }
+
+  - name: boundary at 13
+    request:
+      method: GET
+      path: /samples/conditionals/simple-switch
+      query: { age: "13" }
+    expect:
+      status: 200
+      body_matches: { category: "teenager" }

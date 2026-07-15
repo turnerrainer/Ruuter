@@ -1,0 +1,15 @@
+mode: ws-client
+
+# Broadcast DSL fans out to every connected `client:*`. With a single
+# WS client in this scenario, that means the sender receives its own
+# broadcast frame.
+tests:
+  - name: sender receives own broadcast
+    ws:
+      path: /samples/broadcast
+      send:
+        - { text: "ping" }
+      expect_frames:
+        - type: "broadcast"
+          from: "$type:string"
+          msg: { text: "ping" }

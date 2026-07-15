@@ -107,6 +107,12 @@ impl HttpClient {
         headers: Option<&HashMap<String, Value>>,
         timeout: Option<Duration>,
     ) -> Result<HttpResponse> {
+        // Test-only URL rewriting (see `rewrite_url_for_tests`). Applied
+        // BEFORE SSRF checks so tests can point at a local mock without
+        // punching a hole in the allowlist.
+        let rewritten = rewrite_url_for_tests(url);
+        let url = rewritten.as_deref().unwrap_or(url);
+
         self.check_ssrf(url)?;
 
         let mut request = self.client
@@ -208,6 +214,36 @@ impl HttpClient {
             headers: response_headers,
         })
     }
+}
+
+/// Test-only URL rewriting. When the env var
+/// `RUUTER_HTTP_REWRITE` is set to a comma-separated list of
+/// `from=to` pairs, any outbound URL whose origin matches a `from`
+/// origin has its origin replaced with the corresponding `to`. Path,
+/// query, and headers are preserved.
+///
+/// Example: `RUUTER_HTTP_REWRITE=https://jsonplaceholder.typicode.com=http://127.0.0.1:9999`
+///
+/// Off by default (env var absent → no rewriting). Kept out of the
+/// `HttpClient` struct so no test-mode flag propagates into production
+/// config surfaces.
+fn rewrite_url_for_tests(url: &str) -> Option<String> {
+    let raw = std::env::var("RUUTER_HTTP_REWRITE").ok()?;
+    if raw.is_empty() {
+        return None;
+    }
+    for pair in raw.split(',') {
+        let mut parts = pair.splitn(2, '=');
+        let from = parts.next()?.trim();
+        let to = parts.next()?.trim();
+        if from.is_empty() || to.is_empty() {
+            continue;
+        }
+        if let Some(rest) = url.strip_prefix(from) {
+            return Some(format!("{}{}", to, rest));
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]

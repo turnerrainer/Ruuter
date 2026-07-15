@@ -1,0 +1,12 @@
+mode: inprocess
+
+tests:
+  - name: threads value through 4 assign steps
+    request: { method: GET, path: /samples/advanced/step-chaining }
+    expect:
+      status: 200
+      body:
+        initial: 10
+        after_doubling: 20
+        after_squaring: 400
+        total_operations: 3

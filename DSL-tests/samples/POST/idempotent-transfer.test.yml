@@ -1,0 +1,65 @@
+# Framework-layer Idempotency-Key (PATTERNS.md §2). First call runs
+# the DSL; second call with the same key replays the cached response
+# and sets Idempotency-Replayed: true.
+mode: inprocess
+
+tests:
+  - name: first call runs DSL and accepts transfer
+    request:
+      method: POST
+      path: /samples/idempotent-transfer
+      headers:
+        content-type: "application/json"
+        idempotency-key: "0000-first-key"
+      body: { from: "A", to: "B", amount: 100 }
+    expect:
+      status: 202
+      body_matches:
+        accepted: true
+        from: "A"
+        to: "B"
+        amount: 100
+        ref: "$regex:^txn-\\d+$"
+      replayed: false
+
+  - name: second call with same key replays cached response
+    request:
+      method: POST
+      path: /samples/idempotent-transfer
+      headers:
+        content-type: "application/json"
+        idempotency-key: "0000-first-key"
+      body: { from: "A", to: "B", amount: 100 }
+    expect:
+      status: 202
+      body_matches:
+        accepted: true
+        from: "A"
+      replayed: true
+
+  - name: different key runs DSL again
+    request:
+      method: POST
+      path: /samples/idempotent-transfer
+      headers:
+        content-type: "application/json"
+        idempotency-key: "0001-different-key"
+      body: { from: "X", to: "Y", amount: 500 }
+    expect:
+      status: 202
+      body_matches:
+        accepted: true
+        from: "X"
+        to: "Y"
+      replayed: false
+
+  - name: no key -> runs every time, no replay header
+    request:
+      method: POST
+      path: /samples/idempotent-transfer
+      headers: { content-type: "application/json" }
+      body: { from: "P", to: "Q", amount: 1 }
+    expect:
+      status: 202
+      body_matches: { accepted: true }
+      replayed: false

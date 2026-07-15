@@ -42,3 +42,15 @@ sha2 = "0.10"
 
 [dev-dependencies]
 mockito = "1.5"
+
+[[bin]]
+name = "ruuter-rs"
+path = "src/main.rs"
+
+[[bin]]
+name = "dsl-lint"
+path = "src/bin/dsl_lint.rs"
+
+[[bin]]
+name = "dsl-test"
+path = "src/bin/dsl_test.rs"

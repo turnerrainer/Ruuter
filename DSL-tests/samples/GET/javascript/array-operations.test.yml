@@ -1,0 +1,19 @@
+mode: inprocess
+
+tests:
+  - name: array reductions and transforms
+    request: { method: GET, path: /samples/javascript/array-operations }
+    expect:
+      status: 200
+      body:
+        original: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        length: 10
+        first: 1
+        last: 10
+        sum: 55
+        average: 5.5
+        max: 10
+        min: 1
+        reversed: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        doubled: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+        evens: [2, 4, 6, 8, 10]

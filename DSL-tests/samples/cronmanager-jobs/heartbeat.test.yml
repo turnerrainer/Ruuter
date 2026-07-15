@@ -1,0 +1,8 @@
+# The cronmanager-jobs YAML is a config for the sibling CronManager
+# service, not a Ruuter step DSL. dsl-lint validates its shape
+# (`trigger`, `type`, `url` required per job). Runtime testing happens
+# in POST/scheduled/heartbeat.test.yml — this file is intentionally
+# empty of runtime scenarios so the runner still enumerates it.
+mode: inprocess
+
+tests: []

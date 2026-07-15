@@ -1,0 +1,13 @@
+mode: inprocess
+
+tests:
+  - name: echoes id and name
+    request:
+      method: GET
+      path: /samples/variables/incoming-params
+      query: { id: "42", name: "Rainer" }
+    expect:
+      status: 200
+      body:
+        received: { id: "42", name: "Rainer" }
+        message: "Received parameters successfully"

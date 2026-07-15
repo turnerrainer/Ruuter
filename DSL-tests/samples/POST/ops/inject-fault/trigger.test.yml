@@ -1,0 +1,20 @@
+# Exercises task-020 override_ancestors: the bespoke guard REPLACES the
+# folder-wide ops/.guard.yml for this endpoint, so even a valid Bearer
+# token returns 403 (the endpoint is permanently disabled).
+mode: inprocess
+
+tests:
+  - name: no auth still hits override guard -> 403
+    request: { method: POST, path: /samples/ops/inject-fault/trigger }
+    expect:
+      status: 403
+      body: { error: "inject-fault is disabled in production" }
+
+  - name: valid Bearer still blocked by override guard
+    request:
+      method: POST
+      path: /samples/ops/inject-fault/trigger
+      headers: { authorization: "Bearer valid" }
+    expect:
+      status: 403
+      body: { error: "inject-fault is disabled in production" }

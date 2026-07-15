@@ -1,0 +1,57 @@
+# Guard: DSL/samples/POST/admin.guard.yml (sibling, protects admin/*)
+mode: inprocess
+
+tests:
+  - name: no auth header -> 401 from guard
+    request:
+      method: POST
+      path: /samples/admin/delete-user
+      headers: { content-type: "application/json" }
+      body: { userId: "u-42" }
+    expect:
+      status: 401
+      body: { error: "Authentication required" }
+
+  - name: non-admin role -> 403 from guard
+    request:
+      method: POST
+      path: /samples/admin/delete-user
+      headers:
+        authorization: "Bearer xyz"
+        x-user-role: "user"
+        content-type: "application/json"
+      body: { userId: "u-42" }
+    expect:
+      status: 403
+      body: { error: "Admin role required" }
+
+  - name: admin role reaches endpoint
+    request:
+      method: POST
+      path: /samples/admin/delete-user
+      headers:
+        authorization: "Bearer xyz"
+        x-user-role: "admin"
+        content-type: "application/json"
+      body: { userId: "u-42" }
+    expect:
+      status: 200
+      body_matches:
+        success: true
+        deleted:
+          userId: "u-42"
+          deleted_by: "admin"
+          deleted_at: "$type:number"
+
+  - name: admin but missing userId -> 400 from endpoint
+    request:
+      method: POST
+      path: /samples/admin/delete-user
+      headers:
+        authorization: "Bearer xyz"
+        x-user-role: "admin"
+        content-type: "application/json"
+      body: {}
+    expect:
+      status: 400
+      body: { error: "userId is required" }

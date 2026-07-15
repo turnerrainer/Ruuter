@@ -1,0 +1,25 @@
+mode: inprocess
+
+tests:
+  - name: transforms provided text
+    request:
+      method: GET
+      path: /samples/javascript/string-operations
+      query: { text: "Hello World" }
+    expect:
+      status: 200
+      body:
+        original: "Hello World"
+        uppercase: "HELLO WORLD"
+        lowercase: "hello world"
+        length: 11
+        reversed: "dlroW olleH"
+        words: ["Hello", "World"]
+        firstChar: "H"
+        lastChar: "d"
+
+  - name: falls back to default when text param absent
+    request: { method: GET, path: /samples/javascript/string-operations }
+    expect:
+      status: 200
+      body_matches: { original: "Hello World" }

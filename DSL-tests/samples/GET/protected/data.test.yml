@@ -1,0 +1,40 @@
+# Guards exercised: DSL/samples/GET/protected.guard.yml (sibling guard,
+# protects everything under GET/protected/).
+mode: inprocess
+
+tests:
+  - name: no Authorization header -> 401
+    request: { method: GET, path: /samples/protected/data }
+    expect:
+      status: 401
+      body: { error: "Authorization header required" }
+
+  - name: non-Bearer scheme -> 401
+    request:
+      method: GET
+      path: /samples/protected/data
+      headers: { authorization: "Basic dXNlcjpwYXNz" }
+    expect:
+      status: 401
+      body: { error: "Invalid token format" }
+
+  - name: too-short Bearer -> 401
+    request:
+      method: GET
+      path: /samples/protected/data
+      headers: { authorization: "Bearer x" }
+    expect:
+      status: 401
+      body: { error: "Invalid token format" }
+
+  - name: valid Bearer reaches endpoint
+    request:
+      method: GET
+      path: /samples/protected/data
+      headers: { authorization: "Bearer this-is-a-long-enough-token" }
+    expect:
+      status: 200
+      body_matches:
+        message: "This is protected data"
+        user: "authenticated-user"
+        timestamp: "$type:number"

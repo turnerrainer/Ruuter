@@ -1,0 +1,17 @@
+mode: inprocess
+
+tests:
+  - name: nested object shape
+    request: { method: GET, path: /samples/variables/complex-object }
+    expect:
+      status: 200
+      body_matches:
+        profile:
+          firstName: "Jane"
+          lastName: "Smith"
+          age: 28
+        settings:
+          theme: "dark"
+          notifications: true
+        metadata:
+          created: "$type:number"

@@ -1,0 +1,27 @@
+mode: mock-http
+
+http_rewrite:
+  "https://jsonplaceholder.typicode.com": "{MOCK}"
+
+tests:
+  - name: forwards title+content as post
+    setup:
+      mocks:
+        - url_matches: "/posts"
+          method: POST
+          status: 201
+          body: { id: 101, title: "hello", body: "world", userId: 1 }
+    request:
+      method: POST
+      path: /samples/http/post-data
+      headers: { content-type: "application/json" }
+      body: { title: "hello", content: "world" }
+    expect:
+      status: 201
+      body_matches:
+        message: "Data posted successfully"
+        response: { id: 101, title: "hello", body: "world", userId: 1 }
+    verify_mocks:
+      - url_matches: "/posts"
+        count: 1
+        body_matches: { title: "hello", body: "world", userId: 1 }

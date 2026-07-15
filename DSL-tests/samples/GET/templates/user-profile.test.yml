@@ -1,0 +1,23 @@
+# Templates are usually invoked via `template:` from another DSL, but
+# they're also reachable as ordinary HTTP endpoints. Exercise the
+# direct call.
+mode: mock-http
+
+http_rewrite:
+  "https://jsonplaceholder.typicode.com": "{MOCK}"
+
+tests:
+  - name: fetches user directly
+    setup:
+      mocks:
+        - url_matches: "/users/9"
+          method: GET
+          status: 200
+          body: { id: 9, name: "Glenna Reichert" }
+    request:
+      method: GET
+      path: /samples/templates/user-profile
+      query: { userId: "9" }
+    expect:
+      status: 200
+      body: { id: 9, name: "Glenna Reichert" }

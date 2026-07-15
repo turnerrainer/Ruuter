@@ -1,0 +1,23 @@
+mode: mock-http
+
+http_rewrite:
+  "https://httpbin.org": "{MOCK}"
+
+tests:
+  - name: PATCH to upstream and echo status + body
+    setup:
+      mocks:
+        - url_matches: "/patch"
+          method: PATCH
+          status: 200
+          body: { echoed: true, note: "ratcheted" }
+    request: { method: GET, path: /samples/http/patch-request }
+    expect:
+      status: 200
+      body_matches:
+        upstream_status: 200
+        upstream_body: { echoed: true, note: "ratcheted" }
+    verify_mocks:
+      - url_matches: "/patch"
+        count: 1
+        body_matches: { note: "ratcheted" }

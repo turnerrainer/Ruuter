@@ -1,0 +1,27 @@
+mode: inprocess
+
+tests:
+  - name: first call returns 1
+    request: { method: POST, path: /samples/state/inc }
+    expect:
+      status: 200
+      body: { counter: 1 }
+    verify_state:
+      - { project: samples, key: counter, value: 1 }
+
+  - name: second call increments to 2 (state persists across scenarios in a file)
+    request: { method: POST, path: /samples/state/inc }
+    expect:
+      status: 200
+      body: { counter: 2 }
+    verify_state:
+      - { project: samples, key: counter, value: 2 }
+
+  - name: seeded to 41 -> returns 42
+    setup:
+      state:
+        - { project: samples, key: counter, value: 41 }
+    request: { method: POST, path: /samples/state/inc }
+    expect:
+      status: 200
+      body: { counter: 42 }

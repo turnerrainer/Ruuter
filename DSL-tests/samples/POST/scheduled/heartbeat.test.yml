@@ -1,0 +1,18 @@
+mode: inprocess
+
+tests:
+  - name: records last_seen timestamp
+    request:
+      method: POST
+      path: /samples/scheduled/heartbeat
+      headers: { content-type: "application/json" }
+      body: { reason: "scheduled-heartbeat" }
+    expect:
+      status: 200
+      body_matches:
+        ok: true
+        seen_at_ms: "$type:number"
+    verify_state:
+      - project: samples
+        key: heartbeat.last_seen_ms
+        value: "$type:number"

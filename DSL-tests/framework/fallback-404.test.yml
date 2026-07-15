@@ -1,0 +1,21 @@
+# Framework invariant: unknown route → 404, not 500. Guards task-016
+# from regressing.
+mode: inprocess
+
+tests:
+  - name: unknown project returns 404
+    request: { method: GET, path: /not-a-project/anywhere }
+    expect:
+      status: 404
+
+  - name: unknown path in known project returns 404
+    request: { method: GET, path: /samples/does/not/exist }
+    expect:
+      status: 404
+
+  - name: unknown method on known path returns 404
+    request:
+      method: DELETE
+      path: /samples/ping
+    expect:
+      status: 404

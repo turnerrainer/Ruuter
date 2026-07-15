@@ -1,0 +1,9 @@
+# DSL under test: DSL/samples/GET/basic/hello.yml
+mode: inprocess
+
+tests:
+  - name: returns greeting
+    request: { method: GET, path: /samples/basic/hello }
+    expect:
+      status: 200
+      body: "Hello, World!"

@@ -1,0 +1,8 @@
+mode: inprocess
+
+tests:
+  - name: returns 200 with success body
+    request: { method: GET, path: /samples/basic/status-codes }
+    expect:
+      status: 200
+      body: { message: "Success", code: 200 }

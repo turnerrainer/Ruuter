@@ -1,0 +1,21 @@
+mode: mock-http
+
+http_rewrite:
+  "https://jsonplaceholder.typicode.com": "{MOCK}"
+
+tests:
+  - name: fetches user and unwraps response body
+    setup:
+      mocks:
+        - url_matches: "/users/1"
+          method: GET
+          status: 200
+          body: { id: 1, name: "Leanne Graham", username: "Bret" }
+    request: { method: GET, path: /samples/http/simple-get }
+    expect:
+      status: 200
+      body:
+        status: "success"
+        data: { id: 1, name: "Leanne Graham", username: "Bret" }
+    verify_mocks:
+      - { url_matches: "/users/1", count: 1 }

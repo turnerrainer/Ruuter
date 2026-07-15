@@ -1,0 +1,48 @@
+mode: trigger-inject
+
+# AAPL has a per-symbol override — tighter threshold (0.25%), dedicated
+# webhook. Every other symbol falls through to _default.yml (covered
+# in _default.test.yml).
+constants:
+  aapl_alert_webhook: "{MOCK}/aapl-alerts"
+
+tests:
+  - name: 0.3% move triggers AAPL-specific alert (would NOT alert under default 0.5%)
+    setup:
+      state:
+        - { project: samples, key: "stock:AAPL:last_close", value: 100.0 }
+      mocks:
+        - url_matches: "/aapl-alerts"
+          method: POST
+          status: 200
+          body: { ok: true }
+    trigger:
+      project: samples
+      channel: stock-bars
+      key: AAPL
+      payload: { S: "AAPL", c: 100.3, h: 100.4, l: 100.0, v: 1000, t: "2026-06-25T13:00:00Z" }
+    verify_state:
+      - { project: samples, key: "stock:AAPL:last_close", value: 100.3 }
+    verify_mocks:
+      - url_matches: "/aapl-alerts"
+        count: 1
+        body_matches: { symbol: "AAPL", close: 100.3 }
+
+  - name: 0.1% move does NOT alert (under AAPL's 0.25% threshold)
+    setup:
+      state:
+        - { project: samples, key: "stock:AAPL:last_close", value: 100.0 }
+      mocks:
+        - url_matches: "/aapl-alerts"
+          method: POST
+          status: 200
+          body: {}
+    trigger:
+      project: samples
+      channel: stock-bars
+      key: AAPL
+      payload: { S: "AAPL", c: 100.1, h: 100.2, l: 100.0, v: 500, t: "2026-06-25T13:01:00Z" }
+    verify_state:
+      - { project: samples, key: "stock:AAPL:last_close", value: 100.1 }
+    verify_mocks:
+      - { url_matches: "/aapl-alerts", count: 0 }

@@ -1,0 +1,9 @@
+# DSL under test: DSL/samples/GET/ping.yml
+mode: inprocess
+
+tests:
+  - name: returns pong with 202
+    request: { method: GET, path: /samples/ping }
+    expect:
+      status: 202
+      body: pong

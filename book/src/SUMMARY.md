@@ -47,6 +47,17 @@
 - [Script runtime limits](./framework/script-limits.md)
 - [Default response headers](./framework/default-headers.md)
 
+# Testing
+
+- [Overview](./testing/overview.md)
+- [dsl-lint](./testing/dsl-lint.md)
+- [dsl-test](./testing/dsl-test.md)
+- [Test file schema](./testing/schema.md)
+- [Matchers](./testing/matchers.md)
+- [Modes](./testing/modes.md)
+- [Mocking upstream HTTP](./testing/mocking.md)
+- [CI integration](./testing/ci.md)
+
 # Operations
 
 - [Configuration](./ops/configuration.md)

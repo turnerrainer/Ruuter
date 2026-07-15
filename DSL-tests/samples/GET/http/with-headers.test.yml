@@ -1,0 +1,25 @@
+mode: mock-http
+
+constants:
+  API_KEY: "test-api-key-12345"
+
+http_rewrite:
+  "https://api.example.com": "{MOCK}"
+
+tests:
+  - name: forwards Bearer + API-Key to upstream
+    setup:
+      mocks:
+        - url_matches: "/protected"
+          method: GET
+          status: 200
+          body: { secret: "value", owner: "tester" }
+    request:
+      method: GET
+      path: /samples/http/with-headers
+      headers: { token: "my-token" }
+    expect:
+      status: 200
+      body: { secret: "value", owner: "tester" }
+    verify_mocks:
+      - { url_matches: "/protected", count: 1 }

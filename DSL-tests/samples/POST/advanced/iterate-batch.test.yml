@@ -1,0 +1,31 @@
+mode: inprocess
+
+tests:
+  - name: computes net per order and collects totals
+    request:
+      method: POST
+      path: /samples/advanced/iterate-batch
+      headers: { content-type: "application/json" }
+      body:
+        orders:
+          - { id: "o1", qty: 2, price: 5 }
+          - { id: "o2", qty: 3, price: 10 }
+          - { id: "o3", qty: 1, price: 100 }
+    expect:
+      status: 200
+      body:
+        count: 3
+        totals:
+          - { id: "o1", net: 10 }
+          - { id: "o2", net: 30 }
+          - { id: "o3", net: 100 }
+
+  - name: empty orders yields zero totals
+    request:
+      method: POST
+      path: /samples/advanced/iterate-batch
+      headers: { content-type: "application/json" }
+      body: { orders: [] }
+    expect:
+      status: 200
+      body: { count: 0, totals: [] }

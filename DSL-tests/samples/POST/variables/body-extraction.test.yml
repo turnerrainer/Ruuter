@@ -1,0 +1,14 @@
+mode: inprocess
+
+tests:
+  - name: extracts and echoes body fields
+    request:
+      method: POST
+      path: /samples/variables/body-extraction
+      headers: { content-type: "application/json" }
+      body: { username: "rainer", email: "r@example.com" }
+    expect:
+      status: 201
+      body_matches:
+        created: { username: "rainer", email: "r@example.com" }
+        timestamp: "$type:number"

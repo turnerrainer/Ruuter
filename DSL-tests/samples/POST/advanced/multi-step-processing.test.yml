@@ -1,0 +1,28 @@
+mode: inprocess
+
+tests:
+  - name: happy path processes data
+    request:
+      method: POST
+      path: /samples/advanced/multi-step-processing
+      headers: { content-type: "application/json" }
+      body: { data: { foo: "bar" } }
+    expect:
+      status: 200
+      body_matches:
+        result:
+          data: { foo: "bar" }
+          metadata:
+            source: "api"
+        status: "success"
+        version: "1.0"
+
+  - name: missing data -> 400
+    request:
+      method: POST
+      path: /samples/advanced/multi-step-processing
+      headers: { content-type: "application/json" }
+      body: {}
+    expect:
+      status: 400
+      body: { error: "Missing required field: data" }

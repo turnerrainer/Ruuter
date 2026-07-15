@@ -1,0 +1,12 @@
+mode: inprocess
+
+tests:
+  - name: literal assignments returned as user object
+    request: { method: GET, path: /samples/variables/assign-simple }
+    expect:
+      status: 200
+      body:
+        user:
+          name: "John Doe"
+          age: 30
+          city: "Tallinn"

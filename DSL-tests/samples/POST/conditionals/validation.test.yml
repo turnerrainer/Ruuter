@@ -1,0 +1,34 @@
+mode: inprocess
+
+tests:
+  - name: valid input succeeds
+    request:
+      method: POST
+      path: /samples/conditionals/validation
+      headers: { content-type: "application/json" }
+      body: { username: "rainer", email: "r@example.com" }
+    expect:
+      status: 200
+      body:
+        message: "Validation passed"
+        data: { username: "rainer", email: "r@example.com" }
+
+  - name: short username -> 400
+    request:
+      method: POST
+      path: /samples/conditionals/validation
+      headers: { content-type: "application/json" }
+      body: { username: "r", email: "r@example.com" }
+    expect:
+      status: 400
+      body: { error: "Username must be at least 3 characters" }
+
+  - name: invalid email -> 400
+    request:
+      method: POST
+      path: /samples/conditionals/validation
+      headers: { content-type: "application/json" }
+      body: { username: "rainer", email: "not-an-email" }
+    expect:
+      status: 400
+      body: { error: "Invalid email format" }

@@ -6,7 +6,9 @@ validate_input:
   next: call_template
 
 call_template:
-  template: "samples/POST/templates/create-entity"
+  # Path is relative to <project>/<METHOD>/ — the loader keys DSLs as
+  # `<METHOD>/<relative-path>` under the project. See src/steps/template.rs.
+  template: "templates/create-entity"
   request_type: "POST"
   body:
     name: ${incoming.body.name}

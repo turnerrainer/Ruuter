@@ -1,0 +1,12 @@
+mode: inprocess
+
+tests:
+  - name: renders documentation body (no guard on this path)
+    request: { method: GET, path: /samples/guards-demo }
+    expect:
+      status: 200
+      body_matches:
+        message: "Guards are DSL files with .guard.yml extension"
+        explanation: "$type:array"
+        examples: "$type:object"
+        usage: "$type:object"

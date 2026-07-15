@@ -1,0 +1,16 @@
+mode: inprocess
+
+tests:
+  - name: extracts keys, values, and stringifies
+    request:
+      method: POST
+      path: /samples/javascript/json-manipulation
+      headers: { content-type: "application/json" }
+      body: { name: "Rainer", age: 42 }
+    expect:
+      status: 200
+      body_matches:
+        original: { name: "Rainer", age: 42 }
+        count: 2
+        has_name: true
+        json_string: "$type:string"

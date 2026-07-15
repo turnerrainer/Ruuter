@@ -12,6 +12,7 @@ pub mod sources;
 pub mod state;
 pub mod steps;
 pub mod supervisor;
+pub mod testkit;
 pub mod triggers;
 pub mod ws;
 

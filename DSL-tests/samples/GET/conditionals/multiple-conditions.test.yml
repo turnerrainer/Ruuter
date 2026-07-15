@@ -1,0 +1,44 @@
+mode: inprocess
+
+tests:
+  - name: unauthenticated -> 401
+    request:
+      method: GET
+      path: /samples/conditionals/multiple-conditions
+      query: { authenticated: "false", role: "admin" }
+    expect:
+      status: 401
+      body: { error: "Authentication required" }
+
+  - name: admin full access
+    request:
+      method: GET
+      path: /samples/conditionals/multiple-conditions
+      query: { authenticated: "true", role: "admin" }
+    expect:
+      status: 200
+      body:
+        access: "full"
+        role: "admin"
+        permissions: ["read", "write", "delete"]
+
+  - name: user limited access
+    request:
+      method: GET
+      path: /samples/conditionals/multiple-conditions
+      query: { authenticated: "true", role: "user" }
+    expect:
+      status: 200
+      body:
+        access: "limited"
+        role: "user"
+        permissions: ["read"]
+
+  - name: invalid role -> 403
+    request:
+      method: GET
+      path: /samples/conditionals/multiple-conditions
+      query: { authenticated: "true", role: "hacker" }
+    expect:
+      status: 403
+      body: { error: "Invalid role" }

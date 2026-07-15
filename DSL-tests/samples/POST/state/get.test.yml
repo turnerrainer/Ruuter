@@ -1,0 +1,17 @@
+mode: inprocess
+
+tests:
+  - name: unseeded key reads null
+    request: { method: POST, path: /samples/state/get }
+    expect:
+      status: 200
+      body: { counter: null }
+
+  - name: seeded key echoes value
+    setup:
+      state:
+        - { project: samples, key: counter, value: 42 }
+    request: { method: POST, path: /samples/state/get }
+    expect:
+      status: 200
+      body: { counter: 42 }

@@ -1,0 +1,20 @@
+mode: ws-client
+
+tests:
+  - name: set_name gets ack, msg gets broadcast tagged with name
+    ws:
+      path: /samples/chat
+      send:
+        - { type: "set_name", name: "alice" }
+        - { type: "msg", text: "hi there" }
+      expect_frames:
+        - { type: "name_set", name: "alice" }
+        - { type: "msg", from: "alice", text: "hi there" }
+
+  - name: msg without prior set_name uses 'anonymous'
+    ws:
+      path: /samples/chat
+      send:
+        - { type: "msg", text: "no name here" }
+      expect_frames:
+        - { type: "msg", from: "anonymous", text: "no name here" }

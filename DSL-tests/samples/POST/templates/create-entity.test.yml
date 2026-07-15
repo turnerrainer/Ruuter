@@ -1,0 +1,17 @@
+mode: inprocess
+
+tests:
+  - name: builds entity with metadata
+    request:
+      method: POST
+      path: /samples/templates/create-entity
+      headers: { content-type: "application/json" }
+      body: { name: "widget", type: "gadget" }
+    expect:
+      status: 201
+      body_matches:
+        data: { name: "widget", type: "gadget" }
+        metadata:
+          created_by: "system"
+          version: 1
+          created_at: "$type:number"

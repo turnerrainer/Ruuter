@@ -1,0 +1,23 @@
+# Framework invariant (PATTERNS.md §4): incoming traceparent is
+# adopted, absent traceparent is generated. Every response echoes
+# traceparent + X-Trace-Id so ops can correlate.
+mode: inprocess
+
+tests:
+  - name: absent traceparent -> response carries generated one
+    request: { method: GET, path: /samples/ping }
+    expect:
+      status: 202
+      header_present: [traceparent, x-trace-id]
+
+  - name: adopted traceparent echoed verbatim
+    request:
+      method: GET
+      path: /samples/ping
+      headers:
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    expect:
+      status: 202
+      headers:
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        x-trace-id: "0af7651916cd43dd8448eb211c80319c"
