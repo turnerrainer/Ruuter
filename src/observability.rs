@@ -4,7 +4,7 @@
 //! - If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, build an OTLP tracer
 //!   pipeline and add a `tracing_opentelemetry` layer to the
 //!   subscriber. The service name is taken from `OTEL_SERVICE_NAME`
-//!   (default `ruuter-rs`).
+//!   (default `ruuter-on-rust`).
 //! - If the env var is unset, no exporter is built — local dev works
 //!   without any OTel infrastructure.
 //!
@@ -21,7 +21,7 @@ use opentelemetry_sdk::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-const SERVICE_NAME_DEFAULT: &str = "ruuter-rs";
+const SERVICE_NAME_DEFAULT: &str = "ruuter-on-rust";
 
 /// Initialize tracing. Returns `Some(TracerProvider)` if OTel was
 /// wired (caller should keep it alive for the lifetime of the

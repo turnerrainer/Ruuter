@@ -10,7 +10,7 @@
 
 ```
 $ curl http://localhost:8080/health
-{"service":"ruuter-rs","status":"ok","version":"0.4.0"}
+{"service":"ruuter-on-rust","status":"ok","version":"0.4.0"}
 ```
 
 Always returns `200` when the process is up. Used by Docker's `HEALTHCHECK`.

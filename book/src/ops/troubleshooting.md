@@ -5,8 +5,8 @@
 Cause: the DSL tree wasn't found or is empty.
 
 ```bash
-docker exec ruuter-rs ls -la /app/DSL/
-docker compose logs ruuter-rs | grep 'Loaded'
+docker exec ruuter-on-rust ls -la /app/DSL/
+docker compose logs ruuter-on-rust | grep 'Loaded'
 # Expected: "Loaded N HTTP DSLs across M projects, ..."
 ```
 
@@ -17,7 +17,7 @@ Fix: ensure `./DSL` is mounted; project subdirectories exist; method directories
 Cause: healthcheck failing. Verify manually:
 
 ```bash
-docker exec ruuter-rs curl -fsS http://localhost:8080/health
+docker exec ruuter-on-rust curl -fsS http://localhost:8080/health
 ```
 
 If curl isn't found: you're on a pre-0.4.0 image. Rebuild.
@@ -70,7 +70,7 @@ Cause: `${...}` hit `max_loop_iterations` (default 1 000 000). Use the [`iterate
 ## Where do I look for logs?
 
 ```bash
-docker compose logs -f ruuter-rs               # follow
-docker compose logs --since 15m ruuter-rs      # last 15 min
+docker compose logs -f ruuter-on-rust               # follow
+docker compose logs --since 15m ruuter-on-rust      # last 15 min
 RUST_LOG=debug docker compose up               # more verbose
 ```

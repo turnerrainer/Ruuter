@@ -1,11 +1,11 @@
 //! Integration tests for the event-trigger dispatcher (#004).
 
-use ruuter_rs::config::AppConfig;
-use ruuter_rs::dsl::loader::DslLoader;
-use ruuter_rs::http_client::HttpClient;
-use ruuter_rs::state::StateStore;
-use ruuter_rs::steps::engine::StepEngine;
-use ruuter_rs::triggers::TriggerDispatcher;
+use ruuter_on_rust::config::AppConfig;
+use ruuter_on_rust::dsl::loader::DslLoader;
+use ruuter_on_rust::http_client::HttpClient;
+use ruuter_on_rust::state::StateStore;
+use ruuter_on_rust::steps::engine::StepEngine;
+use ruuter_on_rust::triggers::TriggerDispatcher;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;

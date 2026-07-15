@@ -1,4 +1,4 @@
-# Ruuter-RS state of play
+# Ruuter-on-Rust state of play
 
 **Current version:** 0.4.0 · **Last refreshed:** 2026-07-14.
 

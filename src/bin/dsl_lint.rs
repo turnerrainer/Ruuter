@@ -49,7 +49,7 @@ fn main() -> ExitCode {
 
     // Load constants for [#...] resolution.
     let constants = match std::fs::read_to_string(&args.constants) {
-        Ok(_) => match ruuter_rs::config::load_constants(&args.constants) {
+        Ok(_) => match ruuter_on_rust::config::load_constants(&args.constants) {
             Ok(c) => c,
             Err(e) => {
                 report.file_error(

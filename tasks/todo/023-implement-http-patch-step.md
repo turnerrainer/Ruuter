@@ -8,7 +8,7 @@
 it fails at runtime with:
 
 ```
-WARN ruuter_rs::triggers: trigger DSL failed
+WARN ruuter_on_rust::triggers: trigger DSL failed
   project="alpaca" channel="t" key="${sym}"
   error=Invalid DSL step: Unknown HTTP method: http.patch
 ```

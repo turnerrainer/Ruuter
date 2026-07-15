@@ -1,6 +1,6 @@
 # Testing
 
-Two binaries ship with Ruuter-RS for validating DSL trees end-to-end:
+Two binaries ship with Ruuter-on-Rust for validating DSL trees end-to-end:
 
 - **`dsl-lint`** — static validator. Parses every DSL, checks step-graph integrity, resolves `[#constant]` references, verifies template targets. No execution. Runs in ~100 ms on the sample corpus.
 - **`dsl-test`** — runtime test runner. Walks `DSL-tests/`, executes scenarios against the full framework stack (idempotency, CSRF, traceparent, guards all active), asserts on HTTP response, WebSocket frames, state-store contents, and mock upstream calls.
@@ -8,7 +8,7 @@ Two binaries ship with Ruuter-RS for validating DSL trees end-to-end:
 Both binaries live under `src/bin/` and are built alongside the server:
 
 ```bash
-cargo build --bin ruuter-rs --bin dsl-lint --bin dsl-test
+cargo build --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
 ```
 
 ## Layout

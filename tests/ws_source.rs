@@ -4,17 +4,17 @@
 //! sends one JSON message, runs a `WsSource` against it, and asserts
 //! the trigger DSL fired and mutated state.
 
-use ruuter_rs::config::AppConfig;
-use ruuter_rs::dsl::loader::DslLoader;
-use ruuter_rs::http_client::HttpClient;
-use ruuter_rs::sources::config::{
+use ruuter_on_rust::config::AppConfig;
+use ruuter_on_rust::dsl::loader::DslLoader;
+use ruuter_on_rust::http_client::HttpClient;
+use ruuter_on_rust::sources::config::{
     DispatchConfig, OnConnectAction, ReconnectPolicy, SourceConfig, WsSourceConfig,
 };
-use ruuter_rs::sources::ws;
-use ruuter_rs::state::StateStore;
-use ruuter_rs::steps::engine::StepEngine;
-use ruuter_rs::triggers::TriggerDispatcher;
-use ruuter_rs::ws::WsRegistry;
+use ruuter_on_rust::sources::ws;
+use ruuter_on_rust::state::StateStore;
+use ruuter_on_rust::steps::engine::StepEngine;
+use ruuter_on_rust::triggers::TriggerDispatcher;
+use ruuter_on_rust::ws::WsRegistry;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -209,7 +209,7 @@ async fn ws_source_sends_on_connect_payloads() {
 
 #[test]
 fn config_constant_substitution_resolves_known_and_errors_on_missing() {
-    use ruuter_rs::sources::config::resolve_constants;
+    use ruuter_on_rust::sources::config::resolve_constants;
 
     let mut consts: HashMap<String, String> = HashMap::new();
     consts.insert("ws_url".into(), "wss://feed.example.com/v2".into());
@@ -244,7 +244,7 @@ fn config_constant_substitution_resolves_known_and_errors_on_missing() {
 
 #[test]
 fn dot_path_extraction_handles_nesting_and_missing() {
-    use ruuter_rs::sources::config::extract_path;
+    use ruuter_on_rust::sources::config::extract_path;
 
     let v = json!({"T": "trade", "data": {"sym": "AAPL", "p": 42}});
     assert_eq!(extract_path(&v, "$.T"), Some("trade".into()));

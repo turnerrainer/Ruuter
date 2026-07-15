@@ -2,9 +2,9 @@
 //! `constants.ini` loader and its substitution into DSL parse-time
 //! and WS source-config paths.
 
-use ruuter_rs::config::{load_constants, AppConfig};
-use ruuter_rs::dsl::loader::DslLoader;
-use ruuter_rs::sources::config::{resolve_constants, DispatchConfig, ReconnectPolicy, WsSourceConfig};
+use ruuter_on_rust::config::{load_constants, AppConfig};
+use ruuter_on_rust::dsl::loader::DslLoader;
+use ruuter_on_rust::sources::config::{resolve_constants, DispatchConfig, ReconnectPolicy, WsSourceConfig};
 use std::collections::HashMap;
 
 fn uuid() -> String {

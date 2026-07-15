@@ -1,4 +1,4 @@
-# Ruuter-RS
+# Ruuter-on-Rust
 
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
@@ -10,8 +10,8 @@ driven by YAML DSLs on disk.
 Prerequisites: Docker + Docker Compose.
 
 ```bash
-git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-rs
-cd ruuter-rs
+git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-on-rust
+cd ruuter-on-rust
 docker compose up -d --build
 ```
 
@@ -116,7 +116,7 @@ OpenTelemetry OTLP export is opt-in:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
-OTEL_SERVICE_NAME=ruuter-rs \
+OTEL_SERVICE_NAME=ruuter-on-rust \
 docker compose up -d --build
 ```
 

@@ -2,10 +2,11 @@
 
 ## Why
 
-`ruuteronrust-ruuter-rs:latest` was rebuilt as `12c09ae709d1` this
-cycle but the local `ruuter-rs` container is stopped since the cleanup
-pass. Ship-ready means "the process people can `curl` matches the
-image people can build."
+`ruuter-on-rust:0.4.0` was rebuilt this cycle but the local
+`ruuter-on-rust` container may need a `docker compose up -d
+--force-recreate` after each round of source changes. Ship-ready
+means "the process people can `curl` matches the image people can
+build."
 
 ## Status
 

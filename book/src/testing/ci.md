@@ -26,7 +26,7 @@ jobs:
           key: cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-
       - name: Build
-        run: cargo build --bin ruuter-rs --bin dsl-lint --bin dsl-test
+        run: cargo build --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint (errors fail the build)
         run: ./target/debug/dsl-lint --dsl DSL --constants constants.ini
       - name: cargo test (existing Rust integration tests)

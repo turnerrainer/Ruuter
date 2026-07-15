@@ -237,7 +237,7 @@ impl DslRouter {
 async fn health_check() -> impl IntoResponse {
     Json(json!({
         "status": "ok",
-        "service": "ruuter-rs",
+        "service": "ruuter-on-rust",
         "version": env!("CARGO_PKG_VERSION")
     }))
 }

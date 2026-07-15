@@ -1,4 +1,4 @@
-# Ruuter-RS DSL Samples
+# Ruuter-on-Rust DSL Samples
 
 Comprehensive examples demonstrating all Ruuter DSL features.
 

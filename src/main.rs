@@ -1,4 +1,4 @@
-use ruuter_rs::{
+use ruuter_on_rust::{
     config::{load_constants, AppConfig},
     dsl::loader::DslLoader,
     http_client::HttpClient,
@@ -20,7 +20,7 @@ async fn main() {
     // Initialize tracing (with OTel exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set).
     let tracer_provider = observability::init();
 
-    info!("Starting Ruuter-RS v{}", env!("CARGO_PKG_VERSION"));
+    info!("Starting Ruuter-on-Rust v{}", env!("CARGO_PKG_VERSION"));
     if tracer_provider.is_some() {
         info!("OpenTelemetry exporter active");
     }

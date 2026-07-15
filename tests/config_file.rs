@@ -2,7 +2,7 @@
 //! priority order (env → file → default) and proves a real config file
 //! is actually consulted at boot.
 
-use ruuter_rs::config::AppConfig;
+use ruuter_on_rust::config::AppConfig;
 use std::sync::Mutex;
 
 fn uuid() -> String {

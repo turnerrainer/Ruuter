@@ -3,12 +3,12 @@
 //! Every case proves the outgoing HTTP method is literally PATCH and
 //! that the response shape reaches the caller intact.
 
-use ruuter_rs::config::AppConfig;
-use ruuter_rs::context::ExecutionContext;
-use ruuter_rs::http_client::HttpClient;
-use ruuter_rs::steps::engine::StepEngine;
-use ruuter_rs::steps::{HttpArgs, HttpStep, DslStep};
-use ruuter_rs::dsl::Dsl;
+use ruuter_on_rust::config::AppConfig;
+use ruuter_on_rust::context::ExecutionContext;
+use ruuter_on_rust::http_client::HttpClient;
+use ruuter_on_rust::steps::engine::StepEngine;
+use ruuter_on_rust::steps::{HttpArgs, HttpStep, DslStep};
+use ruuter_on_rust::dsl::Dsl;
 use indexmap::IndexMap;
 use serde_json::json;
 use std::collections::HashMap;

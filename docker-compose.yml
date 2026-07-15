@@ -1,10 +1,10 @@
 services:
-  ruuter-rs:
+  ruuter-on-rust:
     build:
       context: .
       dockerfile: Dockerfile
     image: ruuter-on-rust:0.4.0
-    container_name: ruuter-rs
+    container_name: ruuter-on-rust
     ports:
       - "8080:8080"
     volumes:

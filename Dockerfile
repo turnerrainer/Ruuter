@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates curl tini \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/ruuter-rs /app/ruuter-rs
+COPY --from=builder /build/target/release/ruuter-on-rust /app/ruuter-on-rust
 COPY DSL ./DSL
 COPY constants.ini ./constants.ini
 
@@ -26,4 +26,4 @@ RUN useradd -m -u 1000 ruuter && chown -R ruuter:ruuter /app
 USER ruuter
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/app/ruuter-rs"]
+CMD ["/app/ruuter-on-rust"]

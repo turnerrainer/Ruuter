@@ -20,18 +20,18 @@
 //!   dsl-test --json                   # machine-readable summary
 
 use futures::{SinkExt, StreamExt};
-use ruuter_rs::config::{load_constants, AppConfig};
-use ruuter_rs::dsl::loader::DslLoader;
-use ruuter_rs::http_client::HttpClient;
-use ruuter_rs::router::DslRouter;
-use ruuter_rs::state::StateStore;
-use ruuter_rs::steps::engine::StepEngine;
-use ruuter_rs::testkit::harness::{Harness, HarnessResponse};
-use ruuter_rs::testkit::matcher::{deep_equal, subset_matches};
-use ruuter_rs::testkit::mock_http::MockServer;
-use ruuter_rs::testkit::schema::{ExpectHttp, Mode, Scenario, TestFile};
-use ruuter_rs::triggers::TriggerDispatcher;
-use ruuter_rs::ws::WsRegistry;
+use ruuter_on_rust::config::{load_constants, AppConfig};
+use ruuter_on_rust::dsl::loader::DslLoader;
+use ruuter_on_rust::http_client::HttpClient;
+use ruuter_on_rust::router::DslRouter;
+use ruuter_on_rust::state::StateStore;
+use ruuter_on_rust::steps::engine::StepEngine;
+use ruuter_on_rust::testkit::harness::{Harness, HarnessResponse};
+use ruuter_on_rust::testkit::matcher::{deep_equal, subset_matches};
+use ruuter_on_rust::testkit::mock_http::MockServer;
+use ruuter_on_rust::testkit::schema::{ExpectHttp, Mode, Scenario, TestFile};
+use ruuter_on_rust::triggers::TriggerDispatcher;
+use ruuter_on_rust::ws::WsRegistry;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -12,9 +12,9 @@ Ruuter reads one YAML config file at boot. Every field is optional; unset fields
 The startup log tells you which source was chosen:
 
 ```
-INFO ruuter_rs: Loaded config from ./ruuter.yaml
+INFO ruuter_on_rust: Loaded config from ./ruuter.yaml
 # or
-INFO ruuter_rs: Using built-in default config (no ruuter.yaml found)
+INFO ruuter_on_rust: Using built-in default config (no ruuter.yaml found)
 ```
 
 ## Full annotated example

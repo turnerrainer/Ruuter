@@ -1,6 +1,6 @@
-# tasks/ — Ruuter-RS
+# tasks/ — Ruuter-on-Rust
 
-Project board for operational work on Ruuter-RS, the generic Rust
+Project board for operational work on Ruuter-on-Rust, the generic Rust
 implementation of the Ruuter declarative router.
 
 **Scope guardrail.** Ruuter is a generic core component. It may

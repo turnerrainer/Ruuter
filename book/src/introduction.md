@@ -1,4 +1,4 @@
-# Ruuter-RS
+# Ruuter-on-Rust
 
 Declarative REST + WebSocket router. YAML DSLs on disk become HTTP routes and WebSocket endpoints.
 

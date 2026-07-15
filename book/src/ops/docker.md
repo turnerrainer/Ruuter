@@ -6,12 +6,12 @@ The shipped `docker-compose.yml` is production-hardened out of the box.
 
 ```yaml
 services:
-  ruuter-rs:
+  ruuter-on-rust:
     build:
       context: .
       dockerfile: Dockerfile
     image: ruuter-on-rust:0.4.0
-    container_name: ruuter-rs
+    container_name: ruuter-on-rust
     ports:
       - "8080:8080"
     volumes:
@@ -47,7 +47,7 @@ services:
 
 ```bash
 docker compose up -d --build
-docker compose logs -f ruuter-rs
+docker compose logs -f ruuter-on-rust
 ```
 
 ## Reload after DSL change
@@ -55,7 +55,7 @@ docker compose logs -f ruuter-rs
 DSLs are read at boot only. After editing files under `DSL/`:
 
 ```bash
-docker compose restart ruuter-rs
+docker compose restart ruuter-on-rust
 ```
 
 Sub-second reload on the sample corpus (45 DSLs).

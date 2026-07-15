@@ -5,7 +5,7 @@
 //! generic interface so we can prove the restart / status logic
 //! without spinning up real network sockets.
 
-use ruuter_rs::supervisor::{SourceId, SourceStatus, SourceSupervisor};
+use ruuter_on_rust::supervisor::{SourceId, SourceStatus, SourceSupervisor};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

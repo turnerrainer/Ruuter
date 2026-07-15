@@ -1,7 +1,7 @@
 [book]
-title = "Ruuter-RS"
+title = "Ruuter-on-Rust"
 authors = ["Rainer Türner"]
-description = "Reference for third-party clients authoring DSLs against Ruuter-RS 0.4.0."
+description = "Reference for third-party clients authoring DSLs against Ruuter-on-Rust 0.4.0."
 language = "en"
 src = "src"
 

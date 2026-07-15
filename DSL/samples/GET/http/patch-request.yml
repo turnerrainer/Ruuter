@@ -7,7 +7,7 @@ update:
   args:
     url: "https://httpbin.org/patch"
     headers:
-      X-Client: "ruuter-rs"
+      X-Client: "ruuter-on-rust"
     body:
       note: "ratcheted"
       when: "${new Date().toISOString()}"

@@ -4,8 +4,8 @@
 //! Not a precise benchmark — just confirms order-of-magnitude perf and
 //! that batched-recursion evaluation produces correct results.
 
-use ruuter_rs::context::ExecutionContext;
-use ruuter_rs::scripting::ScriptEngine;
+use ruuter_on_rust::context::ExecutionContext;
+use ruuter_on_rust::scripting::ScriptEngine;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Instant;

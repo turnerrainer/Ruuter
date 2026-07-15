@@ -94,7 +94,7 @@ pub fn build_spec_from_http(
     json!({
         "openapi": OPENAPI_VERSION,
         "info": {
-            "title": "Ruuter-RS DSL API",
+            "title": "Ruuter-on-Rust DSL API",
             "version": service_version,
             "description": "Auto-generated from the DSL tree on disk. \
                 Endpoints reflect files present in DSL/<project>/<METHOD>/*.yml \

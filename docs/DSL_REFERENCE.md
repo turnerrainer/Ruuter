@@ -1,6 +1,6 @@
-# Ruuter-RS DSL & runtime reference
+# Ruuter-on-Rust DSL & runtime reference
 
-Reference for LLMs authoring DSLs against Ruuter-RS 0.4.0. Samples first, prose last.
+Reference for LLMs authoring DSLs against Ruuter-on-Rust 0.4.0. Samples first, prose last.
 
 ---
 
@@ -293,7 +293,7 @@ Sources run under a supervisor: crash → exponential-backoff restart. Source's 
 
 | Method + path | Purpose |
 |---|---|
-| `GET /health` | `{"status":"ok","service":"ruuter-rs","version":"…"}` |
+| `GET /health` | `{"status":"ok","service":"ruuter-on-rust","version":"…"}` |
 | `GET /_/openapi.json` | OpenAPI 3.1 spec auto-generated from every DSL (task 027/035) |
 | `GET /_/sources` | Source supervisor health. Off by default; enable with `RUUTER_ADMIN_ENABLED=true` |
 
@@ -356,7 +356,7 @@ scripting:         { max_loop_iterations: 1000000, max_stack_size: 400 }
 | `RUUTER_CONFIG`                | Config file path (see §11) |
 | `RUUTER_ADMIN_ENABLED=true`    | Expose `GET /_/sources` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`  | Enable OTLP span export |
-| `OTEL_SERVICE_NAME`            | OTel service name (default `ruuter-rs`) |
+| `OTEL_SERVICE_NAME`            | OTel service name (default `ruuter-on-rust`) |
 
 ## 13. Reserved subdirectories under `DSL/<project>/`
 

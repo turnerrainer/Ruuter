@@ -6,13 +6,13 @@
 //! body/query/headers overrides, and binds the result under the
 //! caller's `result` name.
 
-use ruuter_rs::config::AppConfig;
-use ruuter_rs::dsl::loader::DslLoader;
-use ruuter_rs::http_client::HttpClient;
-use ruuter_rs::router::DslRouter;
-use ruuter_rs::state::StateStore;
-use ruuter_rs::steps::engine::StepEngine;
-use ruuter_rs::ws::WsRegistry;
+use ruuter_on_rust::config::AppConfig;
+use ruuter_on_rust::dsl::loader::DslLoader;
+use ruuter_on_rust::http_client::HttpClient;
+use ruuter_on_rust::router::DslRouter;
+use ruuter_on_rust::state::StateStore;
+use ruuter_on_rust::steps::engine::StepEngine;
+use ruuter_on_rust::ws::WsRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 

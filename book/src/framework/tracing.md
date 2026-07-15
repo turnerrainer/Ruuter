@@ -26,7 +26,7 @@ Enable by setting environment variables:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-OTEL_SERVICE_NAME=ruuter-rs                # default; override if you run multiple instances
+OTEL_SERVICE_NAME=ruuter-on-rust                # default; override if you run multiple instances
 ```
 
 Without `OTEL_EXPORTER_OTLP_ENDPOINT`, no exporter is built — Ruuter still generates traceparent locally, just doesn't ship spans anywhere.

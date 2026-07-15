@@ -17,8 +17,8 @@ infra), it needs to exist as an addressable artefact.
   - Tarball snapshot delivered out-of-band?
 - If GitHub: repo created, remote added, `main` branch pushed,
   0.4.0 tag cut, release notes = `CHANGELOG.md` 0.4.0 section.
-- If OCI: image tagged `<registry>/ruuter-rs:0.4.0`, digest recorded
+- If OCI: image tagged `<registry>/ruuter-on-rust:0.4.0`, digest recorded
   in release notes, README's "Set up from scratch" updated to
-  `docker pull <registry>/ruuter-rs:0.4.0` instead of `--build`.
+  `docker pull <registry>/ruuter-on-rust:0.4.0` instead of `--build`.
 - CI job (GH Actions or equivalent) that runs `cargo test --release`
   + `cargo audit` on every push to `main`, blocking release on failure.

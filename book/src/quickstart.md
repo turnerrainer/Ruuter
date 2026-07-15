@@ -3,8 +3,8 @@
 ## 1. Run
 
 ```bash
-git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-rs
-cd ruuter-rs
+git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-on-rust
+cd ruuter-on-rust
 docker compose up -d --build
 ```
 
@@ -14,7 +14,7 @@ Serves on `http://localhost:8080`.
 
 ```bash
 curl http://localhost:8080/health
-# {"service":"ruuter-rs","status":"ok","version":"0.4.0"}
+# {"service":"ruuter-on-rust","status":"ok","version":"0.4.0"}
 
 curl http://localhost:8080/_/openapi.json | head -c 200
 ```
@@ -36,7 +36,7 @@ Reachable at `GET /myapp/hello?name=Ada`.
 DSLs are read once at boot. Restart the container after changing files:
 
 ```bash
-docker compose restart ruuter-rs
+docker compose restart ruuter-on-rust
 ```
 
 Hot reload is not implemented in 0.4.0. `docker compose restart` reloads the DSL tree in < 1 s on the sample corpus.
