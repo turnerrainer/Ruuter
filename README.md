@@ -7,4 +7,4 @@ receive tagged releases as they cut.
 
 - **Documentation**: [book](../../tree/dev/book/src) (mdBook source)
 - **DSL samples**: [`DSL/samples/`](../../tree/dev/DSL/samples)
-- **License**: MIT
+- **License**: Apache-2.0 (attribution required, see NOTICE)
