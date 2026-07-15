@@ -10,7 +10,7 @@ driven by YAML DSLs on disk.
 Prerequisites: Docker + Docker Compose.
 
 ```bash
-git clone <this-repo> ruuter-rs
+git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-rs
 cd ruuter-rs
 docker compose up -d --build
 ```

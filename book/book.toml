@@ -8,9 +8,9 @@ src = "src"
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = ""
-edit-url-template = ""
-site-url = "/ruuter-rs/"
+git-repository-url = "https://github.com/turnerrainer/Ruuter"
+edit-url-template = "https://github.com/turnerrainer/Ruuter/edit/dev/book/{path}"
+site-url = "/Ruuter/"
 
 [output.html.search]
 enable = true

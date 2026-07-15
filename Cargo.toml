@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Rainer Türner"]
 license = "MIT"
 description = "Declarative REST router - Rust implementation"
-repository = "https://github.com/buerostack/ruuter"
+repository = "https://github.com/turnerrainer/Ruuter"
 
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }

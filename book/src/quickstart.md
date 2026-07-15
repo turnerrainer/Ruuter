@@ -3,7 +3,7 @@
 ## 1. Run
 
 ```bash
-git clone <repo> ruuter-rs
+git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-rs
 cd ruuter-rs
 docker compose up -d --build
 ```
