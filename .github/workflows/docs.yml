@@ -2,11 +2,13 @@ name: docs
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'book/**'
       - '.github/workflows/docs.yml'
       - 'CHANGELOG.md'
+  # Also allow manual dispatch so a one-off publish doesn't need a commit
+  workflow_dispatch:
 
 permissions:
   contents: read
