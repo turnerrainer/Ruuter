@@ -8,7 +8,7 @@ Declarative REST + WebSocket router. YAML DSLs on disk become HTTP routes and We
 - **OpenAPI 3.1** auto-generated from every DSL at `/_/openapi.json`.
 - **Batteries included.** Idempotency-Key, CSRF, SSRF allow-list, traceparent propagation, response-size cap, request-method allow-list, in-process state store — all configurable, all off-by-default unless dangerous to default-off.
 
-Version: 0.4.0 · License: MIT.
+Version: 0.4.0 · License: Apache-2.0.
 
 ## Audience for this book
 

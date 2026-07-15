@@ -3,7 +3,7 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.4.0 · **License:** MIT · **Author:** Rainer Türner
+**Version:** 0.4.0 · **License:** Apache-2.0 · **Author:** Rainer Türner
 
 ## Set up from scratch
 
