@@ -1,0 +1,12 @@
+Ruuter-RS
+Copyright 2026 Rainer Türner
+
+This product includes software developed by Rainer Türner
+(https://github.com/turnerrainer/Ruuter).
+
+Derivative works must retain this NOTICE per Section 4(d) of the
+Apache License, Version 2.0 (see LICENSE).
+
+Ruuter-RS is a Rust re-implementation of Ruuter, originally
+authored in Java by the Buerokratt project
+(https://github.com/buerokratt/Ruuter).
