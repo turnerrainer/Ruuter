@@ -22,10 +22,25 @@ DSL A → HttpStepExecutor → reqwest serialize
 ```
 
 Estimated round-trip: **2-5 ms**, dominated by TCP framing and JSON
-serialize/deserialize on both sides. For DSL trees where the natural
-factoring puts common logic behind a self-hit route (X-Road adapter
-in [`runtime_composition.md`](../../../../KeMIT/eFTI/Gate/docs/architecture/infrastructure/runtime_composition.md) §3, guard-shared endpoints, etc.),
-this cost is on every request.
+serialize/deserialize on both sides. This cost shows up on every
+request in DSL patterns like:
+
+- **Java-Ruuter-parity ports** where the source DSL used `http.post`
+  to invoke a helper endpoint on the same gate for code reuse. A
+  naive port carries the pattern into Rust Ruuter and pays the
+  network cost.
+- **Cross-project self-hits** — project A's DSL calling
+  `http://localhost:8080/projectB/endpoint` for a service exposed by
+  a different DSL project on the same instance.
+- **Test / dev environments** where operators simulate an external
+  peer by pointing a DSL at a fixture endpoint on the same instance.
+- **Composite orchestration endpoints** that fan out to N smaller
+  self-hosted endpoints before returning an aggregate.
+
+Note: this does **not** cover Ruuter → adjacent-sidecar hops (Resql,
+XTR, TIM, AS4 MSH). Those go through a real network transport and
+are the domain of task 043 (UDS). Task 044 is specifically for
+`http.<verb>` targets that resolve to Ruuter's own listener.
 
 The [`template` step](../../book/src/dsl/steps/template.md) shipped in
 0.4.0 (task 027) can invoke another DSL directly through the shared
