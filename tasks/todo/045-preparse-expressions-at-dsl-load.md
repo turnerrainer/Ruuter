@@ -4,6 +4,30 @@
 
 2026-07-18 — layer 3 of the Boa perf roadmap (layers 1-2 are tasks 036 + 037).
 
+## Status
+
+**Blocked (2026-07-14)** — Boa 0.19's API forecloses both shipping shapes:
+
+1. `Script::parse(src, realm, context)` requires a `&mut Context`. It
+   cannot be called at DSL load time in isolation — needs a live Boa.
+2. The resulting `Script` holds a `Realm` inside a `Gc<Inner>`.
+   `boa_gc::Gc<T>` is `!Send + !Sync` (single-threaded GC), so parsed
+   Scripts cannot be stored in a shared cache and cannot cross an
+   `.await` boundary.
+3. Even a per-context cache (build a Script on first eval, cache in
+   that Context, reuse on subsequent evals hitting the same Context)
+   requires holding Contexts across requests — which is exactly what
+   task 036 blocks on.
+
+Options mirror 036: dedicated OS worker threads that own both the
+BoaContext AND a `HashMap<expression, Script>` cache, or upgrading
+Boa to a version where Script is Send. Either path pulls significant
+scope beyond a "pre-parse at load" change.
+
+Interim mitigation: task 037's literal fast-path already removes
+Boa entirely for expression-free values. For values that DO have
+expressions, the parse cost stays on the hot path until 036 unblocks.
+
 ## Problem
 
 `ScriptEngine::evaluate()` today calls `Source::from_bytes(script)` then

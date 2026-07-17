@@ -5,6 +5,38 @@
 2026-07-18 — layer 4 of the Boa perf roadmap. Extends task 037
 (runtime literal fast-path) with load-time hoisting.
 
+## Status
+
+**Deferred (2026-07-14)** — reviewed against the current DSL corpus
+on the v0.5 branch during the Boa-perf pass. Every `${...}` expression
+in `DSL/samples/**` references at least one runtime binding
+(`incoming.*`, previously-assigned variables, `Date.now()`, etc.).
+
+Ultra-safe subset (hoist only expressions whose AST has zero
+identifiers/property accesses/calls) → 0 hoistable expressions in the
+corpus. Full subset with a `Math.*`/`JSON.*`/etc. allow-list → still
+~0 hoistable expressions, because DSL authors write literal values as
+YAML literals, not as `${1 + 1}`.
+
+The task's motivating example — `${'https://' + '[#DOMAIN]' + '/v1'}`
+after constant substitution — assumes a coding style that isn't used
+here. `[#CONSTANT]` appears exactly once in the corpus, and it's a
+plain string interpolation, not inside a `${...}`.
+
+Cost of implementation:
+- AST walker over `boa_ast::Expression` recursing all variants
+- Safe-globals allow-list with the `Date`/`Math.random` carve-outs
+- Substitution logic distinguishing whole-string vs interpolation
+- Roughly 20-30 tests to prove correctness against runtime path
+
+Given zero measured wins on today's corpus, defer until a DSL pattern
+that would benefit emerges (a project heavy on constant-substitution
+into expressions, or one that authors static computations for
+readability).
+
+Task 037's literal fast-path already handles the actual shipping
+optimization on this corpus.
+
 ## Problem
 
 Task 037 skips Boa for values that contain **no** `${...}` /
