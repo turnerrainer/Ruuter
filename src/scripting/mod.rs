@@ -5,8 +5,57 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 static LINE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
+
+/// Task 037 metric — count of BoaContext constructions since process
+/// start. Only bumped when `ScriptEngine::evaluate()` fell OFF the
+/// literal fast-path and had to build an engine. Tests use this to
+/// verify Boa is not invoked for expression-free values; future
+/// observability code can surface it as a Prometheus counter.
+static BOA_CONTEXT_CREATED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Return the total number of times a `BoaContext` has been constructed
+/// by `ScriptEngine::evaluate()` since process start. Public for tests.
+pub fn boa_context_created_count() -> u64 {
+    BOA_CONTEXT_CREATED_COUNT.load(Ordering::Relaxed)
+}
+
+/// Task 037 — cheap scan for `${...}` or whole-string `$=...=$`
+/// expressions anywhere in the value tree. When this returns `false`,
+/// `evaluate()` skips Boa entirely and returns the input unchanged.
+/// Conservative: any `${` substring triggers the slow path, even if
+/// the braces aren't balanced (the slow path handles that correctly).
+fn has_expressions(v: &Value) -> bool {
+    match v {
+        Value::String(s) => string_has_expressions(s),
+        Value::Object(m) => m.values().any(has_expressions),
+        Value::Array(a) => a.iter().any(has_expressions),
+        _ => false,
+    }
+}
+
+fn string_has_expressions(s: &str) -> bool {
+    // `${` anywhere — could be an expression opener. Balanced-brace
+    // detection happens in the slow path.
+    if s.contains("${") {
+        return true;
+    }
+    // Whole-string `$= expr =` line pattern (LINE_PATTERN regex).
+    // The regex is `\$=(.+)=$` where `$` anchors to end-of-string —
+    // so the closing delimiter is a single `=`, NOT `=$`. Mirror the
+    // exact regex check to avoid semantic drift with the slow path.
+    // Cheap pre-check first (most strings don't start with `$=`).
+    if !s.starts_with("$=") {
+        return false;
+    }
+    LINE_PATTERN
+        .captures(s)
+        .and_then(|c| c.get(0))
+        .map(|m| m.as_str() == s)
+        .unwrap_or(false)
+}
 
 /// Find every balanced `${...}` segment in `s`. Returns (start, end, inner)
 /// where `start..end` covers the whole `${...}` and `inner` is the script
@@ -100,16 +149,44 @@ impl ScriptEngine {
     }
 
     /// Evaluate `input` against `context`. Builds a single Boa context for the
-    /// duration of this call and reuses it across every `${...}` / `$=...=$`
+    /// duration of this call and reuses it across every `${...}` / `$= expr =`
     /// expression found inside `input` (recursing through objects and arrays).
+    ///
+    /// Task 037 fast-path: if `input` (recursively) contains no `${...}` or
+    /// whole-string `$= expr =` expressions, return `input.clone()` without
+    /// constructing a Boa context. Saves ~500 µs of context construction
+    /// + ~500-1000 µs of `setup_bindings()` for every literal-only DSL
+    /// value. Correctness: for expression-free inputs, the pre-037
+    /// engine's evaluation was already the identity function — the
+    /// fast-path just skips the identity work.
     pub fn evaluate(&self, input: &Value, context: &ExecutionContext) -> Result<Value> {
+        self.evaluate_tracked(input, context).map(|(v, _)| v)
+    }
+
+    /// Same as [`evaluate`], but also returns whether the Boa engine was
+    /// actually invoked. Used by task 037 tests to verify the fast-path
+    /// fires when expected. Public because process-global counters race
+    /// with parallel test invocations — a per-call return value is the
+    /// only reliable observation.
+    pub fn evaluate_tracked(
+        &self,
+        input: &Value,
+        context: &ExecutionContext,
+    ) -> Result<(Value, bool)> {
+        if !has_expressions(input) {
+            return Ok((input.clone(), false));
+        }
+
+        BOA_CONTEXT_CREATED_COUNT.fetch_add(1, Ordering::Relaxed);
+
         let mut boa = BoaContext::default();
         boa.runtime_limits_mut()
             .set_loop_iteration_limit(self.limits.max_loop_iterations);
         boa.runtime_limits_mut()
             .set_recursion_limit(self.limits.max_stack_size);
         setup_bindings(&mut boa, context)?;
-        evaluate_with(input, &mut boa)
+        let out = evaluate_with(input, &mut boa)?;
+        Ok((out, true))
     }
 }
 
