@@ -4,6 +4,37 @@
 
 2026-07-15 — surfaced by the 0.4.0 perf benchmark (see task 039).
 
+## Status
+
+**Blocked (2026-07-14)** — attempted on the v0.5 branch after task 037.
+`boa_engine::Context` embeds `Rc<...>` internals and is therefore
+`!Send + !Sync`. Storing it (even behind `Arc<Mutex<Option<...>>>`) on
+`ExecutionContext` breaks the framework's `Send` contract across every
+`.await` boundary — the supervisor, HTTP handlers, and source loops all
+require `ExecutionContext: Send`. First attempt produced 289 compile
+errors and was reverted.
+
+Any workable form of this task requires ONE of:
+
+1. **Dedicated OS worker threads for JS.** Spawn `num_cpus` `std::thread`s
+   at startup, each owning a warm `BoaContext`. Async side dispatches
+   `(script, bindings) → oneshot::Sender<Value>` via a channel; awaits
+   the response. Boa never touches a tokio worker.
+2. **`tokio::task::LocalSet` for DSL execution.** Would require the
+   whole handler chain to opt out of the multi-threaded runtime for
+   DSL steps. Large blast radius.
+3. **`send_wrapper` crate.** Panics if the tokio task moves between
+   worker threads — which it will under load. Not viable.
+
+Approach #1 is the only one that composes with the current async
+architecture and is what a future revision of this task should
+prescribe. It also naturally caps concurrency (pool size = worker
+threads), which the current per-request-context model does not.
+
+Until then, task 037 (literal fast-path) is the shipping mitigation:
+any DSL value with no `${...}` bypasses Boa entirely, so the pool
+would only benefit values that actually invoke JS.
+
 ## Problem
 
 `ScriptEngine::evaluate()` today builds a brand-new `BoaContext` on every
