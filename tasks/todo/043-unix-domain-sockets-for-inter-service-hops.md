@@ -2,11 +2,9 @@
 
 ## Filed
 
-2026-07-16 — closes an unstated dependency in the KeMIT eFTI Gate
-composition, [`runtime_composition.md`](../../../../KeMIT/eFTI/Gate/docs/architecture/infrastructure/runtime_composition.md) §7 already
-assumes "loopback / unix socket, keep-alive" for the Ruuter → Resql
-hop within the 50 ms budget. The unix-socket half is not built —
-Ruuter's `HttpClient` is TCP-only.
+2026-07-16 — Ruuter's `HttpClient` is TCP-only, so any DSL that hops
+to a sidecar on the same host pays TCP loopback cost even though the
+packets never leave the machine. UDS is the standard fix.
 
 ## Problem
 
@@ -17,10 +15,10 @@ loopback cost:
 - ~100-300 µs wall latency warm-conn
 - Kernel TCP overhead compounds under sustained rps
 
-Under Ruuter-fronting-a-Resql-and-AS4-sidecar deployments (the eFTI
-Gate composition, and every other Buerostack service that follows
-the same pattern), the network stack is doing meaningful work on
-requests that never leave the machine.
+Any deployment that runs Ruuter next to a sidecar on the same host
+(Resql, TIM, custom adapters — the standard Buerostack composition
+pattern) leaves this on the table. The network stack is doing
+meaningful work on requests that never leave the machine.
 
 ## Fix
 

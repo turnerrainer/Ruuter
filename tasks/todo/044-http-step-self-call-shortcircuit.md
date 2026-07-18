@@ -116,8 +116,8 @@ dedicated `RouterHandle` shared before `DslRouter` construction.
 
 ### What still goes over TCP
 
-- URLs that don't match self-origins (external services, other Ruuter
-  replicas, DLK AS4 sidecar).
+- URLs that don't match self-origins (external services, other
+  Ruuter replicas, non-local sidecars).
 - Explicitly-forced-network calls — add an escape hatch:
   ```yaml
   call: http.post

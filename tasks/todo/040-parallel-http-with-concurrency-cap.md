@@ -2,21 +2,24 @@
 
 ## Filed
 
-2026-07-15 — needed for the KeMIT eFTI Gate composition (see
-`KeMIT/eFTI/Gate/docs/architecture/infrastructure/runtime_composition.md`
-§4 "cross-gate fan-out").
+2026-07-15 — generic framework primitive; DSLs that need to broadcast
+one inbound request to N peer services currently have no bounded way
+to do it.
 
 ## Problem
 
 The `iterate` step executes its body sequentially. `http` steps inside
 `iterate` therefore serialize peer calls — fine for admin operations,
-unsuitable for the eFTI broadcast pattern where one authority query fans
-out to N=27 peer gates and each peer takes 100-1000 ms.
+unsuitable for any DSL that fans one inbound request out to N peer
+services when per-peer latency is 100-1000 ms and N is in the tens.
 
-Naive parallelism (spawn every request at once) has its own failure mode:
-the DLK POC does exactly this and it's flagged as burst weakness B1 in
-`h2ck.me/projects/efti-gate-dlk/SCALABILITY.md` — "27× client-controlled
-amplifier built into the API surface."
+The alternative shape a DSL author reaches for — "spawn one request
+per peer, all at once" — has a well-known failure mode: unbounded
+outbound concurrency turns every inbound request into an N× amplifier
+on downstream pools, thread limits, and the DSL's own tail latency.
+The framework should offer a first-class bounded fan-out primitive so
+consumers don't roll their own (or, worse, iterate serially and
+accept the linear latency).
 
 ## Fix
 
