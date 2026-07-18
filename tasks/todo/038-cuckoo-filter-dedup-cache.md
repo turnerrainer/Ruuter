@@ -2,26 +2,26 @@
 
 ## Filed
 
-2026-07-15 — surfaced during the eFTI Gate comparison discussion:
-regulated-integration workloads (eFTI, VAT reporting, customs,
-banking-style dedup) all want the same primitive — "have I seen this
-opaque id before?" answered in <1 µs without hitting persistent
-storage.
+2026-07-15 — generic framework primitive. Many DSL patterns
+(dedup on ingest, negative-cache before a DB lookup, "have I already
+processed this id" checks) want set-membership answered in <1 µs
+without hitting persistent storage. The framework offers no such
+primitive today.
 
 ## Problem
 
 Some DSLs need to answer set-membership questions on high-cardinality
 opaque ids:
 
-- eFTI: "have I already ingested consignment id `XYZ`?" (client
-  retries frequently; per-request full DB lookup is wasteful).
+- Dedup on ingest: "have I already ingested id `XYZ`?" — client
+  retries frequently; per-request full DB lookup is wasteful.
 - Idempotency-Key already has an in-process SHA256 store (see task 029
   for the durability follow-up) — but for pre-persistence dedup where
   losing state on restart is fine, a Cuckoo filter is 10-100× cheaper
   in memory and O(1) lookup.
-- Negative caches: "definitely NOT a known consignment id, skip the
-  DB round-trip" — Bloom would work but Cuckoo supports deletion,
-  which matters for TTL rotation.
+- Negative caches: "definitely NOT a known id, skip the DB round-trip"
+  — Bloom would work but Cuckoo supports deletion, which matters for
+  TTL rotation.
 
 ## Fix
 
@@ -31,7 +31,7 @@ New step type (or new state-backend variant):
 dedup_check:
   cuckoo:
     op: check_and_add          # or: check / add / remove
-    key: "eFTI.dedup"          # namespaced cache name
+    key: "ingest.dedup"        # namespaced cache name
     value: "${incoming.body.consignment_id}"
     into: was_seen             # binds bool
     capacity: 1000000          # tune per cache

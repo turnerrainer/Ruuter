@@ -2,20 +2,22 @@
 
 ## Filed
 
-2026-07-15 — depends on task 040. Addresses eFTI Gate burst weakness B2
-in `h2ck.me/projects/efti-gate-dlk/SCALABILITY.md` — DLK POC's own Test
-Fest 3 evidence: **one slow peer → p95 = 60 s at 0.12 req/s** because
-the broadcast waits for `flow.toList()` before responding.
+2026-07-15 — depends on task 040. Any fan-out primitive that waits
+for every peer inherits the slowest peer's latency; without a first-N
+mode, the framework's tail latency is unbounded by design.
 
 ## Problem
 
-In cross-gate broadcasts, "correct answer" and "all peers replied" are
-different. A regulator asking "does this UIL exist anywhere in the EU
-network" wants the yes/no as soon as ANY authoritative peer answers —
-not after every peer either replies or times out.
+In fan-out broadcasts, "correct answer" and "all peers replied" are
+often different concerns. A DSL asking "does this identifier exist
+anywhere in the peer network" wants the yes/no as soon as ANY
+authoritative peer answers — not after every peer either replies or
+times out.
 
-Naive "wait for all" turns a single slow peer into a 60 s tail-latency
-tax on every query. Naive "return immediately" loses completeness.
+Naive "wait for all" turns a single slow peer into an unbounded
+tail-latency tax on every query. Naive "return immediately" loses
+completeness. The framework should give DSL authors an explicit knob:
+"return after N successes, then handle the rest per policy."
 
 ## Fix
 
@@ -50,15 +52,16 @@ Semantics:
     (gives partial completeness with a bounded tail).
 - Recorded per response: `{peer, latency_ms, source: "early_exit" | "straggler" | "cancelled" | "timeout"}`.
 
-## eFTI mapping
+## Example pattern
 
-Regulator's "identifier query" pattern:
+"Ask N peers for a match; reply as soon as any authoritative peer
+confirms; keep the rest running for audit":
 
 ```yaml
 lookup:
   parallel_http:
-    peers: "${peer_gates}"
-    args: { url: "${peer.baseUrl}/v1/identifiers/${incoming.body.uil}", timeout: 2000 }
+    peers: "${peer_services}"
+    args: { url: "${peer.baseUrl}/v1/lookup/${incoming.body.id}", timeout: 2000 }
     max_concurrency: 8
     aggregate: first_n
     first_n: 1
@@ -70,8 +73,8 @@ lookup:
   next: reply
 ```
 
-Turns a 60 s worst-case broadcast into a max-2 s early-exit path with
-all late peers still audited.
+Turns a slowest-peer-bound worst case into a max-timeout early-exit
+path with all late peers still audited.
 
 ## Acceptance
 

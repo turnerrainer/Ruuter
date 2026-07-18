@@ -3,13 +3,9 @@
 ## Filed
 
 2026-07-15 — complements task 038 (Cuckoo dedup for negative-cache).
-Addresses eFTI Gate burst weakness B9 in
-`h2ck.me/projects/efti-gate-dlk/SCALABILITY.md`:
-
-> Two cameras 5 km apart photograph the same truck within seconds;
-> the authority's app fires both. The gate handles each independently:
-> same DB join, same fan-out to all peers, same response build. There
-> is no deduplication layer.
+Any DSL whose expensive path (DB join + fan-out + assembly) can be
+triggered by concurrent requests keyed on the same input needs a
+coalescing primitive; the framework currently offers none.
 
 ## Problem
 
@@ -17,9 +13,10 @@ Task 038's Cuckoo filter handles set-membership ("have I seen X?").
 It does NOT handle "two concurrent requests want the same expensive
 computation — only run it once and share the answer."
 
-For eFTI: 27 authority app-points asking about the same UIL in the
-same 500 ms window today issue 27 independent broadcasts. Single-flight
-collapses them into 1 broadcast + 26 wait-and-share.
+Concrete pattern: N clients ask the same expensive question within
+the same short window. Today each triggers an independent execution
+of the DSL — N database joins, N fan-outs, N response builds.
+Single-flight collapses them into 1 execution + (N-1) wait-and-share.
 
 ## Fix
 
