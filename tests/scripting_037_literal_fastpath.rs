@@ -42,7 +42,7 @@ fn pure_string_literal_takes_fastpath() {
 #[test]
 fn scalar_literals_take_fastpath() {
     let engine = ScriptEngine::new();
-    for s in &[json!(42), json!(-3.14), json!(true), json!(false), json!(null)] {
+    for s in &[json!(42), json!(-2.5), json!(true), json!(false), json!(null)] {
         let (out, boa_used) = engine.evaluate_tracked(s, &ctx()).unwrap();
         assert_eq!(&out, s, "scalar {:?} must pass through unchanged", s);
         assert!(!boa_used, "Boa must NOT be constructed for scalar {:?}", s);
