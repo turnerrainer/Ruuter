@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-18
+
+### Added
+- **Task 037 — literal fast-path in `ScriptEngine::evaluate()`.** Values
+  that recursively contain no `${...}` and are not whole-string
+  `$=...=` expressions now bypass Boa entirely, returning
+  byte-identical output without constructing a `BoaContext` or running
+  `setup_bindings`. Measured on `/samples/basic/hello` (a literal
+  return string): **74,621 rps at p50 714µs** on this laptop, up
+  from **4,796 rps at p50 13.30ms** on 0.4.0 — a 15.6× throughput
+  increase / 18.6× latency reduction. Correctness argument:
+  pre-037 evaluation of an expression-free value tree was already the
+  identity function; the fast-path skips the identity work. Covered
+  by 15 targeted unit tests plus `evaluate_tracked()`, which returns
+  a per-call `boa_used: bool` so tests can observe fast-path firing
+  without racing the process-global counter across parallel test
+  binaries.
+- CLI testkit tools: `dsl-lint` (validates every DSL in a tree,
+  fails on error) and `dsl-test` (runs `.test.yml` scenarios against
+  a live server). Wired into CI as the second and third gates after
+  `cargo test`.
+- mdBook reference at `book/` — LLM-oriented documentation covering
+  every step, source, guard, and framework surface. Deployed to
+  GitHub Pages on push to `dev`.
+
+### Changed
+- **License: MIT → Apache-2.0**, with a `NOTICE` file crediting
+  Bürokratt's original Ruuter (Java) as the reference implementation
+  this rewrite mirrors semantically.
+- **Package renamed: `ruuter-rs` → `ruuter-on-rust`.** Cargo
+  `name`, binary name, repository URL (`github.com/turnerrainer/Ruuter`),
+  and Docker image tag all use the new name. There is no compat shim
+  — pre-0.5.0 references to `ruuter-rs` need updating.
+- README and DSL sample docs updated for the rename and the new
+  license.
+
+### Performance
+
+Ad-hoc `wrk -t4 -c64 -d10s` on a 2-core laptop, same host, native
+binaries built with `--release`:
+
+| Route | 0.4.0 | 0.5.0 | Change |
+|---|---:|---:|---|
+| `/health` (framework baseline) | 98,233 rps | 102,723 rps | +4.6% (noise) |
+| `/samples/basic/hello` (literal DSL) | 4,796 rps | **74,621 rps** | **+1456%** |
+
+Routes whose DSLs still contain runtime `${...}` expressions are
+unchanged in this release — the fast-path only fires when the value
+tree is expression-free. Task 037's benefit scales with the fraction
+of expression-free values in a project's DSL corpus.
+
+### Deferred / Blocked
+
+Three related tasks were investigated on this branch and documented
+rather than implemented, because Boa 0.19's `Context` and `Script`
+types embed `Rc`s (`!Send + !Sync`), which cannot cross the
+framework's async `.await` boundaries:
+
+- **Task 036 — per-project `BoaContext` pool.** Requires dedicated
+  OS worker threads for JS execution, not a field on
+  `ExecutionContext`. See `tasks/todo/036-boa-context-pool-per-project.md`.
+- **Task 045 — pre-parse expressions at DSL load.** `Script::parse`
+  requires a live `&mut Context` and the resulting `Script` holds a
+  `Realm` in a `boa_gc::Gc`. Same unblock path as 036.
+- **Task 046 — load-time static evaluation.** Not blocked, but a
+  corpus survey showed zero `${...}` expressions in `DSL/samples/**`
+  would be hoisted by either the ultra-safe subset or the full
+  allow-list version. Deferred until a corpus that would benefit
+  emerges.
+
 ## [0.4.0] - 2026-07-14
 
 ### Added
