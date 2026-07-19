@@ -40,6 +40,7 @@ indexmap = { version = "2.5", features = ["serde"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "url"] }
 url = "2.5"
 rand = "0.8"
+rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures"] }
 sha2 = "0.10"
 
 [dev-dependencies]
@@ -56,3 +57,10 @@ path = "src/bin/dsl_lint.rs"
 [[bin]]
 name = "dsl-test"
 path = "src/bin/dsl_test.rs"
+
+# Task 047 spike (behind feature) — evaluate rquickjs Send-compat.
+# When feature "spike-quickjs" enabled, includes rquickjs. Not
+# wired into the actual ScriptEngine — this is a marker-check spike.
+[features]
+default = []
+spike-quickjs = ["dep:rquickjs"]
