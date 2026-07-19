@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-19
+
+### Added
+
+- **Task 050 — UDS keep-alive connection pool.** Replaces v0.6.0's
+  per-request handshake with a hyper-util `Client<UdsConnector,
+  Full<Bytes>>` cached per unique socket path. Every socket gets its
+  own connection pool; requests reuse warm connections instead of
+  paying handshake cost every time. This is the fix v0.6.0's UDS
+  path was missing — the A/B bench had shown pooled TCP loopback
+  beating v1 UDS by 6%; v0.6.1 flips that to UDS winning by 6%.
+  Defaults: 30s idle timeout, 32 idle connections per host. 3 new
+  tests covering pool identity, sequential-reuse under load, and
+  target-restart recovery.
+
+### Perf
+
+Measured A/B on the same sidecar-hop workload (3-run median,
+developer laptop, cross-instance UDS vs TCP loopback):
+
+| Transport | v0.6.0 | v0.6.1 | Δ |
+|---|---:|---:|---|
+| TCP loopback | 4,229 rps | 4,839 rps | +14% (laptop noise) |
+| **UDS via alias** | 3,987 rps | **5,122 rps** | **+28.5%** |
+| UDS-vs-TCP delta | -6% (worse) | **+5.8% (wins)** | |
+
+p50 latency on UDS: 15.9 ms → 12.4 ms (-22%).
+
+For headline-grade numbers, re-run on an isolated host per
+`bench/AWS-RUNBOOK.md` — localhost variance is ±20%.
+
+### Filed
+
+- **Task 049 (h2c over UDS + TCP)** — the next transport-perf lever
+  after 050. HTTP/1.1 head-of-line blocking caps per-connection
+  throughput; h2 stream multiplexing eliminates it. Composes with
+  050's pool infra.
+- **Task 047 reframed** — QuickJS evaluation now framed as the
+  potential unblocker for tasks 036 + 045 (which are blocked on
+  Boa's `!Send` types). If `rquickjs::Context` is `Send`, adopting
+  QuickJS unblocks the compound Boa-perf wins without needing a
+  dedicated JS worker thread pool.
+
 ## [0.6.0] - 2026-07-19
 
 ### Added
