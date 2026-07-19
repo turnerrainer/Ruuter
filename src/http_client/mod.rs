@@ -1,10 +1,105 @@
 use crate::config::AppConfig;
 use crate::{Result, RuuterError};
+use async_trait::async_trait;
 use futures::StreamExt;
+use once_cell::sync::OnceCell;
 use reqwest::{Client, Method};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Task 044 — implemented by the framework's DSL router so
+/// `HttpClient` can dispatch `http.<verb>` self-calls back through
+/// the router in-process instead of over the network. Lives on the
+/// `http_client` module (not `router`) to avoid a `router → http_client
+/// → router` cyclic dependency at the type level.
+///
+/// The router-side implementation preserves guards, CSRF, path-param
+/// resolution, and the OpenAPI-visible response shape — a self-call
+/// is byte-identical to a loopback TCP call, just faster.
+#[async_trait]
+pub trait SelfCallHandler: Send + Sync {
+    async fn execute_by_url(
+        &self,
+        method: &str,
+        url_path: &str,
+        query: HashMap<String, Value>,
+        headers: HashMap<String, String>,
+        body: HashMap<String, Value>,
+    ) -> Result<HttpResponse>;
+}
+
+/// Task 044 — set of "URLs that are actually us." Compared against
+/// each outbound `http.<verb>` URL; a match fires the short-circuit
+/// dispatch through the [`SelfCallHandler`].
+#[derive(Debug, Default, Clone)]
+pub struct SelfOrigins {
+    /// TCP endpoints — `(host, port)` pairs. Includes every literal
+    /// listener bind plus the well-known localhost/127.0.0.1
+    /// synonyms so DSLs that write `http://localhost:8080/…` still
+    /// match a listener bound to `0.0.0.0`.
+    pub tcp: HashSet<(String, u16)>,
+}
+
+impl SelfOrigins {
+    /// Build the set from an AppConfig at boot. Never partial: if
+    /// nothing is configured we still know the default `0.0.0.0:port`
+    /// listener, so a DSL that writes `http://localhost:<port>/…`
+    /// short-circuits correctly out of the box.
+    pub fn from_config(config: &AppConfig) -> Self {
+        let mut tcp: HashSet<(String, u16)> = HashSet::new();
+        // The listener is 0.0.0.0:<port>. Register every loopback
+        // synonym on that port so DSLs that write any of them all
+        // resolve to the short-circuit path.
+        for h in ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"] {
+            tcp.insert((h.to_string(), config.port));
+        }
+        Self { tcp }
+    }
+
+    /// True when `url` targets one of our own listeners.
+    pub fn matches(&self, url: &str) -> bool {
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return false;
+        }
+        let Some(host) = parsed.host_str() else {
+            return false;
+        };
+        let port = match parsed.port() {
+            Some(p) => p,
+            None => match parsed.scheme() {
+                "http" => 80,
+                "https" => 443,
+                _ => return false,
+            },
+        };
+        self.tcp.contains(&(host.to_string(), port))
+    }
+}
+
+/// Parse "host:port" (or "[::1]:port"). Currently unused — the
+/// SelfOrigins detector only reads `config.port` since the multi-
+/// listener path landed on a separate feature branch (task 043).
+/// Kept here so the merge of 043 → dev doesn't have to re-add it.
+#[allow(dead_code)]
+fn split_host_port(s: &str) -> Option<(String, u16)> {
+    // Handles "host:port" and IPv6 "[::1]:port"; anything else → None.
+    if let Some(stripped) = s.strip_prefix('[') {
+        // IPv6 form
+        let end = stripped.find(']')?;
+        let host = &stripped[..end];
+        let rest = &stripped[end + 1..];
+        let port = rest.strip_prefix(':')?.parse::<u16>().ok()?;
+        Some((format!("[{}]", host), port))
+    } else {
+        let (h, p) = s.rsplit_once(':')?;
+        Some((h.to_string(), p.parse::<u16>().ok()?))
+    }
+}
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -24,6 +119,16 @@ pub struct HttpClient {
     outbound_disabled: bool,
     allowed_url_prefixes: Vec<String>,
     allowed_ip_hosts: Vec<String>,
+    /// Task 044 — set of hosts+ports that are actually our own
+    /// listener. When a target URL matches, the request short-
+    /// circuits into the router in-process.
+    self_origins: Arc<SelfOrigins>,
+    /// Task 044 — router handle. Filled AFTER the router is built
+    /// (via `set_self_call_handler`), so the http_client → router →
+    /// http_client cycle never actually exists at construction time.
+    /// `OnceCell` inside `Arc` so every clone of this client sees
+    /// the same one-shot slot.
+    router_handle: Arc<OnceCell<Arc<dyn SelfCallHandler>>>,
 }
 
 impl HttpClient {
@@ -42,7 +147,28 @@ impl HttpClient {
             outbound_disabled: config.internal_requests.disabled,
             allowed_url_prefixes: config.internal_requests.allowed_urls.clone(),
             allowed_ip_hosts: config.internal_requests.allowed_ips.clone(),
+            self_origins: Arc::new(SelfOrigins::from_config(config)),
+            router_handle: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Task 044 — one-shot wiring: register the router as the
+    /// SelfCallHandler this client will dispatch to when an outbound
+    /// URL matches a self-origin. Called from `main.rs` after the
+    /// router is constructed. Returns `Err` (silently, via log) if
+    /// called twice — first-write-wins semantics via OnceCell.
+    pub fn set_self_call_handler(&self, handler: Arc<dyn SelfCallHandler>) {
+        if self.router_handle.set(handler).is_err() {
+            tracing::warn!("HttpClient::set_self_call_handler called twice — ignoring second");
+        }
+    }
+
+    /// Test-only builder: install a bare SelfOrigins for the client.
+    /// Used by self-call tests that don't want to spin up a full
+    /// AppConfig just to configure a listener.
+    pub fn with_self_origins(mut self, origins: SelfOrigins) -> Self {
+        self.self_origins = Arc::new(origins);
+        self
     }
 
     /// Bare constructor for tests / callers that don't want to build a full
@@ -62,6 +188,8 @@ impl HttpClient {
             outbound_disabled: false,
             allowed_url_prefixes: Vec::new(),
             allowed_ip_hosts: Vec::new(),
+            self_origins: Arc::new(SelfOrigins::default()),
+            router_handle: Arc::new(OnceCell::new()),
         }
     }
 
@@ -112,6 +240,23 @@ impl HttpClient {
         // punching a hole in the allowlist.
         let rewritten = rewrite_url_for_tests(url);
         let url = rewritten.as_deref().unwrap_or(url);
+
+        // Task 044 dispatch: if this URL matches one of our own
+        // listeners AND a router handle was wired at boot, short-
+        // circuit into the router instead of going over reqwest.
+        // Semantic parity: guards run, path-params resolve, response
+        // shape identical to a network-loopback call.
+        //
+        // If the handle isn't wired (bare `HttpClient::with_timeout_ms`
+        // in a test, say), fall through to the normal path — matching
+        // a self-origin isn't a failure, just a missed optimisation.
+        if self.self_origins.matches(url) {
+            if let Some(handler) = self.router_handle.get() {
+                return self
+                    .self_call_dispatch(handler.as_ref(), method, url, body, query, headers)
+                    .await;
+            }
+        }
 
         self.check_ssrf(url)?;
 
@@ -213,6 +358,82 @@ impl HttpClient {
             body,
             headers: response_headers,
         })
+    }
+
+    /// Task 044 — invoke the router in-process for a URL whose
+    /// origin matches one of our own listeners. Result is packaged
+    /// into the same `HttpResponse` shape a network call would
+    /// produce so DSL callers can't tell the difference.
+    async fn self_call_dispatch(
+        &self,
+        handler: &dyn SelfCallHandler,
+        method: Method,
+        url: &str,
+        body: Option<&Value>,
+        query: Option<&HashMap<String, Value>>,
+        headers: Option<&HashMap<String, Value>>,
+    ) -> Result<HttpResponse> {
+        let parsed = url::Url::parse(url).map_err(|e| {
+            RuuterError::HttpRequest(format!("invalid self-call url '{}': {}", url, e))
+        })?;
+        let path = parsed.path().to_string();
+
+        // Merge URL query params with any explicit `query` argument.
+        // execute_dsl consumes a single flat map; DSL-side URL parsing
+        // (executor's `${incoming.query.foo}` bindings) sees both.
+        let mut merged_query: HashMap<String, Value> = HashMap::new();
+        for (k, v) in parsed.query_pairs() {
+            merged_query.insert(k.to_string(), Value::String(v.to_string()));
+        }
+        if let Some(q) = query {
+            for (k, v) in q {
+                merged_query.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Header map: normalise values to String. Downstream DslRouter
+        // takes HashMap<String, String>.
+        let mut header_strings: HashMap<String, String> = HashMap::new();
+        if let Some(h) = headers {
+            for (k, v) in h {
+                let s = match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                header_strings.insert(k.to_lowercase(), s);
+            }
+        }
+
+        // Body: HashMap<String, Value>. Non-object bodies (bare
+        // numbers, arrays) are rare on inbound HTTP but shouldn't
+        // silently drop — wrap under a `_body` key so DSLs that
+        // expect that structure can access them.
+        let body_map: HashMap<String, Value> = match body {
+            Some(Value::Object(map)) => map
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            Some(other) => {
+                let mut m = HashMap::new();
+                m.insert("_body".to_string(), other.clone());
+                m
+            }
+            None => HashMap::new(),
+        };
+
+        let resp = handler
+            .execute_by_url(method.as_str(), &path, merged_query, header_strings, body_map)
+            .await?;
+        // Same status/size gates as the network path (no size gate
+        // on self-calls today — no wire transfer to cap; file a
+        // follow-up if a DSL author needs it).
+        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&resp.status) {
+            return Err(RuuterError::HttpRequest(format!(
+                "self-call status {} not in http_codes_allow_list",
+                resp.status
+            )));
+        }
+        Ok(resp)
     }
 }
 

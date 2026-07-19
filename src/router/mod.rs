@@ -2,11 +2,13 @@ use crate::config::AppConfig;
 use crate::context::ExecutionContext;
 use crate::dsl::loader::GuardDsls;
 use crate::dsl::Dsl;
+use crate::http_client::{HttpResponse, SelfCallHandler};
 use crate::idempotency::IdempotencyStore;
 use crate::state::StateStore;
 use crate::steps::engine::{DslExecutionResult, StepEngine};
 use crate::ws::{random_client_id, Outbound, WsRegistry};
 use crate::{Result, RuuterError};
+use async_trait::async_trait;
 use axum::{
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
@@ -155,8 +157,18 @@ impl DslRouter {
     }
 
     pub fn build_axum_router(self) -> Router {
+        Arc::new(self).build_axum_router_from_arc()
+    }
+
+    /// Task 044 wiring: build the axum router from a pre-existing
+    /// `Arc<Self>` so `main.rs` can share the same handle with
+    /// `HttpClient` (for self-call short-circuit) BEFORE consuming
+    /// the router into axum's state. Without this, HttpClient would
+    /// have no live reference to the router by the time it needs to
+    /// dispatch a self-call.
+    pub fn build_axum_router_from_arc(self: Arc<Self>) -> Router {
         let cors = build_cors_layer(&self.config.cors);
-        let state = Arc::new(self);
+        let state = self;
 
         let mut router = Router::new()
             .route("/health", get(health_check))
@@ -231,6 +243,47 @@ impl DslRouter {
         }
 
         self.engine.run(&dsl, &context).await
+    }
+}
+
+/// Task 044 — DslRouter implements SelfCallHandler so HttpClient can
+/// short-circuit `http.<verb>` calls that target Ruuter's own listener
+/// back into the router without the round trip through reqwest and
+/// the framework's own accept loop.
+#[async_trait]
+impl SelfCallHandler for DslRouter {
+    async fn execute_by_url(
+        &self,
+        method: &str,
+        url_path: &str,
+        query: HashMap<String, Value>,
+        headers: HashMap<String, String>,
+        body: HashMap<String, Value>,
+    ) -> Result<HttpResponse> {
+        // Split off the leading project segment. `/samples/basic/hello`
+        // → project="samples", path="basic/hello". Matches how
+        // `handle_request` parses inbound URIs before calling execute_dsl.
+        let trimmed = url_path.trim_start_matches('/');
+        let (project, path) = match trimmed.find('/') {
+            Some(idx) => (&trimmed[..idx], &trimmed[idx + 1..]),
+            None => (trimmed, ""),
+        };
+        let result = self
+            .execute_dsl(
+                project,
+                method,
+                path,
+                body,
+                query,
+                headers,
+                "self-call".to_string(),
+            )
+            .await?;
+        Ok(HttpResponse {
+            status: result.status,
+            body: result.value,
+            headers: result.headers,
+        })
     }
 }
 
