@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-07-19
+
+### Added
+
+- **Task 051 — pluggable ScriptEngine backends behind Cargo features.**
+  Split `src/scripting/` into an engine-agnostic shell + two backend
+  modules. Exactly one of `scripting-boa` (default) or `scripting-quickjs`
+  compiled per build; both-or-neither triggers a clean `compile_error!()`
+  instead of a spray of unresolved symbols.
+- `scripting-boa` (default): unchanged behaviour. Boa 0.19, pure Rust,
+  no CVE surface. The existing 142 tests + 99 DSL scenarios pass
+  byte-identically to v0.6.3.
+- `scripting-quickjs`: rquickjs 0.6 with `parallel + futures` features
+  for Send + Sync context types. **Same 142 tests + 99 DSL scenarios
+  pass on this backend too** — full corpus compatibility gate. NaN
+  serialisation error message aligned to Boa's exact wording so
+  scenarios that regex on error text stay portable.
+- `book/src/framework/scripting-engines.md`: engine selection guide,
+  known compatibility deltas (Number precision, Date parsing, regex
+  flavor), why this split unblocks tasks 036 + 045.
+
+### Consequence
+
+Tasks 036 (per-request context pool) and 045 (pre-parsed Script cache)
+— previously blocked on Boa's `!Send` types — become straightforward
+small changes against the QuickJS backend. Reopening them is the next
+sequenced work; combined expected impact is 5-10× on JS-heavy DSLs.
+
 ## [0.6.3] - 2026-07-19
 
 ### Findings
