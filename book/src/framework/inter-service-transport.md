@@ -10,6 +10,15 @@ Ruuter supports Unix Domain Sockets (UDS) for both outbound and inbound HTTP, le
 
 Numbers: skipping netfilter + softirq + IP stack traversal typically saves **~15-25 µs CPU** and **~100-300 µs wall latency** per hop on Linux. On sustained-rps sidecar hops (5k+/sec) the CPU delta compounds into whole percentage points.
 
+Measured on the v0.6.1 A/B bench (same-workload sidecar hop, 3-run median on a developer laptop):
+
+| Transport | rps | p50 |
+|---|---:|---:|
+| TCP loopback (reqwest pooled) | 4,839 | 13.0 ms |
+| **UDS via alias (pooled — task 050)** | **5,122** | **12.4 ms** |
+
+UDS wins by ~6% throughput and ~5% latency. The v1 UDS (0.6.0, no pooling) was actually 6% SLOWER than pooled TCP loopback — task 050 added a hyper-util-based keep-alive pool per unique socket path, closing the gap.
+
 ## When NOT to reach for UDS
 
 - Cross-node hops. UDS is single-host by definition; over the wire you're back on TCP.
