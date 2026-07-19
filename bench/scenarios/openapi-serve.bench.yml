@@ -1,0 +1,10 @@
+# Cached-response ceiling — /_/openapi.json is generated once at boot
+# and served from memory on every request. Regressions here mean the
+# response-serving path itself slowed down.
+name: openapi-serve
+route: /_/openapi.json
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

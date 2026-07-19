@@ -1,0 +1,10 @@
+# One-step DSL that returns a literal string. After task 037 this hits
+# the literal fast-path — no Boa context construction — so serves as
+# the "0.5.0 shipping optimization" scoreboard.
+name: thin-dsl
+route: /samples/basic/hello
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s
