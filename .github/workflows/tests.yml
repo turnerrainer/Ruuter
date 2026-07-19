@@ -2,15 +2,16 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  # Default feature build — scripting-boa.
+  boa:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,14 +22,41 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ hashFiles('Cargo.lock') }}
+          key: cargo-boa-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-
-      - name: Build
-        run: cargo build --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
+            cargo-boa-
+      - name: Build (Boa default)
+        run: cargo build --release --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint (errors fail the build)
-        run: ./target/debug/dsl-lint --dsl DSL --constants constants.ini
-      - name: cargo test (existing Rust integration tests)
-        run: cargo test --all
-      - name: dsl-test (all .test.yml scenarios)
-        run: ./target/debug/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+        run: ./target/release/dsl-lint --dsl DSL --constants constants.ini
+      - name: cargo test (Boa backend)
+        run: cargo test --release --no-fail-fast
+      - name: dsl-test — every .test.yml scenario on Boa
+        run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+
+  # QuickJS feature — task 051 pluggable backend. Task 036 (per-
+  # request session pool) and task 045 (pre-parsed expression
+  # registry) only run under this flavour, so regressions on the
+  # QuickJS path would silently ship without this job.
+  quickjs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-quickjs-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-quickjs-
+      - name: Build (QuickJS backend)
+        run: cargo build --release --no-default-features --features scripting-quickjs --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
+      - name: dsl-lint
+        run: ./target/release/dsl-lint --dsl DSL --constants constants.ini
+      - name: cargo test (QuickJS backend)
+        run: cargo test --release --no-default-features --features scripting-quickjs --no-fail-fast
+      - name: dsl-test — every .test.yml scenario on QuickJS
+        run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
