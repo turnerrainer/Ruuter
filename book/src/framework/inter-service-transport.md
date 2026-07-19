@@ -98,9 +98,40 @@ Rules and gotchas:
 - Every listener runs its own accept loop; if any listener's task panics, the process exits (fail-fast rather than silently drop traffic on one transport).
 - File permissions on the socket default to the umask. To restrict access to a specific group, wrap the socket path in a mode-controlled directory OR use a `SocketPermissions` future extension.
 
+## HTTP/2 (h2c) over UDS (task 049)
+
+v0.6.2 adds h2c on both outbound and inbound UDS paths.
+
+```yaml
+# outbound
+uds_http_version: http2      # default http1
+
+# inbound listener
+listeners:
+  - name: side-uds
+    unix: "/var/run/ruuter/side.sock"
+    http2: true              # default false
+```
+
+Both sides must speak the same version — no ALPN over cleartext.
+
+**Measured A/B** (v0.6.2, laptop, sequential-per-request workload):
+
+| Version | rps | p50 |
+|---|---:|---:|
+| h1 with pool (task 050) | 5,121 | 12.4 ms |
+| h2c (task 049) | 4,910 | 13.0 ms |
+
+**h2c is ~4% slower here.** h2 multiplexing only pays off when a single caller issues many concurrent streams to the SAME target. A DSL that makes one upstream call per inbound request never engages multiplexing — each of wrk's 64 connections issues one request at a time, so h1 with pooling and h2 with one-stream-per-request perform equivalently, with h2 losing on per-frame overhead.
+
+**Where h2c will pay off**: once a `parallel_http` primitive (task 040, backlog) fans one inbound request out to N concurrent upstreams. One h2 connection carries N streams; h1 needs N pooled connections. Expected win: 3-5× on fan-out.
+
+**Recommendation until 040 lands**: keep the default `http1`. Ship h2c as opt-in for operators already using fan-out patterns via `iterate` around `http.<verb>`.
+
 ## Non-goals
 
-- **HTTP/2 over UDS**: nice-to-have, not shipped. HTTP/1.1 with keep-alive covers the typical sidecar pattern.
 - **Cross-node UDS**: impossible by definition. When Ruuter and a sidecar are on different nodes, TCP with keep-alive is the answer.
 - **UDS as external ingress**: the framework doesn't stop you, but it's outside the design intent. External clients hit TCP.
+- **HTTPS/h2 with ALPN**: external-facing TLS termination is deployment-layer's job (nginx, envoy, ALB). Ruuter stays cleartext.
+- **HTTP/3 (QUIC)**: file separately if a compelling workload emerges.
 - **Streaming request-body size caps on UDS**: today the UDS response-body cap is post-hoc (buffer, then check). Streaming enforcement is a follow-up.

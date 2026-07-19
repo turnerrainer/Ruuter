@@ -64,6 +64,28 @@ impl tower::Service<Uri> for UdsConnector {
     }
 }
 
+/// HTTP protocol version this pool will speak to its target sockets.
+/// One pool = one version; requests never negotiate. Configured at
+/// construction from `AppConfig::uds_http_version`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UdsHttpVersion {
+    #[default]
+    Http1,
+    /// h2c — HTTP/2 cleartext (task 049). Multiplexes streams on a
+    /// single connection, eliminating HOL blocking. Requires the
+    /// target sidecar to speak h2c on the same socket.
+    Http2,
+}
+
+impl From<crate::config::HttpVersion> for UdsHttpVersion {
+    fn from(v: crate::config::HttpVersion) -> Self {
+        match v {
+            crate::config::HttpVersion::Http1 => UdsHttpVersion::Http1,
+            crate::config::HttpVersion::Http2 => UdsHttpVersion::Http2,
+        }
+    }
+}
+
 /// Pool of pooled UDS clients — one Client per unique socket path.
 ///
 /// Cloneable because it's just an `Arc<DashMap>` inside. Every
@@ -73,15 +95,29 @@ pub struct UdsPool {
     inner: Arc<DashMap<PathBuf, Arc<Client<UdsConnector, Full<Bytes>>>>>,
     idle_timeout: Duration,
     max_idle_per_host: usize,
+    http_version: UdsHttpVersion,
 }
 
 impl UdsPool {
     pub fn new(idle_timeout: Duration, max_idle_per_host: usize) -> Self {
+        Self::with_version(idle_timeout, max_idle_per_host, UdsHttpVersion::Http1)
+    }
+
+    pub fn with_version(
+        idle_timeout: Duration,
+        max_idle_per_host: usize,
+        http_version: UdsHttpVersion,
+    ) -> Self {
         Self {
             inner: Arc::new(DashMap::new()),
             idle_timeout,
             max_idle_per_host,
+            http_version,
         }
+    }
+
+    pub fn http_version(&self) -> UdsHttpVersion {
+        self.http_version
     }
 
     /// Get (or lazily create) the pooled Client for `socket_path`.
@@ -89,6 +125,8 @@ impl UdsPool {
     /// First call for a new socket path builds a Client with a fresh
     /// UdsConnector. Subsequent calls return the cached Arc<Client>,
     /// which internally owns the connection pool for that socket.
+    /// The client's HTTP version is fixed at pool construction —
+    /// mixing h1 and h2 to the same socket needs two pools.
     fn client_for(&self, socket_path: &Path) -> Arc<Client<UdsConnector, Full<Bytes>>> {
         let key = socket_path.to_path_buf();
         if let Some(existing) = self.inner.get(&key) {
@@ -103,10 +141,14 @@ impl UdsPool {
                 let connector = UdsConnector {
                     path: Arc::new(key.clone()),
                 };
-                let client = hyper_util::client::legacy::Builder::new(TokioExecutor::new())
+                let mut builder = hyper_util::client::legacy::Builder::new(TokioExecutor::new());
+                builder
                     .pool_idle_timeout(self.idle_timeout)
-                    .pool_max_idle_per_host(self.max_idle_per_host)
-                    .build::<_, Full<Bytes>>(connector);
+                    .pool_max_idle_per_host(self.max_idle_per_host);
+                if self.http_version == UdsHttpVersion::Http2 {
+                    builder.http2_only(true);
+                }
+                let client = builder.build::<_, Full<Bytes>>(connector);
                 Arc::new(client)
             })
             .clone()
@@ -125,7 +167,7 @@ impl UdsPool {
 
 impl Default for UdsPool {
     fn default() -> Self {
-        Self::new(Duration::from_secs(30), 32)
+        Self::with_version(Duration::from_secs(30), 32, UdsHttpVersion::Http1)
     }
 }
 

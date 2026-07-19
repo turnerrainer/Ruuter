@@ -232,16 +232,20 @@ async fn main() {
                             std::process::exit(1);
                         }
                     }
-                    info!("listener {} on UDS {}", label, path.display());
+                    let http_version = if l.http2 { "h2c" } else { "http/1.1" };
+                    info!("listener {} on UDS {} ({})", label, path.display(), http_version);
                     let listener = tokio::net::UnixListener::bind(path)
                         .unwrap_or_else(|e| {
                             error!("listener {}: bind {} failed: {}", label, path.display(), e);
                             std::process::exit(1);
                         });
+                    let use_h2 = l.http2;
                     // axum::serve is TcpListener-only; run a per-
-                    // connection hyper HTTP/1 accept loop instead.
-                    // The Router is `Clone + Service`, so each
-                    // connection gets its own service instance.
+                    // connection hyper accept loop instead. The
+                    // Router is `Clone + Service`, so each connection
+                    // gets its own service instance. Task 049 adds
+                    // h2c via the http2 server builder as an alt
+                    // path controlled by `listener.http2: true`.
                     handles.push(tokio::spawn(async move {
                         loop {
                             let (stream, _addr) = match listener.accept().await {
@@ -255,7 +259,16 @@ async fn main() {
                             tokio::spawn(async move {
                                 let io = hyper_util::rt::TokioIo::new(stream);
                                 let service = hyper_util::service::TowerToHyperService::new(app);
-                                if let Err(e) = hyper::server::conn::http1::Builder::new()
+                                if use_h2 {
+                                    if let Err(e) = hyper::server::conn::http2::Builder::new(
+                                        hyper_util::rt::TokioExecutor::new(),
+                                    )
+                                    .serve_connection(io, service)
+                                    .await
+                                    {
+                                        tracing::debug!("uds h2c conn: {}", e);
+                                    }
+                                } else if let Err(e) = hyper::server::conn::http1::Builder::new()
                                     .serve_connection(io, service)
                                     .await
                                 {
