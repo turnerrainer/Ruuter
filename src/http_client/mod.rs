@@ -11,6 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod uds;
+pub mod uds_pool;
+
+use uds_pool::UdsPool;
 
 /// Task 044 — implemented by the framework's DSL router so
 /// `HttpClient` can dispatch `http.<verb>` self-calls back through
@@ -136,6 +139,12 @@ pub struct HttpClient {
     /// mapped Unix socket instead of TCP. Shared via `Arc` so clones
     /// don't duplicate the map.
     unix_socket_map: Arc<HashMap<String, PathBuf>>,
+    /// Task 050 — pooled UDS client. Every unique socket path gets
+    /// its own hyper-util `Client` with keep-alive pooling; requests
+    /// to that socket reuse warm connections instead of doing a
+    /// fresh handshake per request (the v1 UDS behaviour that made
+    /// pooled TCP loopback beat UDS in the v0.6.0 A/B bench).
+    uds_pool: UdsPool,
     /// Task 044 — set of hosts+ports that are actually our own
     /// listener. When a target URL matches, the request short-
     /// circuits into the router in-process.
@@ -165,6 +174,7 @@ impl HttpClient {
             allowed_url_prefixes: config.internal_requests.allowed_urls.clone(),
             allowed_ip_hosts: config.internal_requests.allowed_ips.clone(),
             unix_socket_map: Arc::new(config.unix_socket_map.clone()),
+            uds_pool: UdsPool::default(),
             self_origins: Arc::new(SelfOrigins::from_config(config)),
             router_handle: Arc::new(OnceCell::new()),
         }
@@ -215,9 +225,16 @@ impl HttpClient {
             allowed_url_prefixes: Vec::new(),
             allowed_ip_hosts: Vec::new(),
             unix_socket_map: Arc::new(HashMap::new()),
+            uds_pool: UdsPool::default(),
             self_origins: Arc::new(SelfOrigins::default()),
             router_handle: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Diagnostic accessor — exposes the shared UDS pool so tests
+    /// can inspect its state (e.g. "did the same client get reused").
+    pub fn uds_pool(&self) -> &UdsPool {
+        &self.uds_pool
     }
 
     fn check_ssrf(&self, url: &str) -> Result<()> {
@@ -425,7 +442,8 @@ impl HttpClient {
         // Append query params if the caller passed any and the URL
         // didn't already have a query string.
         path_and_query = merge_query_params(&path_and_query, query);
-        let resp = uds::request_over_unix(
+        let resp = uds_pool::request_over_unix_pooled(
+            &self.uds_pool,
             &socket_path,
             "localhost",
             &path_and_query,
@@ -460,7 +478,8 @@ impl HttpClient {
             parsed.path().to_string()
         };
         let path_and_query = merge_query_params(&base, query);
-        let resp = uds::request_over_unix(
+        let resp = uds_pool::request_over_unix_pooled(
+            &self.uds_pool,
             socket_path,
             &origin_host,
             &path_and_query,
