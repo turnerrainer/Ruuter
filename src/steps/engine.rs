@@ -7,8 +7,9 @@ use crate::context::ExecutionContext;
 use crate::dsl::loader::HttpDsls;
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
+use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
-    assign, http, iterate, log, return_step, state, switch, template, ws_send,
+    assign, http, iterate, log, return_step, single_flight, state, switch, template, ws_send,
     DslStep, StepExecutor,
 };
 use crate::ws::WsRegistry;
@@ -26,6 +27,13 @@ pub struct StepEngine {
     /// template step to look up callee DSLs at runtime. `None` = template
     /// step still works as a placeholder (logs a warning and advances).
     dsls: Option<Arc<HttpDsls>>,
+    /// Task 042 — process-wide single_flight coalescing registry.
+    /// Shared by cloning (Arc inside). One StepEngine → one map;
+    /// every single_flight step in every DSL keys into it. Since
+    /// keys are DSL-computed (not framework-generated), collisions
+    /// across unrelated DSLs are the operator's responsibility to
+    /// avoid by namespacing keys (e.g. `"cache-warmer:${id}"`).
+    single_flight: SingleFlightRegistry,
 }
 
 #[derive(Debug)]
@@ -46,7 +54,15 @@ impl StepEngine {
             // transitions only.
             max_iterations: 10_000,
             dsls: None,
+            single_flight: SingleFlightRegistry::new(),
         }
+    }
+
+    /// Exposed for tests + operator diagnostics — returns a handle
+    /// to the same underlying registry every clone of this engine
+    /// shares.
+    pub fn single_flight_registry(&self) -> &SingleFlightRegistry {
+        &self.single_flight
     }
 
     /// Attach a shared handle to the loaded HTTP DSL tree so the
@@ -162,6 +178,15 @@ impl StepEngine {
             }
             DslStep::WsSend(s) => {
                 ws_send::WsSendStepExecutor::new(s.clone(), self.ws_registry.clone()).execute(context).await
+            }
+            DslStep::SingleFlight(s) => {
+                single_flight::SingleFlightStepExecutor::new(
+                    s.clone(),
+                    self.clone(),
+                    self.single_flight.clone(),
+                )
+                .execute(context)
+                .await
             }
             DslStep::Declaration(_) => {
                 // Declaration is DSL metadata (OpenAPI hints,
