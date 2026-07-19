@@ -1,0 +1,18 @@
+# 043 A/B (TCP side): calls bench-target on a separate ruuter
+# instance over TCP loopback. Must run WITHOUT the task 044
+# short-circuit (else localhost:8082 wouldn't loopback either
+# — but 8082 is not in the bench server's SelfOrigins, so 044
+# would fall through to TCP anyway; env-var toggle is only needed
+# if the target port were 8081).
+
+fetch:
+  call: http.get
+  args:
+    url: "http://127.0.0.1:8082/samples/bench-target"
+    timeout: 500
+  result: r
+  next: respond
+
+respond:
+  return: "${r.body}"
+  next: end

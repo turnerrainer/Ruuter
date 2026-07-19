@@ -1,0 +1,17 @@
+# 042 A/B — same busy-work body as `bench-single-flight`, but with
+# NO coalescing. Every wrk connection runs the body independently.
+# Compare rps between the two scenarios to see the single_flight win.
+
+work:
+  iterate:
+    over: "${Array.from({length: 400}, (_, i) => i)}"
+    as: n
+    do:
+      - assign: { sink: "${n * n}" }
+  next: respond
+
+respond:
+  return:
+    ok: true
+    per_request_ts: "${Date.now()}"
+  next: end

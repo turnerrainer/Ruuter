@@ -1,0 +1,27 @@
+# 042 A/B — busy work wrapped in single_flight.
+# All wrk connections hit this route with identical payload, so the
+# single_flight key is constant and every follower coalesces onto
+# whichever leader currently holds the slot.
+
+coalesce:
+  single_flight:
+    key: "bench-fixed"
+    ttl_ms: 5000
+    do:
+      # ~100ms busy work per body execution — long enough that
+      # concurrent connections observe the in-flight leader.
+      - iterate:
+          over: "${Array.from({length: 400}, (_, i) => i)}"
+          as: n
+          do:
+            - assign: { sink: "${n * n}" }
+      - assign:
+          answer:
+            ok: true
+            leader_ts: "${Date.now()}"
+    result: answer
+  next: respond
+
+respond:
+  return: "${answer}"
+  next: end

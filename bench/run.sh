@@ -58,7 +58,9 @@ EOF
 trap 'kill -9 $SRV_PID >/dev/null 2>&1 || true; rm -f "$CONFIG"' EXIT
 
 echo ">> starting server on port $PORT (log: $LOG, config: $CONFIG)"
-RUUTER_ADMIN_ENABLED=false "$BIN" --config "$CONFIG" --dsl DSL --constants constants.ini > "$LOG" 2>&1 &
+RUUTER_ADMIN_ENABLED=false \
+  RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT="${RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT:-}" \
+  "$BIN" --config "$CONFIG" --dsl DSL --constants constants.ini > "$LOG" 2>&1 &
 SRV_PID=$!
 
 # Wait up to 10 s for the server to bind

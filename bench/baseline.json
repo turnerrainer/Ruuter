@@ -1,53 +1,53 @@
 {
-  "captured_at": "2026-07-19T00:02:44Z",
-  "git_sha": "e3906fc",
-  "version": "0.5.0",
+  "captured_at": "2026-07-19T09:14:17Z",
+  "git_sha": "dc88897",
+  "version": "0.6.0",
   "kernel": "Linux 6.8.0-124-generic",
   "cpus": 8,
-  "runs_median": 3,
+  "runs_median": 5,
   "note": "regenerate via bench/refresh-baseline.sh after intentional perf changes",
   "scenarios": {
     "framework-baseline": {
-      "rps": 106421.91,
-      "p50_ms": 0.473,
-      "p75_ms": 0.727,
-      "p90_ms": 1.09,
-      "p99_ms": 2.3
+      "rps": 94399.54,
+      "p50_ms": 0.535,
+      "p75_ms": 0.829,
+      "p90_ms": 1.25,
+      "p99_ms": 2.68
     },
     "guarded": {
-      "rps": 1130.1,
-      "p50_ms": 56.13,
-      "p75_ms": 70.91,
-      "p90_ms": 83.94,
-      "p99_ms": 108.76
+      "rps": 1004.54,
+      "p50_ms": 62.7,
+      "p75_ms": 78.98,
+      "p90_ms": 95.66,
+      "p99_ms": 130.35
     },
     "js-heavy": {
-      "rps": 2562.79,
-      "p50_ms": 24.75,
-      "p75_ms": 31.35,
-      "p90_ms": 37.36,
-      "p99_ms": 48.59
+      "rps": 2281.29,
+      "p50_ms": 27.67,
+      "p75_ms": 35.09,
+      "p90_ms": 42.38,
+      "p99_ms": 56.14
     },
     "openapi-serve": {
-      "rps": 4708.2,
-      "p50_ms": 13.46,
-      "p75_ms": 16.97,
-      "p90_ms": 20.35,
-      "p99_ms": 27.03
+      "rps": 3880.28,
+      "p50_ms": 16.34,
+      "p75_ms": 20.7,
+      "p90_ms": 24.96,
+      "p99_ms": 33.08
     },
     "path-params": {
-      "rps": 1837.81,
-      "p50_ms": 34.51,
-      "p75_ms": 43.84,
-      "p90_ms": 52.42,
-      "p99_ms": 67.58
+      "rps": 1683.11,
+      "p50_ms": 37.53,
+      "p75_ms": 47.01,
+      "p90_ms": 56.39,
+      "p99_ms": 72.3
     },
     "thin-dsl": {
-      "rps": 75894.21,
-      "p50_ms": 0.705,
-      "p75_ms": 1.04,
-      "p90_ms": 1.5,
-      "p99_ms": 2.97
+      "rps": 70194.01,
+      "p50_ms": 0.762,
+      "p75_ms": 1.14,
+      "p90_ms": 1.66,
+      "p99_ms": 3.21
     }
   }
 }

@@ -150,7 +150,20 @@ async fn main() {
     // targeting our own listener short-circuits back into the router
     // in-process. All existing HttpClient clones share the same
     // OnceCell, so setting once is enough.
-    http_client_for_handle.set_self_call_handler(router.clone());
+    //
+    // Bench toggle: `RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT=true` skips
+    // the wiring so an A/B measurement can capture the "without 044"
+    // behaviour. Not intended for production — the env var exists so
+    // bench harnesses can measure the actual savings the shortcut
+    // provides.
+    if std::env::var("RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        info!("Self-call short-circuit DISABLED via env var (bench mode)");
+    } else {
+        http_client_for_handle.set_self_call_handler(router.clone());
+    }
     let mut app = router.build_axum_router_from_arc();
 
     // Merge in admin routes when enabled.
