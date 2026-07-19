@@ -1,0 +1,9 @@
+# 042 A/B — no coalescing. Compare rps to `042-single-flight` — the
+# ratio is the single_flight win.
+name: 042-naive
+route: /samples/bench-naive
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

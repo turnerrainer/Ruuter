@@ -1,0 +1,10 @@
+# 043 A/B (TCP): compare to 043-uds — same target DSL, TCP loopback
+# transport. The rps delta between this and 043-uds is the UDS win
+# on the sidecar-hop pattern.
+name: 043-tcp
+route: /samples/bench-tcp-caller
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

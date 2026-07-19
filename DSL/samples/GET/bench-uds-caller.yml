@@ -1,0 +1,14 @@
+# 043 A/B (UDS side): calls bench-target via the `side` alias which
+# the operator maps to /tmp/bench-side.sock in unix_socket_map.
+
+fetch:
+  call: http.get
+  args:
+    url: "http://side/samples/bench-target"
+    timeout: 500
+  result: r
+  next: respond
+
+respond:
+  return: "${r.body}"
+  next: end
