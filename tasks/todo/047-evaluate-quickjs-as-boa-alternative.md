@@ -2,9 +2,27 @@
 
 ## Filed
 
-2026-07-18 — layer 5 of the Boa perf roadmap. **Gated on tasks 036 +
-037 + 045 + 046 completing first.** If those close the gap enough,
-this task is deprioritized or dropped.
+2026-07-18 — originally filed as layer 5 of the Boa perf roadmap,
+gated on 036 + 037 + 045 + 046. **Reprioritised 2026-07-19 after
+v0.6.0 A/B bench data landed.**
+
+**Updated priority: unblock 036 + 045 via QuickJS Send-compatibility.**
+
+036 (per-project BoaContext pool) and 045 (pre-parsed Script cache)
+are both blocked because `boa_engine::Context` and `Script` are
+`!Send` (embedded `Rc` / `Gc`). If `rquickjs`'s Context/Function
+types ARE `Send`, adopting QuickJS unblocks 036 + 045 without
+needing a dedicated JS worker thread pool — which was the only
+identified path to unblock them under Boa.
+
+That reframes 047 from "engine swap for raw speed" (2-5×) into
+"engine swap AND unblock the biggest 036+045 wins in one move"
+(potentially 10-20× compound). Prototype-quality investigation
+becomes higher-value than any single Boa follow-up.
+
+**First-step deliverable**: a 200-line spike that answers
+"Is `rquickjs::Context` Send?" — yes/no unlocks or forecloses
+the whole 036+045 line of work.
 
 ## Problem
 
@@ -71,11 +89,13 @@ Bench (extend task 039):
 
 ## Decision matrix
 
-| After 036+037+045+046 land, if the DSL-heavy bench... | Action |
+Updated 2026-07-19 for the "unblock 036+045" reframing:
+
+| Spike finding | Action |
 |---|---|
-| Meets throughput targets (>10k rps typical DSL) | Stop. Ship. Boa is fine. |
-| Falls short by <2× | Layer 048 (lightweight expression subset for common cases) may be enough. Try that first. |
-| Falls short by >2× | Prototype QuickJS. If bench confirms 2-5× improvement AND scenario tests pass, ship as opt-in. |
+| `rquickjs::Context: Send` — YES | Prototype swap. If bench shows parity+, immediately unblock 036 (per-project pool) via QuickJS. Ship as opt-in engine. |
+| `rquickjs::Context: Send` — NO | Fall back to Boa's dedicated-OS-thread pool path (large refactor of 036). QuickJS still worth benching for raw perf, but the compound win is gone. |
+| Boa 0.20+ makes Context Send | Reprioritise: stay on Boa, just upgrade version. |
 
 ## Risk
 
