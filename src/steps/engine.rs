@@ -7,6 +7,7 @@ use crate::context::ExecutionContext;
 use crate::dsl::loader::HttpDsls;
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
+use crate::scripting::ExpressionRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
     assign, http, iterate, log, return_step, single_flight, state, switch, template, ws_send,
@@ -34,6 +35,12 @@ pub struct StepEngine {
     /// across unrelated DSLs are the operator's responsibility to
     /// avoid by namespacing keys (e.g. `"cache-warmer:${id}"`).
     single_flight: SingleFlightRegistry,
+    /// Task 045 — pre-parsed expression registry (built once at
+    /// boot from the loaded DSL tree). Empty by default; router
+    /// / dispatcher set it via `with_expr_registry()`. Passed to
+    /// every `ExecutionContext` this engine constructs during
+    /// step dispatch.
+    expr_registry: ExpressionRegistry,
 }
 
 #[derive(Debug)]
@@ -55,7 +62,21 @@ impl StepEngine {
             max_iterations: 10_000,
             dsls: None,
             single_flight: SingleFlightRegistry::new(),
+            expr_registry: ExpressionRegistry::default(),
         }
+    }
+
+    /// Task 045 — attach the pre-parsed expression registry the
+    /// scripting backend will consult. Populated from the loaded
+    /// DSL tree at boot; empty otherwise (backends fall back to
+    /// per-eval compilation without missing behaviour).
+    pub fn with_expr_registry(mut self, registry: ExpressionRegistry) -> Self {
+        self.expr_registry = registry;
+        self
+    }
+
+    pub fn expr_registry(&self) -> &ExpressionRegistry {
+        &self.expr_registry
     }
 
     /// Exposed for tests + operator diagnostics — returns a handle

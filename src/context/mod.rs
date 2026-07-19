@@ -1,4 +1,5 @@
 use crate::state::StateStore;
+use crate::scripting::ExpressionRegistry;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -21,6 +22,13 @@ pub struct QuickJsSession {
     // (rquickjs internally uses Arc, so this is defensive.)
     pub context: rquickjs::Context,
     pub runtime: rquickjs::Runtime,
+    /// Task 045 — per-session "have I compiled this expression yet"
+    /// flags, indexed by the id assigned in `ExpressionRegistry`.
+    /// AtomicBool lets us skip the "already compiled?" check
+    /// without a Mutex; actual eval is serialised by the underlying
+    /// `context.with()` scope regardless. Sized to `registry.len()`
+    /// at session construction; `Vec::new()` when registry empty.
+    pub compiled_flags: Vec<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "scripting-quickjs")]
@@ -54,6 +62,13 @@ pub struct ExecutionContext {
     /// is created exactly once per top-level request.
     #[cfg(feature = "scripting-quickjs")]
     quickjs_session: Arc<std::sync::OnceLock<QuickJsSession>>,
+    /// Task 045 — pre-parsed expression registry, built once at
+    /// boot from the loaded DSL tree. Cheap to clone (`Arc` inside).
+    /// The QuickJS backend consults this at session init to bulk-
+    /// compile every registered expression; the Boa backend ignores
+    /// it. Empty registry (default) is fine — backends fall back to
+    /// per-eval compilation.
+    expr_registry: ExpressionRegistry,
 }
 
 impl ExecutionContext {
@@ -76,6 +91,7 @@ impl ExecutionContext {
             traceparent,
             #[cfg(feature = "scripting-quickjs")]
             quickjs_session: Arc::new(std::sync::OnceLock::new()),
+            expr_registry: ExpressionRegistry::default(),
         }
     }
 
@@ -103,6 +119,7 @@ impl ExecutionContext {
             traceparent,
             #[cfg(feature = "scripting-quickjs")]
             quickjs_session: Arc::new(std::sync::OnceLock::new()),
+            expr_registry: ExpressionRegistry::default(),
         }
     }
 
@@ -115,6 +132,22 @@ impl ExecutionContext {
     #[cfg(feature = "scripting-quickjs")]
     pub fn quickjs_session(&self) -> &Arc<std::sync::OnceLock<QuickJsSession>> {
         &self.quickjs_session
+    }
+
+    /// Task 045 — install the pre-parsed expression registry the
+    /// scripting backend will consult. Called by the router when
+    /// constructing per-request contexts; the registry itself was
+    /// built once at boot from the loaded DSL tree.
+    pub fn with_expr_registry(mut self, registry: ExpressionRegistry) -> Self {
+        self.expr_registry = registry;
+        self
+    }
+
+    /// Task 045 — access the pre-parsed expression registry.
+    /// Returns the empty default when nothing was installed (e.g.
+    /// unit-test contexts built via `ExecutionContext::new`).
+    pub fn expr_registry(&self) -> &ExpressionRegistry {
+        &self.expr_registry
     }
 
     /// Builder: attach a WebSocket connection id to this context.

@@ -94,6 +94,23 @@ async fn main() {
     // runtime.
     let shared_http_dsls = Arc::new(loaded.http);
 
+    // Task 045 — pre-parsed expression registry, built once at
+    // boot by walking every HTTP DSL, guard, and trigger DSL for
+    // `${...}` / `$=...=` expressions. Scripting backends (only
+    // QuickJS today) consult this at session init to bulk-compile
+    // every expression; Boa ignores it.
+    let expr_registry = {
+        let mut b = ruuter_on_rust::scripting::registry::Builder::new();
+        b.add_http(&shared_http_dsls);
+        b.add_guards(&loaded.guards);
+        b.add_trigger_dsls(&loaded.triggers);
+        b.freeze()
+    };
+    info!(
+        "Pre-parsed expression registry: {} unique JS expressions",
+        expr_registry.len()
+    );
+
     // Shared step engine — same DSL semantics for HTTP routes and
     // event triggers. Carries the WS registry so `ws_send` works.
     // The HttpClient is bound now; its self-call router handle is
@@ -102,7 +119,8 @@ async fn main() {
     let http_client_for_handle = http_client.clone();
     let mut engine = StepEngine::new(http_client)
         .with_ws_registry(ws_registry.clone())
-        .with_dsls(shared_http_dsls.clone());
+        .with_dsls(shared_http_dsls.clone())
+        .with_expr_registry(expr_registry);
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
     }

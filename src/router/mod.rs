@@ -227,7 +227,8 @@ impl DslRouter {
             project.to_string(),
             self.state.clone(),
         )
-        .with_traceparent(traceparent);
+        .with_traceparent(traceparent)
+        .with_expr_registry(self.engine.expr_registry().clone());
 
         // Run any guards that protect this route, outermost first.
         // A guard returning a >= 400 status short-circuits — its
@@ -800,7 +801,8 @@ impl DslRouter {
             project.to_string(),
             self.state.clone(),
         )
-        .with_connection_id(connection_id.to_string());
+        .with_connection_id(connection_id.to_string())
+        .with_expr_registry(self.engine.expr_registry().clone());
 
         if let Err(e) = self.engine.run(dsl, &context).await {
             warn!(project, connection_id, error = %e, "WS DSL failed");
