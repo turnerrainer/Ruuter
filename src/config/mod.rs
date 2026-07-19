@@ -58,6 +58,57 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub optimistic_concurrency: OptimisticConcurrencyConfig,
+
+    /// Task 043 — outbound Unix-domain-socket transport aliases.
+    ///
+    /// Maps `http://<host>/...` URLs whose host matches a key to a
+    /// UDS transport hitting the mapped socket path. Lets DSL
+    /// authors keep writing `http://resql/query` (no protocol
+    /// change) while the operator swings the transport from TCP
+    /// loopback to a Unix socket via config only. The `unix://`
+    /// URL scheme is also supported directly, but the alias form
+    /// is preferred because it keeps DSLs portable across
+    /// TCP-only and UDS-enabled deployments.
+    ///
+    /// Example:
+    /// ```yaml
+    /// unix_socket_map:
+    ///   resql:  "/var/run/ruuter/resql.sock"
+    ///   tim:    "/var/run/ruuter/tim.sock"
+    /// ```
+    #[serde(default)]
+    pub unix_socket_map: HashMap<String, PathBuf>,
+
+    /// Task 043 — inbound listeners. When present, this list REPLACES
+    /// the default single TCP listener on `port`. Each listener spawns
+    /// its own accept loop; the same axum Router serves all of them.
+    ///
+    /// Use case: expose external traffic on TCP and internal /admin
+    /// or fast-path traffic on a Unix socket, without a separate
+    /// process. When absent, the framework falls back to a single
+    /// TCP listener bound to `0.0.0.0:<port>` (0.4.0 behaviour).
+    #[serde(default)]
+    pub listeners: Vec<ListenerConfig>,
+}
+
+/// One inbound-listener binding. Exactly one of `bind` or `unix` must
+/// be set; both-or-neither is a config error caught at boot.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListenerConfig {
+    /// Optional label surfaced in startup logs — helps operators
+    /// tell listeners apart at a glance. Defaults to the transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// TCP bind spec (`host:port`). Mutually exclusive with `unix`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
+
+    /// Unix-socket path. Mutually exclusive with `bind`. The path is
+    /// removed if it exists before binding (stale sockets from a
+    /// crashed prior instance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix: Option<PathBuf>,
 }
 
 /// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag
@@ -305,6 +356,8 @@ impl Default for AppConfig {
             idempotency: IdempotencyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
+            unix_socket_map: HashMap::new(),
+            listeners: Vec::new(),
         }
     }
 }

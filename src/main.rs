@@ -151,23 +151,110 @@ async fn main() {
         app = app.merge(supervisor_arc.clone().admin_router());
     }
 
-    // Start server
-    let addr = format!("0.0.0.0:{}", config.port);
-    info!("Server listening on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        });
-
-    axum::serve(listener, app)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Server error: {}", e);
-            std::process::exit(1);
-        });
+    // Task 043 — start server(s). When `config.listeners` is empty,
+    // fall back to the 0.4.0 single-TCP-listener behaviour on
+    // `config.port`. When non-empty, that config REPLACES the
+    // default: every listener spawns its own accept loop; the same
+    // axum Router serves all of them.
+    if config.listeners.is_empty() {
+        let addr = format!("0.0.0.0:{}", config.port);
+        info!("Server listening on {}", addr);
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|e| {
+                error!("Failed to bind to {}: {}", addr, e);
+                std::process::exit(1);
+            });
+        axum::serve(listener, app)
+            .await
+            .unwrap_or_else(|e| {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            });
+    } else {
+        // Multi-listener mode. Each listener runs axum::serve on its
+        // own task; the process stays alive until the first listener
+        // exits (which normally never happens). Any bind failure at
+        // startup is fatal.
+        let mut handles = Vec::new();
+        for (i, l) in config.listeners.iter().enumerate() {
+            let label = l.name.clone().unwrap_or_else(|| format!("listener-{}", i));
+            let app = app.clone();
+            match (&l.bind, &l.unix) {
+                (Some(_), Some(_)) => {
+                    error!("listener {}: exactly one of bind/unix required, both set", label);
+                    std::process::exit(1);
+                }
+                (None, None) => {
+                    error!("listener {}: exactly one of bind/unix required, neither set", label);
+                    std::process::exit(1);
+                }
+                (Some(bind), None) => {
+                    info!("listener {} on TCP {}", label, bind);
+                    let listener = tokio::net::TcpListener::bind(bind)
+                        .await
+                        .unwrap_or_else(|e| {
+                            error!("listener {}: bind {} failed: {}", label, bind, e);
+                            std::process::exit(1);
+                        });
+                    handles.push(tokio::spawn(async move {
+                        if let Err(e) = axum::serve(listener, app).await {
+                            error!("listener {}: {}", label, e);
+                        }
+                    }));
+                }
+                (None, Some(path)) => {
+                    // Remove stale socket from prior instance.
+                    if path.exists() {
+                        if let Err(e) = std::fs::remove_file(path) {
+                            error!("listener {}: cannot clear stale socket {}: {}", label, path.display(), e);
+                            std::process::exit(1);
+                        }
+                    }
+                    info!("listener {} on UDS {}", label, path.display());
+                    let listener = tokio::net::UnixListener::bind(path)
+                        .unwrap_or_else(|e| {
+                            error!("listener {}: bind {} failed: {}", label, path.display(), e);
+                            std::process::exit(1);
+                        });
+                    // axum::serve is TcpListener-only; run a per-
+                    // connection hyper HTTP/1 accept loop instead.
+                    // The Router is `Clone + Service`, so each
+                    // connection gets its own service instance.
+                    handles.push(tokio::spawn(async move {
+                        loop {
+                            let (stream, _addr) = match listener.accept().await {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    error!("listener {}: accept error: {}", label, e);
+                                    continue;
+                                }
+                            };
+                            let app = app.clone();
+                            tokio::spawn(async move {
+                                let io = hyper_util::rt::TokioIo::new(stream);
+                                let service = hyper_util::service::TowerToHyperService::new(app);
+                                if let Err(e) = hyper::server::conn::http1::Builder::new()
+                                    .serve_connection(io, service)
+                                    .await
+                                {
+                                    tracing::debug!("uds conn: {}", e);
+                                }
+                            });
+                        }
+                    }));
+                }
+            }
+        }
+        // Wait for any listener to exit (normally: never). Selecting
+        // on all handles rather than joining means one crashing
+        // listener brings the process down instead of silently
+        // dropping traffic.
+        let (result, _idx, _rest) = futures::future::select_all(handles).await;
+        if let Err(e) = result {
+            error!("listener task panicked: {}", e);
+        }
+    }
 
     observability::shutdown(tracer_provider);
 }
