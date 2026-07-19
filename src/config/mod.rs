@@ -79,6 +79,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub unix_socket_map: HashMap<String, PathBuf>,
 
+    /// Task 049 — HTTP version for outbound UDS calls.
+    /// `Http1` (default) uses HTTP/1.1 with keep-alive (task 050).
+    /// `Http2` uses h2c (HTTP/2 cleartext) with stream multiplexing
+    /// on a single connection — significantly higher throughput
+    /// under concurrent-request load. Sidecars must speak h2c to
+    /// benefit.
+    #[serde(default)]
+    pub uds_http_version: HttpVersion,
+
     /// Task 043 — inbound listeners. When present, this list REPLACES
     /// the default single TCP listener on `port`. Each listener spawns
     /// its own accept loop; the same axum Router serves all of them.
@@ -109,6 +118,23 @@ pub struct ListenerConfig {
     /// crashed prior instance).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unix: Option<PathBuf>,
+
+    /// Task 049 — accept HTTP/2 cleartext (h2c) on this listener.
+    /// Default false = HTTP/1.1 only. When true, connections use
+    /// hyper's http2 server builder instead of http1. Recommended for
+    /// UDS listeners paired with h2c outbound clients.
+    #[serde(default)]
+    pub http2: bool,
+}
+
+/// Task 049 — HTTP version selector for outbound calls. Serialised
+/// as lowercase strings so YAML config is natural (`http1`, `http2`).
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HttpVersion {
+    #[default]
+    Http1,
+    Http2,
 }
 
 /// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag
@@ -357,6 +383,7 @@ impl Default for AppConfig {
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
             unix_socket_map: HashMap::new(),
+            uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
         }
     }

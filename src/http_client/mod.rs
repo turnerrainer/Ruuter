@@ -174,7 +174,11 @@ impl HttpClient {
             allowed_url_prefixes: config.internal_requests.allowed_urls.clone(),
             allowed_ip_hosts: config.internal_requests.allowed_ips.clone(),
             unix_socket_map: Arc::new(config.unix_socket_map.clone()),
-            uds_pool: UdsPool::default(),
+            uds_pool: UdsPool::with_version(
+                std::time::Duration::from_secs(30),
+                32,
+                config.uds_http_version.into(),
+            ),
             self_origins: Arc::new(SelfOrigins::from_config(config)),
             router_handle: Arc::new(OnceCell::new()),
         }
