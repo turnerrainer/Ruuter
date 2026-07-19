@@ -3,6 +3,33 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+/// Task 036 — per-request QuickJS session cache. Holds the Runtime
+/// + Context pair together so the Runtime outlives the Context (the
+/// Context internally borrows the Runtime). First `evaluate()` call
+/// on a request lazily initialises the session; subsequent evaluates
+/// in the same request reuse it, avoiding per-call construction of
+/// Runtime + Context + JSON binding roundtrip.
+///
+/// Only available under `scripting-quickjs` because Boa's `Context`
+/// is `!Send + !Sync` and cannot cross the `.await` boundaries this
+/// field lives across.
+#[cfg(feature = "scripting-quickjs")]
+pub struct QuickJsSession {
+    // Runtime MUST be declared before Context so drop order runs
+    // Context first, then Runtime. Otherwise Context's internal
+    // reference to Runtime would dangle briefly during drop.
+    // (rquickjs internally uses Arc, so this is defensive.)
+    pub context: rquickjs::Context,
+    pub runtime: rquickjs::Runtime,
+}
+
+#[cfg(feature = "scripting-quickjs")]
+impl std::fmt::Debug for QuickJsSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuickJsSession").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
     variables: Arc<RwLock<HashMap<String, Value>>>,
@@ -21,6 +48,12 @@ pub struct ExecutionContext {
     /// request when present, otherwise generated at request entry.
     /// http_client forwards it on every outbound call by default.
     traceparent: Option<String>,
+    /// Task 036 — lazy per-request QuickJS session. All clones of
+    /// this context (e.g. `iterate.do` sub-runs, `template` step
+    /// invocations) share the same OnceLock via Arc, so the runtime
+    /// is created exactly once per top-level request.
+    #[cfg(feature = "scripting-quickjs")]
+    quickjs_session: Arc<std::sync::OnceLock<QuickJsSession>>,
 }
 
 impl ExecutionContext {
@@ -41,6 +74,8 @@ impl ExecutionContext {
             state: StateStore::new(),
             connection_id: None,
             traceparent,
+            #[cfg(feature = "scripting-quickjs")]
+            quickjs_session: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -66,7 +101,20 @@ impl ExecutionContext {
             state,
             connection_id: None,
             traceparent,
+            #[cfg(feature = "scripting-quickjs")]
+            quickjs_session: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Task 036 — accessor for the per-request QuickJS session
+    /// slot. Every clone of this context shares the same
+    /// `Arc<OnceLock>`, so `get_or_init`-ing on any clone populates
+    /// the slot for all of them. Returns the underlying `Arc` so
+    /// the caller (the scripting backend) can `get_or_init` without
+    /// re-locking the ExecutionContext.
+    #[cfg(feature = "scripting-quickjs")]
+    pub fn quickjs_session(&self) -> &Arc<std::sync::OnceLock<QuickJsSession>> {
+        &self.quickjs_session
     }
 
     /// Builder: attach a WebSocket connection id to this context.
