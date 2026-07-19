@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yml = "0.0.12"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
-boa_engine = "0.19"
+boa_engine = { version = "0.19", optional = true }
 config = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -40,7 +40,7 @@ indexmap = { version = "2.5", features = ["serde"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "url"] }
 url = "2.5"
 rand = "0.8"
-rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures"] }
+rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures", "chrono"] }
 sha2 = "0.10"
 
 [dev-dependencies]
@@ -58,9 +58,12 @@ path = "src/bin/dsl_lint.rs"
 name = "dsl-test"
 path = "src/bin/dsl_test.rs"
 
-# Task 047 spike (behind feature) — evaluate rquickjs Send-compat.
-# When feature "spike-quickjs" enabled, includes rquickjs. Not
-# wired into the actual ScriptEngine — this is a marker-check spike.
+# Task 051 — pluggable ScriptEngine backends. Exactly one of
+# `scripting-boa` (default) or `scripting-quickjs` must be enabled.
+# The 047 spike feature is retained for regression-style testing
+# of Send-compatibility invariants.
 [features]
-default = []
+default = ["scripting-boa"]
+scripting-boa = ["dep:boa_engine"]
+scripting-quickjs = ["dep:rquickjs"]
 spike-quickjs = ["dep:rquickjs"]

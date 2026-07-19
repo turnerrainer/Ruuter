@@ -48,6 +48,7 @@
 - [Optimistic concurrency](./framework/optimistic-concurrency.md)
 - [Traceparent & OpenTelemetry](./framework/tracing.md)
 - [Script runtime limits](./framework/script-limits.md)
+- [Scripting engines (Boa vs QuickJS)](./framework/scripting-engines.md)
 - [Default response headers](./framework/default-headers.md)
 
 # Testing

@@ -1,33 +1,76 @@
-use crate::context::ExecutionContext;
-use crate::{Result, RuuterError};
-use boa_engine::{Context as BoaContext, JsValue, Source};
+//! Scripting engine — evaluate `${expr}` and `$=expr=` inside DSL values.
+//!
+//! Task 051 split this module into an engine-agnostic shell plus two
+//! feature-gated backends. Exactly one backend is compiled into any
+//! given build via mutually-exclusive Cargo features:
+//!
+//! - `scripting-boa` (default) — Boa 0.19, pure Rust, no C deps.
+//!   `!Send` internals block per-request context pooling. Best for
+//!   small/simple DSLs that need zero-CVE-surface JS.
+//! - `scripting-quickjs` — rquickjs (parallel+futures features),
+//!   thin wrapper over the QuickJS C engine. Send-compatible, so
+//!   per-request pools (task 036) and pre-parsed script cache
+//!   (task 045) become straightforward. ~2-5× faster on typical
+//!   workloads. Adds ~500 KB binary size.
+//!
+//! Public API is identical on both: `ScriptEngine::new()`,
+//! `.evaluate(input, ctx)`, `.evaluate_tracked(input, ctx)`,
+//! `install_default_limits()`, `boa_context_created_count()`. DSL
+//! authors and framework callers don't need to know which backend
+//! is running.
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static LINE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
+// ── Compile-time feature check ────────────────────────────────────
+// Exactly one backend must be enabled — otherwise there is no
+// `ScriptEngine` to construct and every caller fails to compile.
+// Emit a clear error rather than a spray of unresolved-symbol
+// noise.
 
-/// Task 037 metric — count of BoaContext constructions since process
-/// start. Only bumped when `ScriptEngine::evaluate()` fell OFF the
-/// literal fast-path and had to build an engine. Tests use this to
-/// verify Boa is not invoked for expression-free values; future
-/// observability code can surface it as a Prometheus counter.
-static BOA_CONTEXT_CREATED_COUNT: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "scripting-boa", feature = "scripting-quickjs"))]
+compile_error!(
+    "features `scripting-boa` and `scripting-quickjs` are mutually exclusive — enable one, not both"
+);
+#[cfg(not(any(feature = "scripting-boa", feature = "scripting-quickjs")))]
+compile_error!(
+    "no scripting backend enabled — pass `--features scripting-boa` or `--features scripting-quickjs`"
+);
 
-/// Return the total number of times a `BoaContext` has been constructed
-/// by `ScriptEngine::evaluate()` since process start. Public for tests.
+// ── Engine-agnostic helpers ───────────────────────────────────────
+
+pub(crate) static LINE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
+
+/// Task 037 metric — count of native JS contexts constructed since
+/// process start. Both backends bump the same counter so downstream
+/// tooling (tests, ops metrics) works uniformly.
+///
+/// Only bumped when `evaluate()` fell OFF the literal fast-path and
+/// had to build an engine. Tests use this to verify the engine is
+/// not invoked for expression-free values.
+static CONTEXT_CREATED_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn bump_context_created() {
+    CONTEXT_CREATED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Historical name for the counter — kept for external test binaries
+/// that predate the feature-split. Returns the same underlying
+/// number regardless of which backend is running.
 pub fn boa_context_created_count() -> u64 {
-    BOA_CONTEXT_CREATED_COUNT.load(Ordering::Relaxed)
+    CONTEXT_CREATED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Task 037 — cheap scan for `${...}` or whole-string `$=...=$`
-/// expressions anywhere in the value tree. When this returns `false`,
-/// `evaluate()` skips Boa entirely and returns the input unchanged.
-/// Conservative: any `${` substring triggers the slow path, even if
-/// the braces aren't balanced (the slow path handles that correctly).
-fn has_expressions(v: &Value) -> bool {
+/// expressions anywhere in the value tree. When this returns
+/// `false`, `evaluate()` skips the JS engine entirely and returns
+/// the input unchanged. Conservative: any `${` substring triggers
+/// the slow path, even if the braces aren't balanced (the slow path
+/// handles that correctly).
+pub(crate) fn has_expressions(v: &Value) -> bool {
     match v {
         Value::String(s) => string_has_expressions(s),
         Value::Object(m) => m.values().any(has_expressions),
@@ -37,16 +80,14 @@ fn has_expressions(v: &Value) -> bool {
 }
 
 fn string_has_expressions(s: &str) -> bool {
-    // `${` anywhere — could be an expression opener. Balanced-brace
-    // detection happens in the slow path.
     if s.contains("${") {
         return true;
     }
-    // Whole-string `$= expr =` line pattern (LINE_PATTERN regex).
-    // The regex is `\$=(.+)=$` where `$` anchors to end-of-string —
-    // so the closing delimiter is a single `=`, NOT `=$`. Mirror the
-    // exact regex check to avoid semantic drift with the slow path.
-    // Cheap pre-check first (most strings don't start with `$=`).
+    // Whole-string `$= expr =` line pattern. The regex is
+    // `\$=(.+)=$` where `$` anchors to end-of-string — so the
+    // closing delimiter is a single `=`, NOT `=$`. Mirror the exact
+    // regex check to avoid semantic drift with the slow path. Cheap
+    // pre-check first (most strings don't start with `$=`).
     if !s.starts_with("$=") {
         return false;
     }
@@ -57,10 +98,11 @@ fn string_has_expressions(s: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Find every balanced `${...}` segment in `s`. Returns (start, end, inner)
-/// where `start..end` covers the whole `${...}` and `inner` is the script
-/// body between braces. Properly nests on inner `{...}` (JS object literals).
-fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
+/// Find every balanced `${...}` segment in `s`. Returns (start, end,
+/// inner) where `start..end` covers the whole `${...}` and `inner` is
+/// the script body between braces. Properly nests on inner `{...}`
+/// (JS object literals) and skips `${` inside string literals.
+pub(crate) fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
     let bytes = s.as_bytes();
     let n = bytes.len();
     let mut out = Vec::new();
@@ -110,6 +152,8 @@ fn find_script_segments(s: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
+// ── Limits (engine-agnostic) ──────────────────────────────────────
+
 #[derive(Clone, Copy, Debug)]
 pub struct ScriptLimits {
     pub max_loop_iterations: u64,
@@ -125,228 +169,25 @@ impl Default for ScriptLimits {
     }
 }
 
-static DEFAULT_LIMITS: once_cell::sync::OnceCell<ScriptLimits> = once_cell::sync::OnceCell::new();
+pub(crate) static DEFAULT_LIMITS: once_cell::sync::OnceCell<ScriptLimits> =
+    once_cell::sync::OnceCell::new();
 
-/// Install process-wide default limits. Called once at boot from `main` with
-/// the operator's `scripting` config. Subsequent calls are ignored — the
-/// intent is a boot-time contract, not a runtime knob.
+/// Install process-wide default limits. Called once at boot from
+/// `main` with the operator's `scripting` config. Subsequent calls
+/// are ignored — the intent is a boot-time contract, not a runtime
+/// knob.
 pub fn install_default_limits(limits: ScriptLimits) {
     let _ = DEFAULT_LIMITS.set(limits);
 }
 
-pub struct ScriptEngine {
-    limits: ScriptLimits,
-}
+// ── Backend selection ────────────────────────────────────────────
 
-impl ScriptEngine {
-    pub fn new() -> Self {
-        let limits = DEFAULT_LIMITS.get().copied().unwrap_or_default();
-        Self { limits }
-    }
+#[cfg(feature = "scripting-boa")]
+pub mod boa;
+#[cfg(feature = "scripting-boa")]
+pub use boa::BoaScriptEngine as ScriptEngine;
 
-    pub fn with_limits(limits: ScriptLimits) -> Self {
-        Self { limits }
-    }
-
-    /// Evaluate `input` against `context`. Builds a single Boa context for the
-    /// duration of this call and reuses it across every `${...}` / `$= expr =`
-    /// expression found inside `input` (recursing through objects and arrays).
-    ///
-    /// Task 037 fast-path: if `input` (recursively) contains no `${...}` or
-    /// whole-string `$= expr =` expressions, return `input.clone()` without
-    /// constructing a Boa context. Saves ~500 µs of context construction
-    /// + ~500-1000 µs of `setup_bindings()` for every literal-only DSL
-    /// value. Correctness: for expression-free inputs, the pre-037
-    /// engine's evaluation was already the identity function — the
-    /// fast-path just skips the identity work.
-    pub fn evaluate(&self, input: &Value, context: &ExecutionContext) -> Result<Value> {
-        self.evaluate_tracked(input, context).map(|(v, _)| v)
-    }
-
-    /// Same as [`evaluate`], but also returns whether the Boa engine was
-    /// actually invoked. Used by task 037 tests to verify the fast-path
-    /// fires when expected. Public because process-global counters race
-    /// with parallel test invocations — a per-call return value is the
-    /// only reliable observation.
-    pub fn evaluate_tracked(
-        &self,
-        input: &Value,
-        context: &ExecutionContext,
-    ) -> Result<(Value, bool)> {
-        if !has_expressions(input) {
-            return Ok((input.clone(), false));
-        }
-
-        BOA_CONTEXT_CREATED_COUNT.fetch_add(1, Ordering::Relaxed);
-
-        let mut boa = BoaContext::default();
-        boa.runtime_limits_mut()
-            .set_loop_iteration_limit(self.limits.max_loop_iterations);
-        boa.runtime_limits_mut()
-            .set_recursion_limit(self.limits.max_stack_size);
-        setup_bindings(&mut boa, context)?;
-        let out = evaluate_with(input, &mut boa)?;
-        Ok((out, true))
-    }
-}
-
-impl Default for ScriptEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-fn evaluate_with(input: &Value, boa: &mut BoaContext) -> Result<Value> {
-    match input {
-        Value::String(s) => evaluate_string(s, boa),
-        Value::Object(map) => {
-            let mut result = serde_json::Map::with_capacity(map.len());
-            for (k, v) in map {
-                result.insert(k.clone(), evaluate_with(v, boa)?);
-            }
-            Ok(Value::Object(result))
-        }
-        Value::Array(arr) => {
-            let mut result = Vec::with_capacity(arr.len());
-            for v in arr {
-                result.push(evaluate_with(v, boa)?);
-            }
-            Ok(Value::Array(result))
-        }
-        _ => Ok(input.clone()),
-    }
-}
-
-fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
-    // Whole-string single-expression form: `${...}` — preserve native type.
-    let segs = find_script_segments(s);
-    if segs.len() == 1 {
-        let (start, end, ref inner) = segs[0];
-        if start == 0 && end == s.len() {
-            return execute_js(inner, boa);
-        }
-    }
-    if let Some(caps) = LINE_PATTERN.captures(s) {
-        if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], boa);
-        }
-    }
-
-    // Mixed string — interpolate every `${...}` and stringify the result.
-    let mut last_err: Option<RuuterError> = None;
-    let mut out = String::with_capacity(s.len());
-    let mut cursor = 0usize;
-    for (start, end, inner) in &segs {
-        out.push_str(&s[cursor..*start]);
-        match execute_js(inner, boa) {
-            Ok(Value::String(s2)) => out.push_str(&s2),
-            Ok(other) => out.push_str(&other.to_string()),
-            Err(e) => {
-                if last_err.is_none() {
-                    last_err = Some(e);
-                }
-                out.push_str(&s[*start..*end]);
-            }
-        }
-        cursor = *end;
-    }
-    out.push_str(&s[cursor..]);
-
-    if let Some(e) = last_err {
-        return Err(e);
-    }
-    Ok(Value::String(out))
-}
-
-fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
-    let source = Source::from_bytes(script);
-    let result = boa.eval(source)
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
-    js_value_to_json(&result, boa)
-}
-
-fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()> {
-    let mut incoming = HashMap::new();
-    incoming.insert("params", Value::Object(
-        context.request_query().iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    ));
-    incoming.insert("body", Value::Object(
-        context.request_body().iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    ));
-    incoming.insert("headers", Value::Object(
-        context.request_headers().iter()
-            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-            .collect()
-    ));
-    incoming.insert("connection_id", match context.connection_id() {
-        Some(id) => Value::String(id.to_string()),
-        None => Value::Null,
-    });
-
-    let incoming_json = serde_json::to_string(&incoming)?;
-    boa.eval(Source::from_bytes(&format!("var incoming = {};", incoming_json)))
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
-
-    for (key, value) in context.get_all_variables() {
-        let value_json = serde_json::to_string(&value)?;
-        boa.eval(Source::from_bytes(&format!("var {} = {};", key, value_json)))
-            .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
-    }
-
-    Ok(())
-}
-
-fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {
-    if value.is_null() || value.is_undefined() {
-        return Ok(Value::Null);
-    }
-
-    if let Some(b) = value.as_boolean() {
-        return Ok(Value::Bool(b));
-    }
-
-    if let Some(n) = value.as_number() {
-        if n.fract() == 0.0 && n.is_finite() {
-            return Ok(Value::Number(serde_json::Number::from(n as i64)));
-        }
-        return Ok(Value::Number(
-            serde_json::Number::from_f64(n)
-                .ok_or_else(|| RuuterError::ScriptEvaluation("Invalid number".to_string()))?
-        ));
-    }
-
-    if let Some(s) = value.as_string() {
-        return Ok(Value::String(s.to_std_string_escaped()));
-    }
-
-    // Arrays first — Boa's `to_json` returns Value::Object({}) for top-
-    // level JS arrays. Iterate via length + indexed access to preserve
-    // the array shape (including the empty case).
-    if let Some(obj) = value.as_object() {
-        if obj.is_array() {
-            let length_val = obj
-                .get(boa_engine::js_string!("length"), boa)
-                .map_err(|e| RuuterError::ScriptEvaluation(format!("array length: {}", e)))?;
-            let length = length_val.as_number().unwrap_or(0.0) as usize;
-            let mut arr = Vec::with_capacity(length);
-            for i in 0..length {
-                let key = boa_engine::js_string!(i.to_string());
-                let item = obj
-                    .get(key, boa)
-                    .map_err(|e| RuuterError::ScriptEvaluation(format!("array[{}]: {}", i, e)))?;
-                arr.push(js_value_to_json(&item, boa)?);
-            }
-            return Ok(Value::Array(arr));
-        }
-    }
-
-    let json_str = value.to_json(boa)
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?
-        .to_string();
-    serde_json::from_str(&json_str)
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))
-}
+#[cfg(feature = "scripting-quickjs")]
+pub mod quickjs;
+#[cfg(feature = "scripting-quickjs")]
+pub use quickjs::QuickJsScriptEngine as ScriptEngine;
