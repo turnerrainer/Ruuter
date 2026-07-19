@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-07-19
+
+### Added
+
+- **Task 049 — HTTP/2 cleartext (h2c) over UDS**, opt-in via
+  `uds_http_version: http2` (outbound) and `listeners: [..., {http2: true}]`
+  (inbound). Both sides must speak the same version; there's no ALPN
+  over cleartext. Client and server implementations both compile
+  against hyper's http2 builders; 6 new integration tests verify
+  round-trip, backwards-compat with h1, mismatched-version failures,
+  and 32-way concurrent multiplexing.
+
+### Perf
+
+Measured A/B (3-run median, laptop, cross-instance sidecar hop):
+
+| Version | rps | p50 |
+|---|---:|---:|
+| h1 pool | 5,121 | 12.4 ms |
+| h2c | 4,910 | 13.0 ms |
+
+**h2c is ~4% slower on this workload.** Honest finding: h2's
+multiplexing win only materialises when a single caller fans out
+many concurrent streams to the SAME target. The current bench
+pattern makes one main→side call per inbound request; h1-with-pool
+and h2-with-one-stream-per-request perform equivalently, with h2
+losing on per-frame overhead.
+
+Once task 040 (`parallel_http`) lands, h2's one-connection-N-streams
+should beat h1's N-pooled-connections by 3-5× on the fan-out pattern.
+Book chapter documents this and recommends the h1 default until 040
+is available. `uds_http_version: http2` is opt-in for operators
+already using fan-out via `iterate` around `http.<verb>`.
+
 ## [0.6.1] - 2026-07-19
 
 ### Added
