@@ -96,7 +96,10 @@ async fn main() {
 
     // Shared step engine — same DSL semantics for HTTP routes and
     // event triggers. Carries the WS registry so `ws_send` works.
+    // The HttpClient is bound now; its self-call router handle is
+    // wired further down, once the DslRouter Arc is available.
     let http_client = HttpClient::new(&config);
+    let http_client_for_handle = http_client.clone();
     let mut engine = StepEngine::new(http_client)
         .with_ws_registry(ws_registry.clone())
         .with_dsls(shared_http_dsls.clone());
@@ -135,15 +138,20 @@ async fn main() {
     // Build router (which internally generates the OpenAPI spec from the
     // HTTP DSL tree and serves it at GET /_/openapi.json). Shares the
     // same Arc<HttpDsls> the engine uses for template lookup.
-    let router = DslRouter::from_arc(
+    let router = Arc::new(DslRouter::from_arc(
         shared_http_dsls,
         loaded.guards,
         config.clone(),
         state,
         ws_registry,
         engine.clone(),
-    );
-    let mut app = router.build_axum_router();
+    ));
+    // Task 044 — hand the router handle to HttpClient so http.<verb>
+    // targeting our own listener short-circuits back into the router
+    // in-process. All existing HttpClient clones share the same
+    // OnceCell, so setting once is enough.
+    http_client_for_handle.set_self_call_handler(router.clone());
+    let mut app = router.build_axum_router_from_arc();
 
     // Merge in admin routes when enabled.
     if supervisor::admin_enabled(&config) {

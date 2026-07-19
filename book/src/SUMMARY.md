@@ -41,6 +41,7 @@
 - [CORS](./framework/cors.md)
 - [SSRF allow-list](./framework/ssrf.md)
 - [Inter-service transport (UDS)](./framework/inter-service-transport.md)
+- [Self-call short-circuit](./framework/self-call-optimization.md)
 - [Method allow-list](./framework/methods.md)
 - [Response size cap](./framework/size-cap.md)
 - [Upstream status filter](./framework/status-filter.md)
