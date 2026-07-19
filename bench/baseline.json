@@ -1,0 +1,53 @@
+{
+  "captured_at": "2026-07-19T00:02:44Z",
+  "git_sha": "e3906fc",
+  "version": "0.5.0",
+  "kernel": "Linux 6.8.0-124-generic",
+  "cpus": 8,
+  "runs_median": 3,
+  "note": "regenerate via bench/refresh-baseline.sh after intentional perf changes",
+  "scenarios": {
+    "framework-baseline": {
+      "rps": 106421.91,
+      "p50_ms": 0.473,
+      "p75_ms": 0.727,
+      "p90_ms": 1.09,
+      "p99_ms": 2.3
+    },
+    "guarded": {
+      "rps": 1130.1,
+      "p50_ms": 56.13,
+      "p75_ms": 70.91,
+      "p90_ms": 83.94,
+      "p99_ms": 108.76
+    },
+    "js-heavy": {
+      "rps": 2562.79,
+      "p50_ms": 24.75,
+      "p75_ms": 31.35,
+      "p90_ms": 37.36,
+      "p99_ms": 48.59
+    },
+    "openapi-serve": {
+      "rps": 4708.2,
+      "p50_ms": 13.46,
+      "p75_ms": 16.97,
+      "p90_ms": 20.35,
+      "p99_ms": 27.03
+    },
+    "path-params": {
+      "rps": 1837.81,
+      "p50_ms": 34.51,
+      "p75_ms": 43.84,
+      "p90_ms": 52.42,
+      "p99_ms": 67.58
+    },
+    "thin-dsl": {
+      "rps": 75894.21,
+      "p50_ms": 0.705,
+      "p75_ms": 1.04,
+      "p90_ms": 1.5,
+      "p99_ms": 2.97
+    }
+  }
+}

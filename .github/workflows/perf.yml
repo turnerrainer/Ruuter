@@ -1,0 +1,84 @@
+name: perf
+
+# Manual-dispatch only for now. GitHub-hosted runners are noisy on tail
+# percentiles; auto-running this on every push produces false regression
+# reports. When a dedicated bare-metal runner is available, switch this
+# to a `push` trigger against `dev` and drop the workflow_dispatch note.
+on:
+  workflow_dispatch:
+    inputs:
+      rps_tolerance:
+        description: "max fraction below baseline rps before failure (e.g. 0.15 = 15%)"
+        default: "0.25"
+        required: false
+      runs:
+        description: "how many bench passes to take median of"
+        default: "3"
+        required: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install wrk + jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wrk jq python3-yaml
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: perf-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            perf-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --bin ruuter-on-rust
+
+      - name: Run bench suite (median of ${{ inputs.runs }} runs)
+        run: |
+          RUNS=${{ inputs.runs || 3 }}
+          mkdir -p bench/ci-runs
+          for i in $(seq 1 "$RUNS"); do
+            bench/run.sh --skip-build --output "bench/ci-runs/run-$i.json"
+          done
+          # Merge with median
+          python3 - <<'PY'
+          import json, glob, statistics
+          runs = [json.load(open(f)) for f in sorted(glob.glob("bench/ci-runs/run-*.json"))]
+          names = set()
+          for r in runs:
+              names.update(r["scenarios"])
+          merged = {"scenarios": {}, "runs": len(runs), "captured_at": runs[-1]["captured_at"], "git_sha": runs[-1]["git_sha"]}
+          for n in sorted(names):
+              m = {"rps": [], "p50_ms": [], "p75_ms": [], "p90_ms": [], "p99_ms": []}
+              for r in runs:
+                  s = r["scenarios"].get(n) or {}
+                  for k in m:
+                      if k in s: m[k].append(s[k])
+              merged["scenarios"][n] = {k: round(statistics.median(v), 3) for k, v in m.items() if v}
+          json.dump(merged, open("bench/results.json", "w"), indent=2)
+          PY
+
+      - name: Compare against baseline
+        run: |
+          bench/compare.py \
+            --baseline bench/baseline.json \
+            --current bench/results.json \
+            --rps-tolerance ${{ inputs.rps_tolerance || 0.25 }} \
+            --lat-warn-only
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: |
+            bench/results.json
+            bench/ci-runs/

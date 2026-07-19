@@ -1,0 +1,11 @@
+# assign + nested object literal + Date.now() — every request hits Boa
+# for object construction and the timestamp. Task 037 does NOT help
+# here (Date.now() is a runtime binding); this scenario tracks the
+# Boa-slow-path baseline.
+name: js-heavy
+route: /samples/variables/complex-object
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

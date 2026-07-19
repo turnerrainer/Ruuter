@@ -1,0 +1,15 @@
+# Guard chain: samples/protected.guard.yml runs before samples/protected/data.
+# Exercises the guard-resolution + guard-DSL evaluation path on every
+# request. Bearer token supplied so the guard passes.
+name: guarded
+route: /samples/protected/data
+method: GET
+headers:
+  # Token length must be ≥20 chars for the sample protected.guard.yml
+  # to admit the request. Shorter tokens exercise the guard's REJECT
+  # path (which is a valid but different measurement).
+  Authorization: "Bearer bench-token-01234567890abcdef"
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s
