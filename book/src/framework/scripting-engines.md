@@ -26,17 +26,17 @@ Exactly one of `scripting-boa` (default) or `scripting-quickjs` must be enabled.
 | ECMAScript compat | High | High (same corpus in Ruuter's DSL-tests passes on both) |
 | CVE surface | Rust safety net | C library, non-zero |
 
-### Measured deltas (v0.6.5, 3-run median, laptop)
+### Measured deltas (v0.6.6, 3-run median, laptop)
 
-| Scenario | Boa | QuickJS + 036 | Δ rps | Δ p50 |
-|---|---:|---:|---|---|
-| guarded (guard + Boa auth check + main DSL) | 1,401 rps | **6,118 rps** | **+337%** | -78% |
-| js-heavy (Boa `Date.now()` + object literal) | 3,245 rps | **7,906 rps** | **+143%** | -60% |
-| path-params (switch + Boa condition eval) | 2,098 rps | **8,486 rps** | **+305%** | -75% |
-| thin-dsl (037 fast-path — no engine call) | 77,777 rps | 80,027 rps | +3% (parity) | -3% |
-| framework-baseline (no DSL, no engine) | ~95k rps | ~95k rps | parity | parity |
+| Scenario | Boa | **QuickJS + 036 + 045** | Δ vs Boa |
+|---|---:|---:|---|
+| guarded (guard + auth check + main DSL) | 1,401 rps | **6,955 rps** | **+396%** (5×) |
+| js-heavy (`Date.now()` + object literal) | 3,245 rps | **7,735 rps** | **+138%** (2.4×) |
+| path-params (switch + condition eval) | 2,098 rps | **8,111 rps** | **+286%** (3.9×) |
+| thin-dsl (037 fast-path — no engine call) | 77,777 rps | 80,398 rps | parity |
+| framework-baseline (no DSL, no engine) | ~95k rps | ~95k rps | parity |
 
-The compound of "engine swap + per-request session pool" moves Boa-hitting DSLs from the 1-3k rps band into the 6-9k rps band. Framework baseline unchanged.
+The full compound of "engine swap (051) + per-request session pool (036) + pre-parsed expression registry (045)" moves Boa-hitting DSLs from the 1-3k rps band into the 6-9k rps band. Framework baseline unchanged.
 
 Rerun on an isolated host (see `bench/AWS-RUNBOOK.md`) if you need shipping-grade numbers; the localhost run has real noise but the direction is robust across runs.
 

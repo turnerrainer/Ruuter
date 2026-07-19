@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-07-19
+
+### Added
+
+- **Task 045 — pre-parsed expression registry (redesign #1).** At
+  boot, walks the loaded DSL tree (HTTP DSLs + guards + trigger DSLs)
+  and extracts every unique `${...}` and `$=...=` expression source
+  into an `ExpressionRegistry`. On the QuickJS backend, each session
+  lazily compiles-on-first-use per expression (combined define+invoke
+  in one eval to avoid double-parse) and marks a `Vec<AtomicBool>`
+  slot; subsequent evals of the same expression in the same session
+  invoke `__fn_<id>()` — a tiny string that parses in microseconds.
+  Boa backend ignores the registry (no durable place to cache
+  functions given its `!Send` context).
+
+### Perf (compound of tasks 051 + 036 + 045)
+
+3-run median on developer laptop, `scripting-boa` default vs
+`--features scripting-quickjs`:
+
+| Scenario | Boa | QJS+036 | **QJS+036+045** | Δ vs Boa | Δ vs QJS+036 |
+|---|---:|---:|---:|---|---|
+| guarded | 1,401 rps | 6,118 rps | **6,955 rps** | **+396%** (5×) | +14% |
+| js-heavy | 3,245 rps | 7,906 rps | 7,735 rps | +138% (2.4×) | parity |
+| path-params | 2,098 rps | 8,486 rps | 8,111 rps | +286% (3.9×) | parity |
+| thin-dsl (037 fast-path) | 77,777 rps | 80,027 rps | 80,398 rps | parity | parity |
+
+Where 045 shines: DSLs that evaluate the same expression multiple
+times per request (guard chains checking `${incoming.headers.foo}`
+from several conditions; `iterate.do` bodies where the same
+computation fires per iteration). No regressions on cache-miss-
+heavy scenarios (path-params).
+
+### Design notes
+
+- v1 attempt bulk-compiled every registered expression at session
+  init. That was slower than QJS+036 alone (per-request sessions
+  use 1-3 expressions from a 60+ corpus — bulk cost isn't amortised).
+  Reverted; kept the registry, changed to lazy-per-slot compilation
+  with `Vec<AtomicBool>` flags. This is the v2 shipped.
+- Combined define+invoke `(globalThis.__fn_N = function(){...})()`
+  in one eval avoids the earlier design's cache-miss double-parse
+  regression.
+
+### Bottom line
+
+Full Boa-perf roadmap now realised on the QuickJS backend:
+**2.4-5× throughput vs default Boa** across Boa-hitting DSL
+scenarios, with framework baseline and 037's literal fast-path
+unchanged. Boa remains the default (no CVE surface); QuickJS is
+opt-in for operators who want the compound win.
+
 ## [0.6.5] - 2026-07-19
 
 ### Added
