@@ -96,7 +96,10 @@ async fn main() {
 
     // Shared step engine — same DSL semantics for HTTP routes and
     // event triggers. Carries the WS registry so `ws_send` works.
+    // The HttpClient is bound now; its self-call router handle is
+    // wired further down, once the DslRouter Arc is available.
     let http_client = HttpClient::new(&config);
+    let http_client_for_handle = http_client.clone();
     let mut engine = StepEngine::new(http_client)
         .with_ws_registry(ws_registry.clone())
         .with_dsls(shared_http_dsls.clone());
@@ -135,15 +138,33 @@ async fn main() {
     // Build router (which internally generates the OpenAPI spec from the
     // HTTP DSL tree and serves it at GET /_/openapi.json). Shares the
     // same Arc<HttpDsls> the engine uses for template lookup.
-    let router = DslRouter::from_arc(
+    let router = Arc::new(DslRouter::from_arc(
         shared_http_dsls,
         loaded.guards,
         config.clone(),
         state,
         ws_registry,
         engine.clone(),
-    );
-    let mut app = router.build_axum_router();
+    ));
+    // Task 044 — hand the router handle to HttpClient so http.<verb>
+    // targeting our own listener short-circuits back into the router
+    // in-process. All existing HttpClient clones share the same
+    // OnceCell, so setting once is enough.
+    //
+    // Bench toggle: `RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT=true` skips
+    // the wiring so an A/B measurement can capture the "without 044"
+    // behaviour. Not intended for production — the env var exists so
+    // bench harnesses can measure the actual savings the shortcut
+    // provides.
+    if std::env::var("RUUTER_DISABLE_SELF_CALL_SHORTCIRCUIT")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        info!("Self-call short-circuit DISABLED via env var (bench mode)");
+    } else {
+        http_client_for_handle.set_self_call_handler(router.clone());
+    }
+    let mut app = router.build_axum_router_from_arc();
 
     // Merge in admin routes when enabled.
     if supervisor::admin_enabled(&config) {
@@ -151,23 +172,123 @@ async fn main() {
         app = app.merge(supervisor_arc.clone().admin_router());
     }
 
-    // Start server
-    let addr = format!("0.0.0.0:{}", config.port);
-    info!("Server listening on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        });
-
-    axum::serve(listener, app)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Server error: {}", e);
-            std::process::exit(1);
-        });
+    // Task 043 — start server(s). When `config.listeners` is empty,
+    // fall back to the 0.4.0 single-TCP-listener behaviour on
+    // `config.port`. When non-empty, that config REPLACES the
+    // default: every listener spawns its own accept loop; the same
+    // axum Router serves all of them.
+    if config.listeners.is_empty() {
+        let addr = format!("0.0.0.0:{}", config.port);
+        info!("Server listening on {}", addr);
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|e| {
+                error!("Failed to bind to {}: {}", addr, e);
+                std::process::exit(1);
+            });
+        axum::serve(listener, app)
+            .await
+            .unwrap_or_else(|e| {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            });
+    } else {
+        // Multi-listener mode. Each listener runs axum::serve on its
+        // own task; the process stays alive until the first listener
+        // exits (which normally never happens). Any bind failure at
+        // startup is fatal.
+        let mut handles = Vec::new();
+        for (i, l) in config.listeners.iter().enumerate() {
+            let label = l.name.clone().unwrap_or_else(|| format!("listener-{}", i));
+            let app = app.clone();
+            match (&l.bind, &l.unix) {
+                (Some(_), Some(_)) => {
+                    error!("listener {}: exactly one of bind/unix required, both set", label);
+                    std::process::exit(1);
+                }
+                (None, None) => {
+                    error!("listener {}: exactly one of bind/unix required, neither set", label);
+                    std::process::exit(1);
+                }
+                (Some(bind), None) => {
+                    info!("listener {} on TCP {}", label, bind);
+                    let listener = tokio::net::TcpListener::bind(bind)
+                        .await
+                        .unwrap_or_else(|e| {
+                            error!("listener {}: bind {} failed: {}", label, bind, e);
+                            std::process::exit(1);
+                        });
+                    handles.push(tokio::spawn(async move {
+                        if let Err(e) = axum::serve(listener, app).await {
+                            error!("listener {}: {}", label, e);
+                        }
+                    }));
+                }
+                (None, Some(path)) => {
+                    // Remove stale socket from prior instance.
+                    if path.exists() {
+                        if let Err(e) = std::fs::remove_file(path) {
+                            error!("listener {}: cannot clear stale socket {}: {}", label, path.display(), e);
+                            std::process::exit(1);
+                        }
+                    }
+                    let http_version = if l.http2 { "h2c" } else { "http/1.1" };
+                    info!("listener {} on UDS {} ({})", label, path.display(), http_version);
+                    let listener = tokio::net::UnixListener::bind(path)
+                        .unwrap_or_else(|e| {
+                            error!("listener {}: bind {} failed: {}", label, path.display(), e);
+                            std::process::exit(1);
+                        });
+                    let use_h2 = l.http2;
+                    // axum::serve is TcpListener-only; run a per-
+                    // connection hyper accept loop instead. The
+                    // Router is `Clone + Service`, so each connection
+                    // gets its own service instance. Task 049 adds
+                    // h2c via the http2 server builder as an alt
+                    // path controlled by `listener.http2: true`.
+                    handles.push(tokio::spawn(async move {
+                        loop {
+                            let (stream, _addr) = match listener.accept().await {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    error!("listener {}: accept error: {}", label, e);
+                                    continue;
+                                }
+                            };
+                            let app = app.clone();
+                            tokio::spawn(async move {
+                                let io = hyper_util::rt::TokioIo::new(stream);
+                                let service = hyper_util::service::TowerToHyperService::new(app);
+                                if use_h2 {
+                                    if let Err(e) = hyper::server::conn::http2::Builder::new(
+                                        hyper_util::rt::TokioExecutor::new(),
+                                    )
+                                    .serve_connection(io, service)
+                                    .await
+                                    {
+                                        tracing::debug!("uds h2c conn: {}", e);
+                                    }
+                                } else if let Err(e) = hyper::server::conn::http1::Builder::new()
+                                    .serve_connection(io, service)
+                                    .await
+                                {
+                                    tracing::debug!("uds conn: {}", e);
+                                }
+                            });
+                        }
+                    }));
+                }
+            }
+        }
+        // Wait for any listener to exit (normally: never). Selecting
+        // on all handles rather than joining means one crashing
+        // listener brings the process down instead of silently
+        // dropping traffic.
+        let (result, _idx, _rest) = futures::future::select_all(handles).await;
+        if let Err(e) = result {
+            error!("listener task panicked: {}", e);
+        }
+    }
 
     observability::shutdown(tracer_provider);
 }

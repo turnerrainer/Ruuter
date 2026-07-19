@@ -1,0 +1,9 @@
+# axum ceiling — regressions here mean the framework got slower,
+# not the DSL engine.
+name: framework-baseline
+route: /health
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

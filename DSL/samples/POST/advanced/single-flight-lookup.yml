@@ -1,0 +1,52 @@
+# Sample: single_flight coalescing.
+#
+# Simulates an expensive per-id lookup. Under a duplicate-request
+# burst on the same id, only ONE body execution runs; the rest wait
+# on the leader's result. Try:
+#
+#   for i in 1 2 3 4 5; do
+#     curl -s -X POST -H 'Content-Type: application/json' \
+#       -d '{"id":"item-42"}' \
+#       http://localhost:8080/samples/advanced/single-flight-lookup &
+#   done; wait
+#
+# All five responses come back with the same `computed_at` timestamp
+# and `execution_count` = 1 — the shared state confirms only one
+# real execution ran regardless of how many concurrent requests
+# arrived.
+
+warmup:
+  state:
+    get: { key: "sf_demo_count", into: prev_count }
+  next: coalesce
+
+coalesce:
+  single_flight:
+    key: "sf-demo:${incoming.body.id}"
+    ttl_ms: 3000
+    do:
+      # Simulate an expensive lookup (~120ms of busy work).
+      - iterate:
+          over: "${Array.from({length: 300}, (_, i) => i)}"
+          as: n
+          do:
+            - assign: { sink: "${n * n}" }
+      # Record when this execution happened + increment the demo
+      # counter so callers can see coalescing worked.
+      - state:
+          get: { key: "sf_demo_count", into: prior }
+      - assign:
+          exec_count: "${(prior == null ? 0 : prior) + 1}"
+      - state:
+          set: { key: "sf_demo_count", value: "${exec_count}" }
+      - assign:
+          shared_result:
+            id: "${incoming.body.id}"
+            execution_count: "${exec_count}"
+            computed_at: "${Date.now()}"
+    result: shared_result
+  next: respond
+
+respond:
+  return: "${shared_result}"
+  next: end

@@ -7,6 +7,184 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-07-19
+
+### Findings
+
+- **Task 047 spike answered YES.** `rquickjs` with `parallel + futures`
+  features exposes `Send + Sync` Runtime and Context types. Verified
+  by compile-time `assert_send<T>()` markers AND runtime tests that
+  hold an AsyncContext across `.await` on a multi-thread tokio
+  runtime and spawn it into another task. This unblocks tasks 036
+  (per-request BoaContext pool) and 045 (pre-parsed Script cache)
+  which were both blocked on Boa's `!Send` internals.
+- Consequence: the compound-win path (potential 5-10× on Boa-hitting
+  DSLs) is open via a QuickJS backend. Follow-up filed as task 051.
+
+### Added
+
+- Feature-gated dependency `rquickjs` behind `spike-quickjs` cargo
+  feature (off by default). Enables `tests/spike_047_quickjs_send.rs`
+  — 6 tests documenting the Send/Sync findings. Default build
+  unchanged in size, dependencies, or behaviour.
+
+### Filed
+
+- **Task 051 — Adopt rquickjs as an alternative ScriptEngine backend**
+  behind a mutually-exclusive `scripting-quickjs` feature flag. Once
+  051 lands, tasks 036 and 045 become straightforward small changes
+  rather than architectural refactors requiring dedicated OS worker
+  thread pools.
+
+### Deprecated (kind of)
+
+- The Boa-perf roadmap's "dedicated JS worker thread pool" fallback
+  path is now optional. If 051 delivers on the corpus-compatibility
+  gate, we skip the worker-pool refactor entirely.
+
+## [0.6.2] - 2026-07-19
+
+### Added
+
+- **Task 049 — HTTP/2 cleartext (h2c) over UDS**, opt-in via
+  `uds_http_version: http2` (outbound) and `listeners: [..., {http2: true}]`
+  (inbound). Both sides must speak the same version; there's no ALPN
+  over cleartext. Client and server implementations both compile
+  against hyper's http2 builders; 6 new integration tests verify
+  round-trip, backwards-compat with h1, mismatched-version failures,
+  and 32-way concurrent multiplexing.
+
+### Perf
+
+Measured A/B (3-run median, laptop, cross-instance sidecar hop):
+
+| Version | rps | p50 |
+|---|---:|---:|
+| h1 pool | 5,121 | 12.4 ms |
+| h2c | 4,910 | 13.0 ms |
+
+**h2c is ~4% slower on this workload.** Honest finding: h2's
+multiplexing win only materialises when a single caller fans out
+many concurrent streams to the SAME target. The current bench
+pattern makes one main→side call per inbound request; h1-with-pool
+and h2-with-one-stream-per-request perform equivalently, with h2
+losing on per-frame overhead.
+
+Once task 040 (`parallel_http`) lands, h2's one-connection-N-streams
+should beat h1's N-pooled-connections by 3-5× on the fan-out pattern.
+Book chapter documents this and recommends the h1 default until 040
+is available. `uds_http_version: http2` is opt-in for operators
+already using fan-out via `iterate` around `http.<verb>`.
+
+## [0.6.1] - 2026-07-19
+
+### Added
+
+- **Task 050 — UDS keep-alive connection pool.** Replaces v0.6.0's
+  per-request handshake with a hyper-util `Client<UdsConnector,
+  Full<Bytes>>` cached per unique socket path. Every socket gets its
+  own connection pool; requests reuse warm connections instead of
+  paying handshake cost every time. This is the fix v0.6.0's UDS
+  path was missing — the A/B bench had shown pooled TCP loopback
+  beating v1 UDS by 6%; v0.6.1 flips that to UDS winning by 6%.
+  Defaults: 30s idle timeout, 32 idle connections per host. 3 new
+  tests covering pool identity, sequential-reuse under load, and
+  target-restart recovery.
+
+### Perf
+
+Measured A/B on the same sidecar-hop workload (3-run median,
+developer laptop, cross-instance UDS vs TCP loopback):
+
+| Transport | v0.6.0 | v0.6.1 | Δ |
+|---|---:|---:|---|
+| TCP loopback | 4,229 rps | 4,839 rps | +14% (laptop noise) |
+| **UDS via alias** | 3,987 rps | **5,122 rps** | **+28.5%** |
+| UDS-vs-TCP delta | -6% (worse) | **+5.8% (wins)** | |
+
+p50 latency on UDS: 15.9 ms → 12.4 ms (-22%).
+
+For headline-grade numbers, re-run on an isolated host per
+`bench/AWS-RUNBOOK.md` — localhost variance is ±20%.
+
+### Filed
+
+- **Task 049 (h2c over UDS + TCP)** — the next transport-perf lever
+  after 050. HTTP/1.1 head-of-line blocking caps per-connection
+  throughput; h2 stream multiplexing eliminates it. Composes with
+  050's pool infra.
+- **Task 047 reframed** — QuickJS evaluation now framed as the
+  potential unblocker for tasks 036 + 045 (which are blocked on
+  Boa's `!Send` types). If `rquickjs::Context` is `Send`, adopting
+  QuickJS unblocks the compound Boa-perf wins without needing a
+  dedicated JS worker thread pool.
+
+## [0.6.0] - 2026-07-19
+
+### Added
+
+- **Task 039 — perf benchmark suite.** `bench/` with 6 wrk-based
+  scenarios (framework baseline, thin DSL, JS-heavy, path-params,
+  cached-response, guarded), a runner (`bench/run.sh`) that boots
+  the release binary on a configurable port and emits JSON, a
+  median-of-N baseline capture (`bench/refresh-baseline.sh`), and
+  a comparator (`bench/compare.py`) that gates on rps regression
+  and warns on p50. 17 comparator tests. `.github/workflows/perf.yml`
+  wired as workflow_dispatch (push-triggered gating deferred — GH-
+  hosted runner variance is too high; documented in `bench/README.md`).
+- **Task 042 — `single_flight` DSL step.** In-process coalescing of
+  concurrent duplicate requests keyed on a DSL-computed string.
+  First arrival becomes the leader, executes `do:`, broadcasts the
+  outcome via a per-key `tokio::sync::broadcast` channel; concurrent
+  followers subscribe and receive the same value. Same-instance
+  only (cross-replica dedup is task 029's shared-store domain).
+  8 integration tests; 1 dsl-test scenario; book chapter at
+  [`book/src/dsl/steps/single_flight.md`](book/src/dsl/steps/single_flight.md).
+- **Task 043 — Unix Domain Socket transport for inter-service hops.**
+  DSLs stay portable: `http://alias/path` transparently routes via
+  UDS when the operator maps `alias` in `unix_socket_map`. Explicit
+  `unix://` URLs supported too. Inbound multi-listener mode via
+  `listeners:` config; each listener runs its own accept loop, same
+  Router serves all. Skips ~15-25 µs CPU + ~100-300 µs wall
+  latency per hop vs TCP loopback. 8 outbound + 2 inbound + 6 URL-
+  parser unit tests; book chapter at
+  [`book/src/framework/inter-service-transport.md`](book/src/framework/inter-service-transport.md).
+- **Task 044 — `http.<verb>` self-call short-circuit.** When an
+  outbound URL resolves to Ruuter's own listener, dispatch in-process
+  through the router instead of round-tripping via reqwest + TCP.
+  Preserves guards, CSRF, path-param resolution, and response shape
+  (byte-identical to network loopback). Every loopback synonym
+  (`localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]`, `::1`) on the
+  configured port matches automatically. 10 integration tests;
+  book chapter at [`book/src/framework/self-call-optimization.md`](book/src/framework/self-call-optimization.md).
+
+### Changed
+
+- `DslRouter::build_axum_router(self)` still works; new
+  `build_axum_router_from_arc()` on `Arc<Self>` for the self-call
+  wiring path that needs the Arc alive after the axum router is
+  built (task 044).
+- Task backlog reshaped: `023` (http.patch, already implemented)
+  and `025` (publishable artefact) moved to `tasks/done/`; `028`
+  (JWT/TIM guard) and `030` (framework ETag validation) moved to
+  a new `tasks/wont-fix/` folder for owner-declined-with-rationale;
+  `040` (parallel_http) and `041` (first_n aggregation) moved to
+  `tasks/backlog/` — dependent on a fan-out design that wasn't
+  ready in this batch. Downstream-project naming stripped from
+  `Filed` sections of `038`, `040`-`044` (Ruuter is a generic
+  framework; per-project justification prose doesn't belong here).
+
+### Not shipped (documented as follow-ups)
+
+- Idempotency-Key cache consultation on self-calls (task 044)
+- `force_network: true` DSL escape hatch (task 044)
+- HTTP/2 over UDS (task 043)
+- Streaming response-body size cap on UDS + self-call paths
+- Cross-instance single_flight coalescing (task 042; needs the
+  same shared-store design as task 029)
+- Push-triggered CI perf gate (task 039; needs a dedicated
+  bare-metal runner — GH-hosted variance is too high)
+
 ## [0.5.0] - 2026-07-18
 
 ### Added

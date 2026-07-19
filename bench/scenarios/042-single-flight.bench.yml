@@ -1,0 +1,9 @@
+# 042 A/B — coalescing side. Compare rps to `042-naive` — the ratio
+# is the single_flight win under duplicate-request load.
+name: 042-single-flight
+route: /samples/bench-single-flight
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

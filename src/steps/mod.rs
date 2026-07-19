@@ -11,6 +11,7 @@ pub mod http;
 pub mod iterate;
 pub mod log;
 pub mod return_step;
+pub mod single_flight;
 pub mod state;
 pub mod switch;
 pub mod template;
@@ -28,7 +29,46 @@ pub enum DslStep {
     State(StateStep),
     Iterate(IterateStep),
     WsSend(WsSendStep),
+    SingleFlight(SingleFlightStep),
     Declaration(DeclarationStep),
+}
+
+/// Task 042 — collapse concurrent duplicate requests keyed on a
+/// DSL-computed string into one execution + N wait-and-share
+/// followers. Same-instance only; two Ruuter replicas each keep
+/// their own map.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SingleFlightStep {
+    pub single_flight: SingleFlightBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SingleFlightBody {
+    /// Coalesce key. Evaluated per request; concurrent requests
+    /// producing the same string collapse. Empty string is a valid
+    /// (but unusual) key.
+    pub key: String,
+    /// Follower wait budget. If the leader hasn't published a
+    /// result within `ttl_ms`, followers return a timeout error and
+    /// the map slot is evicted so the next caller can lead a fresh
+    /// coalesce window. Leader execution itself is NOT interrupted
+    /// (its own step budgets apply); the TTL only bounds follower
+    /// blocking.
+    pub ttl_ms: u64,
+    /// Body steps run once per coalesce window, in the leader's
+    /// context. Sub-step `next:` directives are ignored — use a
+    /// Return step to bail out. Same semantics as `iterate.do`.
+    #[serde(rename = "do")]
+    pub body: Vec<DslStep>,
+    /// Name of the variable to snapshot from the leader's context
+    /// after `do:` completes. That value is broadcast to followers,
+    /// who bind it into THEIR context under the same name. When
+    /// unset, followers still get "leader completed" (no value
+    /// bound); useful for cache-warming DSLs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

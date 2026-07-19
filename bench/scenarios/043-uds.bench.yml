@@ -1,0 +1,10 @@
+# 043 A/B (UDS): compare to 043-tcp — same target DSL served by the
+# same second-instance ruuter, difference is transport (UDS via alias
+# map vs TCP loopback).
+name: 043-uds
+route: /samples/bench-uds-caller
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s

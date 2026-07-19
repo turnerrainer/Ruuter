@@ -1,0 +1,10 @@
+# 043 + 044 A/B — the "target" DSL. Very thin: literal return,
+# no ${...} in the body → hits the 037 fast-path (no Boa). This
+# minimises the target's own work so the measured delta between
+# TCP loopback and UDS/short-circuit represents the TRANSPORT
+# cost, not the DSL evaluation cost.
+respond:
+  return:
+    ok: true
+    served_at: "target"
+  next: end

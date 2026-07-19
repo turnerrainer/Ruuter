@@ -1,6 +1,6 @@
 [package]
 name = "ruuter-on-rust"
-version = "0.5.0"
+version = "0.6.3"
 edition = "2021"
 authors = ["Rainer Türner"]
 license = "Apache-2.0"
@@ -32,12 +32,15 @@ notify = "7.0"
 regex = "1.10"
 once_cell = "1.20"
 http = "1.1"
-hyper = "1.5"
+hyper = { version = "1.5", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1", "http2", "server"] }
+http-body-util = "0.1"
 dashmap = "6.1"
 indexmap = { version = "2.5", features = ["serde"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "url"] }
 url = "2.5"
 rand = "0.8"
+rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures"] }
 sha2 = "0.10"
 
 [dev-dependencies]
@@ -54,3 +57,10 @@ path = "src/bin/dsl_lint.rs"
 [[bin]]
 name = "dsl-test"
 path = "src/bin/dsl_test.rs"
+
+# Task 047 spike (behind feature) — evaluate rquickjs Send-compat.
+# When feature "spike-quickjs" enabled, includes rquickjs. Not
+# wired into the actual ScriptEngine — this is a marker-check spike.
+[features]
+default = []
+spike-quickjs = ["dep:rquickjs"]

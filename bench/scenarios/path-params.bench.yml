@@ -1,0 +1,10 @@
+# Path-param extraction + switch branching + template literal expression.
+# Exercises router-path resolution and the switch step's condition
+# evaluation.
+name: path-params
+route: /samples/things/abc/legs
+method: GET
+wrk:
+  threads: 4
+  connections: 64
+  duration: 10s
