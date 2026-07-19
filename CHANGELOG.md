@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-07-19
+
+### Findings
+
+- **Task 047 spike answered YES.** `rquickjs` with `parallel + futures`
+  features exposes `Send + Sync` Runtime and Context types. Verified
+  by compile-time `assert_send<T>()` markers AND runtime tests that
+  hold an AsyncContext across `.await` on a multi-thread tokio
+  runtime and spawn it into another task. This unblocks tasks 036
+  (per-request BoaContext pool) and 045 (pre-parsed Script cache)
+  which were both blocked on Boa's `!Send` internals.
+- Consequence: the compound-win path (potential 5-10× on Boa-hitting
+  DSLs) is open via a QuickJS backend. Follow-up filed as task 051.
+
+### Added
+
+- Feature-gated dependency `rquickjs` behind `spike-quickjs` cargo
+  feature (off by default). Enables `tests/spike_047_quickjs_send.rs`
+  — 6 tests documenting the Send/Sync findings. Default build
+  unchanged in size, dependencies, or behaviour.
+
+### Filed
+
+- **Task 051 — Adopt rquickjs as an alternative ScriptEngine backend**
+  behind a mutually-exclusive `scripting-quickjs` feature flag. Once
+  051 lands, tasks 036 and 045 become straightforward small changes
+  rather than architectural refactors requiring dedicated OS worker
+  thread pools.
+
+### Deprecated (kind of)
+
+- The Boa-perf roadmap's "dedicated JS worker thread pool" fallback
+  path is now optional. If 051 delivers on the corpus-compatibility
+  gate, we skip the worker-pool refactor entirely.
+
 ## [0.6.2] - 2026-07-19
 
 ### Added
