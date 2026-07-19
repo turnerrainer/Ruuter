@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-07-19
+
+### Added
+
+- **Task 036 — per-request QuickJS session pool.** First `evaluate()`
+  in a request lazily builds a Runtime + Context pair and caches them
+  on `ExecutionContext` via `Arc<OnceLock<QuickJsSession>>`;
+  subsequent evaluates in the same request reuse the session. Feature-
+  gated to `scripting-quickjs` — Boa's `Context` remains `!Send`, so
+  it can't sit on `ExecutionContext` across `.await`. On Boa the field
+  simply doesn't exist; behaviour unchanged.
+
+### Perf (compound of tasks 051 + 036)
+
+Measured 3-run median on a developer laptop, `scripting-boa` (default)
+vs `--no-default-features --features scripting-quickjs`:
+
+| Scenario | Boa | QuickJS+036 | Δ rps | Δ p50 |
+|---|---:|---:|---|---|
+| guarded (guard + auth check + main DSL) | 1,401 rps | **6,118 rps** | **+337%** | -78% |
+| js-heavy (Boa `Date.now()` + object literal) | 3,245 rps | **7,906 rps** | **+143%** | -60% |
+| path-params (switch + Boa condition eval) | 2,098 rps | **8,486 rps** | **+305%** | -75% |
+| thin-dsl (037 fast-path — engine bypassed) | 77,777 rps | 80,027 rps | +3% (parity) | -3% |
+
+**2-4× throughput improvement + 60-80% latency reduction on Boa-hitting
+DSLs.** Moves the JS ceiling from 1-3k rps into 6-9k rps range;
+framework baseline (~95k rps on `/health`) unchanged.
+
+### Deferred
+
+- **Task 045 — pre-parsed script cache.** v1 attempted as per-session
+  compiled-function cache. Wins on repetition-heavy DSLs (+11% on
+  guarded) but regresses on unique-per-request DSLs (-15% on
+  path-params) because Mutex + double-eval-on-miss net-loses when
+  cache almost never hits. Reverted; moved to backlog with three
+  documented redesigns (compile-at-DSL-load, cross-request pool via
+  dedicated JS worker threads, threshold-based caching). Gated on an
+  iterate-heavy corpus emerging OR the perf story needing more
+  compound wins.
+
 ## [0.6.4] - 2026-07-19
 
 ### Added
