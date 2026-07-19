@@ -180,6 +180,11 @@ pub fn install_default_limits(limits: ScriptLimits) {
     let _ = DEFAULT_LIMITS.set(limits);
 }
 
+// ── Task 045 — pre-parsed expression registry ────────────────────
+
+pub mod registry;
+pub use registry::ExpressionRegistry;
+
 // ── Backend selection ────────────────────────────────────────────
 
 #[cfg(feature = "scripting-boa")]

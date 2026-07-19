@@ -84,7 +84,8 @@ impl TriggerDispatcher {
             channel.to_string(),
             project.to_string(),
             self.state.clone(),
-        );
+        )
+        .with_expr_registry(self.engine.expr_registry().clone());
 
         match self.engine.run(dsl, &context).await {
             Ok(result) => {

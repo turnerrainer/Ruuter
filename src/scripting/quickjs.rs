@@ -38,10 +38,11 @@
 //! vs no-pool" yet.
 
 use super::{
-    bump_context_created, find_script_segments, has_expressions, ScriptLimits, DEFAULT_LIMITS,
-    LINE_PATTERN,
+    bump_context_created, find_script_segments, has_expressions, ExpressionRegistry, ScriptLimits,
+    DEFAULT_LIMITS, LINE_PATTERN,
 };
 use crate::context::{ExecutionContext, QuickJsSession};
+use std::sync::atomic::Ordering;
 use crate::{Result, RuuterError};
 use rquickjs::{Context as QjsContext, Runtime as QjsRuntime};
 use serde_json::Value;
@@ -91,6 +92,7 @@ impl QuickJsScriptEngine {
         // and cache. `get_or_init` runs the closure at most once
         // across all clones of this ExecutionContext (Arc<OnceLock>).
         let session_slot = context.quickjs_session();
+        let registry = context.expr_registry();
         let session = session_slot.get_or_init(|| {
             bump_context_created();
             let runtime = QjsRuntime::new().expect("qjs runtime construction cannot fail");
@@ -99,7 +101,23 @@ impl QuickJsScriptEngine {
             // limit at 128 KB × depth as a conservative default.
             runtime.set_max_stack_size(self.limits.max_stack_size.saturating_mul(128 * 1024));
             let context = QjsContext::full(&runtime).expect("qjs context construction cannot fail");
-            QuickJsSession { runtime, context }
+
+            // Task 045 — one flag per registered expression id,
+            // all `false` initially. Bulk-compile at session init
+            // costs more than it saves for per-request sessions
+            // (compile 60 expressions to use 3); instead we lazily
+            // compile each expression on first use per session and
+            // set its flag. Second+ evals skip the compile.
+            let mut compiled_flags = Vec::with_capacity(registry.len());
+            for _ in 0..registry.len() {
+                compiled_flags.push(std::sync::atomic::AtomicBool::new(false));
+            }
+
+            QuickJsSession {
+                context,
+                runtime,
+                compiled_flags,
+            }
         });
 
         let out = session.context.with(|ctx| -> Result<Value> {
@@ -107,7 +125,7 @@ impl QuickJsScriptEngine {
             // could have assigned new user variables between evals.
             // Overhead: one JSON.parse per variable, small.
             setup_bindings(&ctx, context)?;
-            evaluate_with(input, &ctx)
+            evaluate_with(input, &ctx, registry, session)
         })?;
         Ok((out, true))
     }
@@ -119,20 +137,25 @@ impl Default for QuickJsScriptEngine {
     }
 }
 
-fn evaluate_with<'js>(input: &Value, ctx: &rquickjs::Ctx<'js>) -> Result<Value> {
+fn evaluate_with<'js>(
+    input: &Value,
+    ctx: &rquickjs::Ctx<'js>,
+    registry: &ExpressionRegistry,
+    session: &QuickJsSession,
+) -> Result<Value> {
     match input {
-        Value::String(s) => evaluate_string(s, ctx),
+        Value::String(s) => evaluate_string(s, ctx, registry, session),
         Value::Object(map) => {
             let mut result = serde_json::Map::with_capacity(map.len());
             for (k, v) in map {
-                result.insert(k.clone(), evaluate_with(v, ctx)?);
+                result.insert(k.clone(), evaluate_with(v, ctx, registry, session)?);
             }
             Ok(Value::Object(result))
         }
         Value::Array(arr) => {
             let mut result = Vec::with_capacity(arr.len());
             for v in arr {
-                result.push(evaluate_with(v, ctx)?);
+                result.push(evaluate_with(v, ctx, registry, session)?);
             }
             Ok(Value::Array(result))
         }
@@ -140,19 +163,24 @@ fn evaluate_with<'js>(input: &Value, ctx: &rquickjs::Ctx<'js>) -> Result<Value> 
     }
 }
 
-fn evaluate_string<'js>(s: &str, ctx: &rquickjs::Ctx<'js>) -> Result<Value> {
+fn evaluate_string<'js>(
+    s: &str,
+    ctx: &rquickjs::Ctx<'js>,
+    registry: &ExpressionRegistry,
+    session: &QuickJsSession,
+) -> Result<Value> {
     let segs = find_script_segments(s);
     // Whole-string `${...}` preserves native type
     if segs.len() == 1 {
         let (start, end, ref inner) = segs[0];
         if start == 0 && end == s.len() {
-            return execute_js(inner, ctx);
+            return execute_js(inner, ctx, registry, session);
         }
     }
     // Whole-string `$=...=` line pattern
     if let Some(caps) = LINE_PATTERN.captures(s) {
         if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], ctx);
+            return execute_js(&caps[1], ctx, registry, session);
         }
     }
 
@@ -162,7 +190,7 @@ fn evaluate_string<'js>(s: &str, ctx: &rquickjs::Ctx<'js>) -> Result<Value> {
     let mut cursor = 0usize;
     for (start, end, inner) in &segs {
         out.push_str(&s[cursor..*start]);
-        match execute_js(inner, ctx) {
+        match execute_js(inner, ctx, registry, session) {
             Ok(Value::String(s2)) => out.push_str(&s2),
             Ok(other) => out.push_str(&other.to_string()),
             Err(e) => {
@@ -181,15 +209,49 @@ fn evaluate_string<'js>(s: &str, ctx: &rquickjs::Ctx<'js>) -> Result<Value> {
     Ok(Value::String(out))
 }
 
-fn execute_js<'js>(script: &str, ctx: &rquickjs::Ctx<'js>) -> Result<Value> {
-    // Wrap the expression in parens so it's parsed as an expression,
-    // not a statement (matches how Boa's eval handles bare expressions).
-    // Bare expression + explicit return is how we mirror the Boa
-    // whole-expression-returns-value shape.
-    let wrapped = format!("(function(){{ return ({}); }})()", script);
-    let js_value: rquickjs::Value<'js> = ctx
-        .eval(wrapped.as_bytes())
-        .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?;
+fn execute_js<'js>(
+    script: &str,
+    ctx: &rquickjs::Ctx<'js>,
+    registry: &ExpressionRegistry,
+    session: &QuickJsSession,
+) -> Result<Value> {
+    // Task 045 — if this expression was registered at DSL load AND
+    // we've compiled it already in this session, invoke by id.
+    // If not yet compiled in this session, compile-and-invoke in
+    // one eval, then mark the flag. If not registered at all,
+    // fall back to per-eval compile (rare — only for scripts the
+    // engine synthesises internally).
+    let js_value: rquickjs::Value<'js> = match registry.id_for(script) {
+        Some(id) => {
+            let already =
+                session.compiled_flags.get(id as usize).map(|f| f.load(Ordering::Acquire));
+            let script_bytes = if already == Some(true) {
+                format!("__fn_{}()", id)
+            } else {
+                // Combined define+invoke — single eval, no
+                // double-parse. The parenthesised assignment
+                // returns the freshly-defined function; the
+                // trailing `()` invokes it.
+                format!(
+                    "(globalThis.__fn_{} = function(){{ return ({}); }})()",
+                    id, script
+                )
+            };
+            let val: rquickjs::Value<'js> = ctx
+                .eval(script_bytes.as_bytes())
+                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?;
+            if let Some(flag) = session.compiled_flags.get(id as usize) {
+                flag.store(true, Ordering::Release);
+            }
+            val
+        }
+        None => {
+            // Not registered — synthesised script. Compile inline.
+            let wrapped = format!("(function(){{ return ({}); }})()", script);
+            ctx.eval(wrapped.as_bytes())
+                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
+        }
+    };
     js_value_to_json(js_value)
 }
 
