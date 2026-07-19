@@ -17,6 +17,7 @@
   - [iterate](./dsl/steps/iterate.md)
   - [template](./dsl/steps/template.md)
   - [ws_send](./dsl/steps/ws_send.md)
+  - [single_flight](./dsl/steps/single_flight.md)
   - [declaration](./dsl/steps/declaration.md)
 - [Context bindings](./dsl/context.md)
 - [Constants](./dsl/constants.md)

@@ -1,0 +1,20 @@
+# End-to-end shape check for the single_flight sample. Concurrency
+# behaviour is covered by tests/single_flight_step.rs — this file just
+# verifies the sample DSL loads and returns a well-shaped response
+# on a sequential call.
+mode: inprocess
+
+tests:
+  - name: single call returns a shared_result payload
+    request:
+      method: POST
+      path: /samples/advanced/single-flight-lookup
+      headers:
+        content-type: "application/json"
+      body: { id: "test-id" }
+    expect:
+      status: 200
+      body_matches:
+        id: "test-id"
+        execution_count: "$type:number"
+        computed_at: "$type:number"
