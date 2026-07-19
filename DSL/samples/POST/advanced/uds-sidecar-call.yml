@@ -1,0 +1,25 @@
+# Sample: outbound HTTP over UDS via alias.
+#
+# When ruuter.yaml contains
+#
+#   unix_socket_map:
+#     upstream-svc: "/var/run/example/upstream.sock"
+#
+# this DSL sends the request over a Unix socket transparently — no
+# YAML change needed to swap between TCP loopback and UDS. If the
+# alias isn't configured (no such host resolves), the call fails at
+# the transport layer; the caller sees a clear connection error.
+
+call_upstream:
+  call: http.get
+  args:
+    url: "http://upstream-svc/status"
+    timeout: 500
+  result: upstream_response
+  next: respond
+
+respond:
+  return:
+    upstream_status: "${upstream_response.status}"
+    upstream_body: "${upstream_response.body}"
+  next: end

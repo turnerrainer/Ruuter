@@ -4,7 +4,11 @@ use futures::StreamExt;
 use reqwest::{Client, Method};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+
+pub mod uds;
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -24,6 +28,11 @@ pub struct HttpClient {
     outbound_disabled: bool,
     allowed_url_prefixes: Vec<String>,
     allowed_ip_hosts: Vec<String>,
+    /// Task 043 — host → UDS socket path aliases. When an outbound
+    /// URL's host matches a key here, the request goes over the
+    /// mapped Unix socket instead of TCP. Shared via `Arc` so clones
+    /// don't duplicate the map.
+    unix_socket_map: Arc<HashMap<String, PathBuf>>,
 }
 
 impl HttpClient {
@@ -42,7 +51,16 @@ impl HttpClient {
             outbound_disabled: config.internal_requests.disabled,
             allowed_url_prefixes: config.internal_requests.allowed_urls.clone(),
             allowed_ip_hosts: config.internal_requests.allowed_ips.clone(),
+            unix_socket_map: Arc::new(config.unix_socket_map.clone()),
         }
+    }
+
+    /// Test-only builder: replaces the UDS alias map. Returns a fresh
+    /// client rather than mutating in place because the field is
+    /// `Arc`-shared with existing clones.
+    pub fn with_unix_socket_map(mut self, map: HashMap<String, PathBuf>) -> Self {
+        self.unix_socket_map = Arc::new(map);
+        self
     }
 
     /// Bare constructor for tests / callers that don't want to build a full
@@ -62,6 +80,7 @@ impl HttpClient {
             outbound_disabled: false,
             allowed_url_prefixes: Vec::new(),
             allowed_ip_hosts: Vec::new(),
+            unix_socket_map: Arc::new(HashMap::new()),
         }
     }
 
@@ -112,6 +131,17 @@ impl HttpClient {
         // punching a hole in the allowlist.
         let rewritten = rewrite_url_for_tests(url);
         let url = rewritten.as_deref().unwrap_or(url);
+
+        // Task 043 dispatch: explicit `unix://` scheme, or a
+        // TCP-shaped URL whose host is an alias for a Unix socket.
+        // SSRF allow-lists apply to TCP-shaped URLs; UDS bypasses them
+        // (a Unix path is definitionally not a remote address).
+        if url.starts_with("unix://") {
+            return self.uds_request_from_unix_url(url, method, body, query, headers, timeout).await;
+        }
+        if let Some(sock_path) = self.host_alias_lookup(url) {
+            return self.uds_request_from_alias(&sock_path, url, method, body, query, headers, timeout).await;
+        }
 
         self.check_ssrf(url)?;
 
@@ -214,6 +244,152 @@ impl HttpClient {
             headers: response_headers,
         })
     }
+
+    /// If `url` is a TCP-shaped URL (`http://host/...`) whose host
+    /// matches a `unix_socket_map` alias, return the socket path.
+    /// `None` otherwise — caller should proceed with the TCP path.
+    fn host_alias_lookup(&self, url: &str) -> Option<PathBuf> {
+        if self.unix_socket_map.is_empty() {
+            return None;
+        }
+        // Parse just enough to extract the host; a full url::Url parse
+        // rejects some quirks (missing path) that we want to allow.
+        let parsed = url::Url::parse(url).ok()?;
+        let host = parsed.host_str()?;
+        self.unix_socket_map.get(host).cloned()
+    }
+
+    async fn uds_request_from_unix_url(
+        &self,
+        url: &str,
+        method: Method,
+        body: Option<&Value>,
+        query: Option<&HashMap<String, Value>>,
+        headers: Option<&HashMap<String, Value>>,
+        timeout: Option<Duration>,
+    ) -> Result<HttpResponse> {
+        let (socket_path, mut path_and_query) = uds::parse_unix_url(url)?;
+        // Append query params if the caller passed any and the URL
+        // didn't already have a query string.
+        path_and_query = merge_query_params(&path_and_query, query);
+        let resp = uds::request_over_unix(
+            &socket_path,
+            "localhost",
+            &path_and_query,
+            hyper_method(method),
+            body,
+            headers,
+            timeout.unwrap_or(self.default_timeout),
+        )
+        .await?;
+        self.enforce_status_and_size(&resp)?;
+        Ok(resp)
+    }
+
+    async fn uds_request_from_alias(
+        &self,
+        socket_path: &std::path::Path,
+        url: &str,
+        method: Method,
+        body: Option<&Value>,
+        query: Option<&HashMap<String, Value>>,
+        headers: Option<&HashMap<String, Value>>,
+        timeout: Option<Duration>,
+    ) -> Result<HttpResponse> {
+        let parsed = url::Url::parse(url).map_err(|e| {
+            RuuterError::HttpRequest(format!("invalid aliased url '{}': {}", url, e))
+        })?;
+        let origin_host = parsed.host_str().unwrap_or("localhost").to_string();
+        // Combine URL's own path+query with any extra `query` argument
+        let base = if let Some(q) = parsed.query() {
+            format!("{}?{}", parsed.path(), q)
+        } else {
+            parsed.path().to_string()
+        };
+        let path_and_query = merge_query_params(&base, query);
+        let resp = uds::request_over_unix(
+            socket_path,
+            &origin_host,
+            &path_and_query,
+            hyper_method(method),
+            body,
+            headers,
+            timeout.unwrap_or(self.default_timeout),
+        )
+        .await?;
+        self.enforce_status_and_size(&resp)?;
+        Ok(resp)
+    }
+
+    fn enforce_status_and_size(&self, resp: &HttpResponse) -> Result<()> {
+        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&resp.status) {
+            return Err(RuuterError::HttpRequest(format!(
+                "upstream status {} not in http_codes_allow_list",
+                resp.status
+            )));
+        }
+        if let Some(cap) = self.response_size_limit {
+            // UDS path reads the full body via `.collect()` — we can
+            // only enforce the cap post-hoc. For streaming UDS with
+            // mid-read abort, see follow-up task.
+            let approx = resp
+                .body
+                .as_ref()
+                .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(0))
+                .unwrap_or(0);
+            if approx > cap {
+                return Err(RuuterError::HttpRequest(format!(
+                    "uds upstream body {} bytes exceeds http_response_size_limit {}",
+                    approx, cap
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn hyper_method(m: Method) -> http::Method {
+    // reqwest::Method and http::Method are the same underlying crate;
+    // we're just re-exporting through different names. Since 0.12,
+    // reqwest::Method IS http::Method (re-export). Direct pass through.
+    m
+}
+
+fn merge_query_params(path_and_query: &str, extra: Option<&HashMap<String, Value>>) -> String {
+    let Some(q) = extra else {
+        return path_and_query.to_string();
+    };
+    if q.is_empty() {
+        return path_and_query.to_string();
+    }
+    let sep = if path_and_query.contains('?') { '&' } else { '?' };
+    let parts: Vec<String> = q
+        .iter()
+        .map(|(k, v)| {
+            let s = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            format!("{}={}", urlencoding_encode(k), urlencoding_encode(&s))
+        })
+        .collect();
+    format!("{}{}{}", path_and_query, sep, parts.join("&"))
+}
+
+fn urlencoding_encode(s: &str) -> String {
+    // Minimal %-encoding for query values: encode reserved chars
+    // sufficient for URL query strings. Full encoder isn't required
+    // because typical UDS callees are internal and see simple values.
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 /// Test-only URL rewriting. When the env var
