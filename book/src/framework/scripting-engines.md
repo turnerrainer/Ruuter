@@ -22,9 +22,23 @@ Exactly one of `scripting-boa` (default) or `scripting-quickjs` must be enabled.
 | Binary size | Baseline | +~500 KB |
 | Send/Sync | `!Send` (blocks pooling) | `Send + Sync` (with `parallel` feature) |
 | Per-eval perf | 1× (baseline) | 2-5× faster on typical workloads |
+| Per-request session pool (task 036) | Blocked | **Enabled** |
 | ECMAScript compat | High | High (same corpus in Ruuter's DSL-tests passes on both) |
 | CVE surface | Rust safety net | C library, non-zero |
-| Unblocks tasks 036, 045 | No | Yes |
+
+### Measured deltas (v0.6.5, 3-run median, laptop)
+
+| Scenario | Boa | QuickJS + 036 | Δ rps | Δ p50 |
+|---|---:|---:|---|---|
+| guarded (guard + Boa auth check + main DSL) | 1,401 rps | **6,118 rps** | **+337%** | -78% |
+| js-heavy (Boa `Date.now()` + object literal) | 3,245 rps | **7,906 rps** | **+143%** | -60% |
+| path-params (switch + Boa condition eval) | 2,098 rps | **8,486 rps** | **+305%** | -75% |
+| thin-dsl (037 fast-path — no engine call) | 77,777 rps | 80,027 rps | +3% (parity) | -3% |
+| framework-baseline (no DSL, no engine) | ~95k rps | ~95k rps | parity | parity |
+
+The compound of "engine swap + per-request session pool" moves Boa-hitting DSLs from the 1-3k rps band into the 6-9k rps band. Framework baseline unchanged.
+
+Rerun on an isolated host (see `bench/AWS-RUNBOOK.md`) if you need shipping-grade numbers; the localhost run has real noise but the direction is robust across runs.
 
 **Default recommendation**: Boa. It's the default for a reason — pure Rust, no CVE surface, and DSL-hot-path perf is dominated by the framework, not the engine. Only reach for QuickJS if:
 

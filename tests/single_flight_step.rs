@@ -351,14 +351,22 @@ lead:
     key: "slow"
     ttl_ms: 100
     do:
-      # 500-item iterate: sums 0..500. Serves as a ~200ms busy wait.
+      # Nested iterate to guarantee > 100ms on both engines.
+      # QuickJS (task 036, per-request context pool) makes single
+      # iterates much faster than Boa; a nested 100×100 gives us
+      # ~10k JS evals inside the coalesce window so this stays
+      # timing-sensitive on both backends.
       - assign: { items: [] }
       - iterate:
-          over: "${Array.from({length: 500}, (_, i) => i)}"
+          over: "${Array.from({length: 100}, (_, i) => i)}"
           as: n
           do:
-            - assign:
-                sink: "${(items || []).concat([n])}"
+            - iterate:
+                over: "${Array.from({length: 100}, (_, i) => i)}"
+                as: m
+                do:
+                  - assign:
+                      sink: "${(items || []).concat([n * m])}"
     result: sink
   next: respond
 
