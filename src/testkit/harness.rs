@@ -5,7 +5,7 @@
 //!
 //! `execute_http` routes through the real axum stack via
 //! `tower::ServiceExt::oneshot` so framework-layer behaviour
-//! (Idempotency-Key dedup, CSRF, traceparent, method allow-list) is
+//! (CSRF, traceparent, method allow-list) is
 //! exercised alongside the DSL itself. In-memory, no port bind.
 
 use crate::config::AppConfig;
@@ -84,8 +84,8 @@ impl Harness {
     }
 
     /// Fire one HTTP request through the built router. Uses
-    /// `tower::ServiceExt::oneshot` so full middleware runs (idempotency,
-    /// CSRF, traceparent, method allow-list) — no TCP socket.
+    /// `tower::ServiceExt::oneshot` so full middleware runs (CSRF,
+    /// traceparent, method allow-list) — no TCP socket.
     pub async fn execute_http(
         &self,
         method: &str,

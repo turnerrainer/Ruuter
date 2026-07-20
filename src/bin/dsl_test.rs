@@ -202,7 +202,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn load_test_file(path: &Path) -> anyhow::Result<TestFile> {
     let raw = std::fs::read_to_string(path)?;
-    let file: TestFile = serde_yml::from_str(&raw)?;
+    let file: TestFile = serde_yaml_ng::from_str(&raw)?;
     Ok(file)
 }
 
@@ -611,17 +611,6 @@ fn check_http_response(
     for k in &expect.header_absent {
         if get_header_ci(headers, k).is_some() {
             return Err(format!("header '{}': expected absent, was present", k));
-        }
-    }
-    if let Some(replayed) = expect.replayed {
-        let hit = get_header_ci(headers, "idempotency-replayed")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        if hit != replayed {
-            return Err(format!(
-                "replayed: expected {}, got {} (headers: {:?})",
-                replayed, hit, headers
-            ));
         }
     }
     Ok(())

@@ -24,7 +24,7 @@
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
-use serde_yml::Value as YamlValue;
+use serde_yaml_ng::Value as YamlValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -239,7 +239,7 @@ fn parse_file(
 
     let substituted = substitute_constants(&raw, constants);
 
-    let map: IndexMap<String, YamlValue> = serde_yml::from_str(&substituted)
+    let map: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(&substituted)
         .map_err(|e| vec![format!("YAML parse error: {}", e)])?;
 
     let mut errs = Vec::new();
@@ -533,7 +533,7 @@ fn walk_reachable(start: &str, steps: &[ParsedStep], out: &mut BTreeSet<String>)
 fn check_source_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
     // sources/ files must have a top-level `kind:` field. We can't run
     // them through the DSL parser, so just verify shape.
-    let doc: Result<Value, _> = serde_yml::from_str(&pf.raw).map(yaml_to_json);
+    let doc: Result<Value, _> = serde_yaml_ng::from_str(&pf.raw).map(yaml_to_json);
     let doc = match doc {
         Ok(v) => v,
         Err(e) => {
@@ -557,7 +557,7 @@ fn check_source_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
 fn check_cron_job_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
     // Each top-level key must be a job with at least `trigger`, `type`,
     // `url`. This is the CronManager format, not the Ruuter DSL format.
-    let doc: Result<Value, _> = serde_yml::from_str(&pf.raw).map(yaml_to_json);
+    let doc: Result<Value, _> = serde_yaml_ng::from_str(&pf.raw).map(yaml_to_json);
     let doc = match doc {
         Ok(v) => v,
         Err(e) => {

@@ -204,7 +204,10 @@ async fn main() {
                 error!("Failed to bind to {}: {}", addr, e);
                 std::process::exit(1);
             });
-        axum::serve(listener, app)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
             .await
             .unwrap_or_else(|e| {
                 error!("Server error: {}", e);
@@ -237,7 +240,12 @@ async fn main() {
                             std::process::exit(1);
                         });
                     handles.push(tokio::spawn(async move {
-                        if let Err(e) = axum::serve(listener, app).await {
+                        if let Err(e) = axum::serve(
+                            listener,
+                            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
+                        .await
+                        {
                             error!("listener {}: {}", label, e);
                         }
                     }));

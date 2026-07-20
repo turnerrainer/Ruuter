@@ -119,4 +119,4 @@ Why bypass the source? Sources connect to real upstreams (WebSocket, MQTT, Kafka
 | External HTTP (`call: http.get/post/...`) | `mock-http` |
 | WS server DSL (`WS/<path>.yml`) | `ws-client` |
 | Trigger DSL (`triggers/<channel>/...`) | `trigger-inject` |
-| Framework invariant (idempotency, CSRF, 404, traceparent) | `inprocess` — the full stack runs |
+| Framework invariant (CSRF, 404, traceparent) | `inprocess` — the full stack runs |

@@ -53,19 +53,23 @@ Storage: `DashMap<String, Arc<Mutex<Option<Result>>>>` with a broadcast
 channel per entry. Bounded via a max-key count; oldest evicted on
 overflow.
 
-## Interaction with Idempotency-Key
+## Interaction with the DSL-authored idempotency pattern
 
 Overlaps but distinct:
 
 | Primitive | Purpose | Scope | Persistence |
 |---|---|---|---|
-| Idempotency-Key (framework) | Retry safety across the wire | Per-client-declared key | TTL cache, single-instance |
+| DSL idempotency pattern (`state.get`/`state.set` with `origin + endpoint + body-hash` key) | Retry safety across the wire | Per-DSL identity+body dedup key | Whatever the state backend offers (TTL, shared) |
 | single_flight (this task) | Coalesce concurrent duplicate work | Per-DSL-computed key | In-flight only, no cache after completion |
 | Cuckoo (task 038) | "Have I seen this before?" | Set membership | In-memory bloom-like |
 
-They compose: an `Idempotency-Key`-guarded route can use `single_flight`
-inside its DSL to coalesce; the Cuckoo filter can gate the DSL
-entirely.
+They compose: a DSL that dedups on `state.get(idempotency-key)` can
+call `single_flight` inside the `work:` branch to coalesce a
+concurrent burst before it hits the backing store; the Cuckoo filter
+can gate the DSL entirely.
+
+(Framework-level `Idempotency-Key` handling was removed in v1.0.0 —
+see `book/src/dsl/idempotency-pattern.md` for the shape.)
 
 ## Acceptance
 
@@ -81,5 +85,5 @@ entirely.
 
 Cross-instance coalescing. Two Ruuter replicas each maintain their
 own single-flight map — a duplicate on the other replica is not
-coalesced. Solving that requires the same shared-store work as task
-029 (Idempotency shared store); track separately.
+coalesced. Solving that requires a shared state backend that the DSL
+addresses via `state.get`/`state.set`, not a framework-level cache.

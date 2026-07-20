@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-20
+
+Security-hardening release. Closes 15 findings from the h2ck.me
+pre-publication audit (S1–S8, N1–N4, F1, F2) across three review
+rounds; adds a `cargo audit` CI gate. Every fix has a regression
+test in `tests/security*.rs` (68 tests total, all green).
+`cargo audit --deny warnings` is clean.
+
+### Breaking
+
+- **Framework-level `Idempotency-Key` handling removed.** The
+  framework no longer caches or replays responses by
+  `Idempotency-Key`; the `Idempotency-Replayed` response header is
+  never emitted. Two identical POSTs with the same key both execute
+  the DSL. DSL authors implement idempotency via `state.get` /
+  `state.set` with their own identity + body-hash keys — see
+  [Idempotency pattern](../dsl/idempotency-pattern.md). Closes
+  h2ck.me findings **S1** (missing body-hash — cross-caller replay)
+  and **S5** (`Idempotency-Replayed` oracle). Config field
+  `internal_requests.idempotency` and struct `IdempotencyConfig` are
+  removed.
+
+### Security
+
+- **S2 — SSRF allowlist exact origin match.** Bare-origin entries in
+  `internal_requests.allowed_urls` now require exact
+  `scheme://host:port` equality against the request URL. A previous
+  substring match let `http://api.example.com` admit
+  `http://api.example.com.evil.tld/x`. Path-scoped entries still work
+  and prefix-match on the path portion after the origin matches.
+- **S3 — `internal_requests.disabled` honoured by every transport.**
+  The disabled guard runs at the very top of `HttpClient::request`,
+  before self-call short-circuit, `unix://` scheme dispatch, and
+  `unix_socket_map` alias dispatch. Disabling outbound HTTP now
+  really means every transport.
+- **S4 — `X-Forwarded-For` trusted-proxy gating.** New
+  `proxy.trusted: [ip, ...]` config. XFF (and `X-Real-IP`) is only
+  promoted into `incoming.origin` when the direct TCP peer's IP is
+  on the list; otherwise `origin` is the socket peer. Raw header is
+  still visible in `incoming.headers`. Empty `proxy.trusted`
+  (default) is safe for direct-exposed deployments. New DSL field
+  `incoming.origin` is exposed in the scripting scope (Boa +
+  QuickJS).
+
 ## [0.4.0] - 2026-07-14
 
 ### Added
@@ -29,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CORS layer wired from `cors.allowed_origins` / `cors.allow_credentials`.
 - Framework-level Idempotency-Key handling (PATTERNS.md §2) with an
   in-process TTL cache; `Idempotency-Replayed: true` on cache hits.
+  *(Removed in v1.0.0 — see the Unreleased section above.)*
 - Origin/Referer CSRF check (PATTERNS.md §1) on state-changing methods.
 - W3C traceparent adoption/generation + echo on responses with
   `X-Trace-Id`; outbound http calls auto-forward traceparent.

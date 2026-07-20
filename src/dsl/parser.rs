@@ -3,7 +3,7 @@ use crate::steps::DslStep;
 use crate::{Result, RuuterError};
 use indexmap::IndexMap;
 use regex::Regex;
-use serde_yml::Value as YamlValue;
+use serde_yaml_ng::Value as YamlValue;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -23,7 +23,7 @@ impl DslParser {
 
         // IndexMap preserves source order — the entry step is whatever
         // comes first in the YAML, as the Ruuter DSL contract requires.
-        let yaml: IndexMap<String, YamlValue> = serde_yml::from_str(&replaced)?;
+        let yaml: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(&replaced)?;
         let steps = self.parse_steps(yaml)?;
 
         Ok(Dsl::new(steps))
@@ -53,7 +53,7 @@ impl DslParser {
     }
 
     fn parse_step(&self, name: &str, value: YamlValue) -> Result<DslStep> {
-        let step = serde_yml::from_value(value)
+        let step = serde_yaml_ng::from_value(value)
             .map_err(|e| RuuterError::DslParse(format!("Failed to parse step '{}': {}", name, e)))?;
 
         Ok(step)

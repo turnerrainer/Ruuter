@@ -294,6 +294,11 @@ fn setup_bindings<'js>(ctx: &rquickjs::Ctx<'js>, context: &ExecutionContext) -> 
             None => Value::Null,
         },
     );
+    // h2ck.me S4 — mirror boa.rs: expose the trusted origin.
+    incoming.insert(
+        "origin",
+        Value::String(context.request_origin().to_string()),
+    );
 
     // QuickJS JSON.parse produces a native JS object; then attach to
     // globalThis under the expected name. No macro-generated bindings

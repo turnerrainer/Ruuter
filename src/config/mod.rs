@@ -51,7 +51,7 @@ pub struct AppConfig {
     pub csrf: CsrfConfig,
 
     #[serde(default)]
-    pub idempotency: IdempotencyConfig,
+    pub proxy: ProxyConfig,
 
     #[serde(default)]
     pub scripting: ScriptingConfig,
@@ -189,44 +189,6 @@ fn default_csrf_methods() -> Vec<String> {
     ]
 }
 
-/// Framework-level Idempotency-Key handling. Implements PATTERNS.md §2.
-/// Backend is an in-process TTL cache; upgrade to Redis / Postgres is
-/// on-request-only for the framework, not per-DSL.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct IdempotencyConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    #[serde(default = "default_idempotency_ttl_seconds")]
-    pub ttl_seconds: u64,
-
-    /// Methods eligible for deduplication when an Idempotency-Key header
-    /// is present. GET is intentionally not in the list.
-    #[serde(default = "default_idempotency_methods")]
-    pub methods: Vec<String>,
-}
-
-fn default_true() -> bool { true }
-fn default_idempotency_ttl_seconds() -> u64 { 24 * 60 * 60 }
-fn default_idempotency_methods() -> Vec<String> {
-    vec![
-        "POST".to_string(),
-        "PUT".to_string(),
-        "PATCH".to_string(),
-        "DELETE".to_string(),
-    ]
-}
-
-impl Default for IdempotencyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_true(),
-            ttl_seconds: default_idempotency_ttl_seconds(),
-            methods: default_idempotency_methods(),
-        }
-    }
-}
-
 /// Guardrails for the embedded JavaScript engine. The Boa runtime is
 /// synchronous and cannot be cooperatively cancelled once evaluation
 /// begins, so we impose CPU-bounded caps rather than wall-clock ones.
@@ -299,7 +261,22 @@ pub struct IncomingRequestsConfig {
     pub headers: HashMap<String, String>,
 }
 
+/// h2ck.me S4 — trusted reverse-proxy list. Only requests whose
+/// direct TCP peer IP is in `trusted` may have `X-Forwarded-For` /
+/// `X-Real-IP` promoted into the DSL's `incoming.origin` field. From
+/// untrusted peers those headers are still visible via
+/// `incoming.headers` (some DSLs log or hash them), but the
+/// framework-level `origin` — which downstream code uses for audit,
+/// rate-limit keys, and self-call bookkeeping — reflects the socket
+/// peer instead. Empty list (default) means no proxy is trusted,
+/// which is the safest posture for direct-exposed deployments.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ProxyConfig {
+    #[serde(default)]
+    pub trusted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InternalRequestsConfig {
     #[serde(default)]
     pub disabled: bool,
@@ -309,6 +286,37 @@ pub struct InternalRequestsConfig {
 
     #[serde(default)]
     pub allowed_urls: Vec<String>,
+
+    /// h2ck.me N4 — defense-in-depth against cloud-metadata SSRF.
+    /// When true (default), outbound TCP requests targeting
+    /// link-local (169.254/16, fe80::/10), loopback (127/8, ::1),
+    /// unspecified (0.0.0.0, ::), or RFC-1918 / ULA private ranges
+    /// (10/8, 172.16/12, 192.168/16, fc00::/7) are rejected before
+    /// dispatch. Self-call short-circuits (URLs pointing at the
+    /// framework's own listener) and UDS transports (`unix://` scheme,
+    /// `unix_socket_map` alias) are unaffected — those never touch
+    /// TCP.
+    ///
+    /// Set to false to restore the pre-v1.0 permissive behaviour if
+    /// you legitimately need a DSL to call a private-network sidecar
+    /// over TCP loopback without migrating to `unix_socket_map`.
+    #[serde(default = "default_block_private_networks")]
+    pub block_private_networks: bool,
+}
+
+fn default_block_private_networks() -> bool {
+    true
+}
+
+impl Default for InternalRequestsConfig {
+    fn default() -> Self {
+        Self {
+            disabled: false,
+            allowed_ips: Vec::new(),
+            allowed_urls: Vec::new(),
+            block_private_networks: default_block_private_networks(),
+        }
+    }
 }
 
 fn default_config_path() -> PathBuf {
@@ -379,7 +387,7 @@ impl Default for AppConfig {
             response_default_headers: HashMap::new(),
             internal_requests: InternalRequestsConfig::default(),
             csrf: CsrfConfig::default(),
-            idempotency: IdempotencyConfig::default(),
+            proxy: ProxyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
             unix_socket_map: HashMap::new(),
@@ -438,7 +446,7 @@ impl AppConfig {
                         e
                     ))
                 })?;
-                let cfg: AppConfig = serde_yml::from_str(&body).map_err(|e| {
+                let cfg: AppConfig = serde_yaml_ng::from_str(&body).map_err(|e| {
                     crate::RuuterError::Config(format!(
                         "parsing config file {}: {}",
                         path.display(),

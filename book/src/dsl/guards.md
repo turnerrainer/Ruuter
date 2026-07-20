@@ -87,4 +87,4 @@ POST /svc/ops/inject-fault/trigger → override guard runs, always 403 (folder g
 
 ## Order of framework checks
 
-Guards run AFTER method-allow-list, CSRF, Idempotency-Key cache-hit check, and If-Match enforcement. See [Request pipeline](../framework/pipeline.md).
+Guards run AFTER method-allow-list, CSRF, and If-Match enforcement. See [Request pipeline](../framework/pipeline.md).

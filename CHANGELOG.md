@@ -7,6 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-20
+
+Security-hardening release. Closes 15 findings from the h2ck.me
+pre-publication audit (S1–S8, N1–N4, F1, F2) across three review
+rounds; adds a `cargo audit` CI gate. Every fix has a regression
+test in `tests/security*.rs` (68 tests total, all green).
+`cargo audit --deny warnings` is clean.
+
+### Breaking
+
+- **Framework-level `Idempotency-Key` handling removed.** The
+  framework no longer caches or replays responses by
+  `Idempotency-Key`; the `Idempotency-Replayed` response header is
+  never emitted. Two identical POSTs with the same key both execute
+  the DSL. DSL authors implement idempotency via `state.get` /
+  `state.set` with their own identity + body-hash keys — see
+  `book/src/dsl/idempotency-pattern.md`. This gives consumers control
+  over what "same request" means (body canonicalisation, caller
+  identity, tenant scope) instead of the framework guessing.
+  Closes h2ck.me findings **S1** (missing body-hash in dedup key —
+  cross-caller replay) and **S5** (`Idempotency-Replayed: true`
+  oracle for probing keys). Config field
+  `internal_requests.idempotency` and struct `IdempotencyConfig` are
+  removed; existing config files with that block must drop it.
+
+### Security
+
+- **S2 — SSRF allowlist exact origin match.** `check_ssrf` previously
+  used `starts_with` against `internal_requests.allowed_urls`, so an
+  operator writing `http://api.example.com` (no trailing slash)
+  would accept a lookalike `http://api.example.com.evil.tld/x`. The
+  check now parses both the entry and the request URL, requires an
+  exact `scheme://host:port` match, and only prefix-matches the path
+  portion when the entry itself has a path. Bare-origin entries
+  still work — they just no longer admit substring lookalikes.
+- **S3 — `internal_requests.disabled` honoured by every transport.**
+  The disabled guard now runs at the very top of
+  `HttpClient::request`, before the task-044 self-call short-circuit,
+  the `unix://` scheme handler, and the `unix_socket_map` alias
+  dispatch. When outbound is disabled, no transport slips past.
+- **S4 — `X-Forwarded-For` trusted-proxy gating.** New
+  `proxy.trusted: [ip, ...]` config. Only when the direct TCP peer's
+  IP is in that list does the framework promote `X-Forwarded-For`
+  (or `X-Real-IP`) into `incoming.origin`. Otherwise `origin`
+  reflects the socket peer, so a direct caller can't spoof the value
+  downstream code keys off (audit logs, rate-limit keys, self-call
+  bookkeeping). The raw header is still visible in
+  `incoming.headers`. Empty `proxy.trusted` (default) is the safe
+  posture for direct-exposed deployments. Also newly exposed:
+  `incoming.origin` as a first-class field in the DSL scripting
+  scope (both Boa and QuickJS backends).
+- **S6 — outbound redirects no longer followed transparently.** The
+  reqwest client is now built with `redirect(Policy::none())` so a
+  whitelisted upstream can't 302 the call to a blocked target
+  (`169.254.169.254` and friends). DSLs that legitimately need to
+  chase a `Location` header must issue a second `http.<verb>` step —
+  which re-runs the SSRF check on the new target.
+- **S7 — `/health` no longer leaks framework name + version.** The
+  handler now returns `{"status":"ok"}`. Downstream advisory-matching
+  against Ruuter builds is no longer possible without an
+  operator-shipped admin surface.
+- **S8 — vulnerable / unmaintained dependencies dropped.** Replaced
+  `serde_yml 0.0.12` (RUSTSEC-2025-0068 unsound, unmaintained) with
+  the community fork `serde_yaml_ng 0.10`. Bumped `boa_engine`
+  0.19 → 0.20, which drops `fast-float 0.2.0` (RUSTSEC-2025-0003
+  SIGSEGV) in favour of `fast-float2` and also drops the
+  `libyml 0.0.5` transitive (RUSTSEC-2025-0067). `anyhow` bumped
+  to 1.0.104 to close RUSTSEC-2026-0190. `cargo audit` now reports
+  0 vulnerabilities; only unmaintained-transitive warnings for
+  `instant` and `paste` remain.
+- **N1 — path-scoped SSRF allowlist entries enforce segment
+  boundary.** After the S2 fix, path-scoped entries such as
+  `http://api.example.com/v1` were still matched via `starts_with`,
+  which admitted `/v1anything`. The check now requires the next
+  character after the entry-path to be `/`, `?`, `#`, or
+  end-of-string — the same segment-boundary rule browsers apply.
+- **N2 — `X-Forwarded-For` leftmost IP only.** When the peer is
+  trusted, only the LEFTMOST comma-separated value that parses as
+  an `IpAddr` becomes `incoming.origin`. A non-IP leftmost value
+  (misconfigured proxy or spoof attempt) is refused and the
+  framework falls back to the socket peer. Downstream DSLs that key
+  on `origin` no longer see attacker-controlled substrings.
+- **N3 — trusted-proxy list canonicalises IPv4-mapped IPv6.** Both
+  the peer IP and each `proxy.trusted` entry are parsed as `IpAddr`,
+  and IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is folded back to plain
+  IPv4 before comparison. An operator writing `trusted: ["127.0.0.1"]`
+  keeps working across dual-stack listener quirks.
+- **N4 — default outbound blocklist for private / link-local
+  ranges.** New `internal_requests.block_private_networks` config,
+  defaults to `true`. Outbound TCP to loopback (127/8, ::1),
+  link-local (169.254/16, fe80::/10), unspecified, RFC-1918
+  (10/8, 172.16/12, 192.168/16), carrier-grade-NAT (100.64/10) or
+  ULA (fc00::/7) is rejected before dispatch — closing the
+  cloud-metadata SSRF exposure that the empty-allowlist default
+  used to permit. Self-call short-circuits and UDS transports are
+  unaffected. Operators who legitimately need a private-network
+  sidecar over TCP loopback either add it to `allowed_ips` /
+  `allowed_urls` or set `block_private_networks: false`.
+- **F1 — trailing-slash SSRF allowlist entries admit their subpaths.**
+  The N1 boundary check rejected legitimate requests when the operator
+  wrote the recommended trailing-slash form (`http://api/v1/`), because
+  the check applied to the character AFTER the trailing `/` — which had
+  already been consumed by `starts_with`. `allow_entry_matches` now
+  short-circuits when the entry itself ends at a URL delimiter (`/`,
+  `?`, `#`); the boundary is already closed. Also extended the tail
+  delimiter set to include `&` so query-scoped entries
+  (`http://api/v1?tok=X`) admit `?tok=X&extra=1`.
+- **F2 — `block_private_networks` follows DNS.** Previously the
+  blocklist only ran when the URL host parsed as an IP literal, so
+  `http://localhost/`, `http://metadata.google.internal/`, and any
+  attacker-controlled DNS name bypassed the check entirely.
+  `check_ssrf` is now async and resolves hostnames via
+  `tokio::net::lookup_host`; a single private / link-local hit in the
+  resolved address set rejects the request. Explicit entries in
+  `allowed_ips` / `allowed_urls` still opt the hostname back in.
+
+### CI
+
+- **Task 056 — `cargo audit` gate.** New `.github/workflows/security.yml`
+  runs `cargo audit --deny warnings` on every push / PR and on a
+  weekly cron so a fresh advisory against unchanged `Cargo.lock`
+  still fires. Documented exceptions live in `.cargo/audit.toml`
+  with a rationale and review date. Currently exempted:
+  RUSTSEC-2024-0384 (`instant` unmaintained, transitive) and
+  RUSTSEC-2024-0436 (`paste` unmaintained, transitive) — both
+  reviewed 2026-10-01.
+
 ## [0.6.6] - 2026-07-19
 
 ### Added

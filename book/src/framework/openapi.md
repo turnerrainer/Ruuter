@@ -27,7 +27,7 @@ Add a `declaration:` step to any route DSL to enrich its OpenAPI entry:
 declaration:
   description: "Cancel an order and archive its audit trail."
   allowed_body:   [order_id, reason]
-  allowed_header: [Authorization, Idempotency-Key]
+  allowed_header: [Authorization]
   allowed_params: [correlation_id]
 
 cancel:

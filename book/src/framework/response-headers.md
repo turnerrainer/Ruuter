@@ -6,8 +6,6 @@ Every response carries the following, in addition to anything the DSL set explic
 |-------------------------|-------|------|
 | `traceparent`           | W3C tracecontext, adopted from request or generated | always |
 | `x-trace-id`            | 32-hex trace id extracted from `traceparent` | always |
-| `idempotency-key`       | echoed value of the request's `Idempotency-Key` | active idempotency method only |
-| `idempotency-replayed`  | `true` | cache-hit replay only |
 | `access-control-*`      | as configured | `cors.allowed_origins` non-empty AND Origin matches |
 | `content-type`          | `application/json` | always for framework-generated bodies |
 | Anything under `response_default_headers` | as configured | always, unless DSL set the same header |
@@ -26,7 +24,6 @@ x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736
 ## Merge precedence (highest wins)
 
 1. `traceparent` and `x-trace-id` — always overwritten by the framework (you cannot spoof a trace id via the DSL).
-2. `idempotency-key` / `idempotency-replayed` — set by the framework whenever an idempotency method is active.
-3. `return.headers` from the DSL.
-4. `content-type: application/json` — set by the JSON response body.
-5. `response_default_headers` — added only if the same header name isn't already set by any of the above.
+2. `return.headers` from the DSL.
+3. `content-type: application/json` — set by the JSON response body.
+4. `response_default_headers` — added only if the same header name isn't already set by any of the above.

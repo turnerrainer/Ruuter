@@ -273,7 +273,7 @@ reconnect:
   max_backoff_ms: 30000
   jitter: false
 "#;
-    let parsed: SourceConfig = serde_yml::from_str(yaml).unwrap();
+    let parsed: SourceConfig = serde_yaml_ng::from_str(yaml).unwrap();
     match parsed {
         SourceConfig::WebSocket(ws) => {
             assert_eq!(ws.url, "wss://example.com/v2");

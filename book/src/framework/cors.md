@@ -18,7 +18,7 @@ cors:
 When configured:
 
 - Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
-- Headers: `content-type, authorization, idempotency-key, if-match, traceparent`
+- Headers: `content-type, authorization, if-match, traceparent`
 - Credentials: per `allow_credentials`
 
 ## Verification

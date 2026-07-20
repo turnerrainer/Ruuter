@@ -180,6 +180,14 @@ fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()
             None => Value::Null,
         },
     );
+    // h2ck.me S4 — expose the framework-computed origin (peer IP, or
+    // an X-Forwarded-For value from a trusted proxy). Distinct from
+    // `incoming.headers["x-forwarded-for"]`, which is the raw
+    // client-controlled value.
+    incoming.insert(
+        "origin",
+        Value::String(context.request_origin().to_string()),
+    );
 
     let incoming_json = serde_json::to_string(&incoming)?;
     boa.eval(Source::from_bytes(&format!(

@@ -3,7 +3,6 @@ pub mod context;
 pub mod dsl;
 pub mod error;
 pub mod http_client;
-pub mod idempotency;
 pub mod openapi;
 pub mod observability;
 pub mod router;

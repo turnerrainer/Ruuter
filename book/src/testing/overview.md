@@ -3,7 +3,7 @@
 Two binaries ship with Ruuter-on-Rust for validating DSL trees end-to-end:
 
 - **`dsl-lint`** — static validator. Parses every DSL, checks step-graph integrity, resolves `[#constant]` references, verifies template targets. No execution. Runs in ~100 ms on the sample corpus.
-- **`dsl-test`** — runtime test runner. Walks `DSL-tests/`, executes scenarios against the full framework stack (idempotency, CSRF, traceparent, guards all active), asserts on HTTP response, WebSocket frames, state-store contents, and mock upstream calls.
+- **`dsl-test`** — runtime test runner. Walks `DSL-tests/`, executes scenarios against the full framework stack (CSRF, traceparent, guards all active), asserts on HTTP response, WebSocket frames, state-store contents, and mock upstream calls.
 
 Both binaries live under `src/bin/` and are built alongside the server:
 
@@ -53,7 +53,7 @@ The three warnings are unresolved `[#constant]` references in DSLs that document
 ## Design principles
 
 - **Data-driven, not code.** Test files are YAML with a small assertion vocabulary. Adding coverage for a new DSL is one file, zero Rust.
-- **Full stack, not mocked guts.** Scenarios flow through `DslRouter::build_axum_router` via `tower::ServiceExt::oneshot` — the same code path a real HTTP request takes. Framework middleware (idempotency, CSRF, traceparent, method allow-list) runs unmodified.
+- **Full stack, not mocked guts.** Scenarios flow through `DslRouter::build_axum_router` via `tower::ServiceExt::oneshot` — the same code path a real HTTP request takes. Framework middleware (CSRF, traceparent, method allow-list) runs unmodified.
 - **Hermetic per file.** Each `.test.yml` gets a fresh `DslLoader` load with its own constant overrides. Files don't leak state into each other.
 - **In-file scenarios share state.** Within one file, scenarios run in declaration order against one `Harness`. This lets you write "first call sets counter=1, second call returns counter=2" style tests without seeding state twice.
 - **Test what's shipped, not what you wish were shipped.** If a DSL sample has a bug, the test documents the current behaviour and CI turns green. Fix the DSL, flip the assertion.

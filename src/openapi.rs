@@ -127,10 +127,6 @@ pub fn build_spec_from_http(
                 "traceparent": {
                     "description": "W3C traceparent (`00-<trace_id>-<span_id>-<flags>`) either adopted from the request or generated fresh.",
                     "schema": {"type": "string"}
-                },
-                "Idempotency-Replayed": {
-                    "description": "Present with value `true` on a cache-hit replay from the Idempotency-Key store.",
-                    "schema": {"type": "string", "enum": ["true"]}
                 }
             }
         }
@@ -257,8 +253,7 @@ fn build_responses(statuses: &[u16]) -> Value {
                 "description": status_reason(code),
                 "headers": {
                     "traceparent": {"$ref": "#/components/headers/traceparent"},
-                    "X-Trace-Id": {"$ref": "#/components/headers/X-Trace-Id"},
-                    "Idempotency-Replayed": {"$ref": "#/components/headers/Idempotency-Replayed"}
+                    "X-Trace-Id": {"$ref": "#/components/headers/X-Trace-Id"}
                 },
                 "content": {
                     "application/json": {

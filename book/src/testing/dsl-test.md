@@ -56,7 +56,6 @@ dsl-test: 98 scenario(s) — 97 passed, 1 failed
 
 ```bash
 dsl-test --filter GET/http     # only external-HTTP tests
-dsl-test --filter idempotent   # only the Idempotency-Key framework test
 dsl-test --filter WS/          # only WebSocket tests
 ```
 
@@ -70,7 +69,7 @@ dsl-test --filter WS/          # only WebSocket tests
 
 `dsl-test` routes HTTP scenarios through `tower::ServiceExt::oneshot` on the built axum router. This means:
 
-- Idempotency-Key dedup, CSRF, traceparent, method allow-list, response-default-headers all run.
+- CSRF, traceparent, method allow-list, response-default-headers all run.
 - No TCP socket bound (except for the mock upstream and the ws-client mode's ephemeral server).
 - Scenario execution is single-process, deterministic, and fast: the 98-scenario corpus runs in ~2 s.
 

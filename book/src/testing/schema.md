@@ -79,7 +79,6 @@ expect:
   headers: { X-Foo: bar }          # header equality (case-insensitive on the name)
   header_present: [X-Trace-Id]     # header must exist
   header_absent: [X-Something]     # header must not exist
-  replayed: true                   # Idempotency-Replayed: true must be set
 ```
 
 ## `setup:` (Setup)

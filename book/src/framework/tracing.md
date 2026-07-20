@@ -42,6 +42,10 @@ W3C standard: `<version>-<trace_id>-<span_id>-<flags>`. Ruuter generates `01` (s
 
 The 32-hex trace id is what shows up as `X-Trace-Id`.
 
-## Replay preserves trace
+## Replay and trace correlation
 
-An [Idempotency-Key](./idempotency.md) replay generates a fresh traceparent for the replay response — it's a different HTTP request. Correlate the original and replay via the `Idempotency-Key` value, not the trace id.
+Framework-level `Idempotency-Key` handling was removed in v1.0.0.
+When a DSL implements the [DSL idempotency pattern](../dsl/idempotency-pattern.md)
+and short-circuits to a cached response, a fresh traceparent still
+fires — correlate the original and replay via whichever dedup key
+the DSL wrote into state, not the trace id.

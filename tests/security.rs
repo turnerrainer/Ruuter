@@ -5,7 +5,7 @@
 //! in the wiring order inside `router::handle_request` shows up
 //! here (unit tests on the modules alone can't catch that).
 
-use ruuter_on_rust::config::{AppConfig, CorsConfig, CsrfConfig, IdempotencyConfig, InternalRequestsConfig, IncomingRequestsConfig};
+use ruuter_on_rust::config::{AppConfig, CorsConfig, CsrfConfig, InternalRequestsConfig, IncomingRequestsConfig};
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::router::DslRouter;
@@ -45,7 +45,12 @@ async fn serve(router: DslRouter) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .ok();
     });
     // Yield so the server is actually listening by the time reqwest fires.
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -126,17 +131,19 @@ async fn method_not_in_allow_list_returns_405() {
 }
 
 // ── Idempotency-Key ────────────────────────────────────────────────
+//
+// Framework-level Idempotency-Key handling was removed in v1.0.0
+// (h2ck.me findings S1 + S5). This test pins the new contract:
+// the framework does NOT cache or replay; two identical requests
+// with the same `Idempotency-Key` both execute the DSL. DSL authors
+// implement idempotency via `state.get`/`state.set` with their own
+// identity + body-hash keys — see book/src/dsl/idempotency-pattern.md.
 
 #[tokio::test]
-async fn idempotency_replays_cached_response_on_second_call() {
-    let mut cfg = AppConfig::default();
-    cfg.idempotency = IdempotencyConfig {
-        enabled: true,
-        ttl_seconds: 60,
-        methods: vec!["POST".into()],
-    };
-    // The DSL increments a counter — if the second call actually re-ran
-    // the DSL, the counter would advance. Instead we cache and echo.
+async fn idempotency_key_header_is_not_handled_by_framework() {
+    let cfg = AppConfig::default();
+    // A counter DSL — if the framework were caching, the second
+    // call would replay `value: 1`. Now it re-runs and returns 2.
     let router = build_router(
         cfg,
         &[(
@@ -179,13 +186,16 @@ reply:
         .send()
         .await
         .unwrap();
-    let replayed_hdr = resp2.headers().get("idempotency-replayed").cloned();
+    // No `Idempotency-Replayed` header — the framework never
+    // emits it any more.
+    assert!(
+        resp2.headers().get("idempotency-replayed").is_none(),
+        "framework must not emit Idempotency-Replayed after v1.0 removal"
+    );
     let r2: serde_json::Value = resp2.json().await.unwrap();
-    assert_eq!(r2["value"], 1, "second call must replay first response, not re-run DSL");
     assert_eq!(
-        replayed_hdr.map(|v| v.to_str().unwrap().to_string()),
-        Some("true".to_string()),
-        "Idempotency-Replayed: true header must be present on the replay"
+        r2["value"], 2,
+        "second call must re-run the DSL (framework no longer caches by Idempotency-Key)"
     );
 }
 
@@ -223,6 +233,7 @@ async fn ssrf_outbound_disabled_blocks_http_step() {
         disabled: true,
         allowed_ips: vec![],
         allowed_urls: vec![],
+        block_private_networks: false,
     };
     let router = build_router(
         cfg,
