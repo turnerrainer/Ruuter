@@ -48,7 +48,14 @@ pub fn spawn_all(
                 let name_for_task = name.clone();
                 info!(%project, %name, url = %resolved.url, "spawning websocket source");
                 handles.push(tokio::spawn(async move {
-                    ws::run(project_for_task, name_for_task, resolved, dispatcher, registry).await;
+                    ws::run(
+                        project_for_task,
+                        name_for_task,
+                        resolved,
+                        dispatcher,
+                        registry,
+                    )
+                    .await;
                 }));
             }
         }

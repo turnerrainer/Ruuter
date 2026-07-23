@@ -72,9 +72,15 @@ impl Default for ReconnectPolicy {
     }
 }
 
-fn default_initial_backoff_ms() -> u64 { 500 }
-fn default_max_backoff_ms() -> u64 { 60_000 }
-fn default_jitter() -> bool { true }
+fn default_initial_backoff_ms() -> u64 {
+    500
+}
+fn default_max_backoff_ms() -> u64 {
+    60_000
+}
+fn default_jitter() -> bool {
+    true
+}
 
 /// Substitute `[#name]` references with values from `constants` in every
 /// string-valued field of `cfg`. Returns a fresh `WsSourceConfig`.

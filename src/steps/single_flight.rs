@@ -196,7 +196,9 @@ impl SingleFlightStepExecutor {
         // Evaluate the key expression against the caller's context.
         // Keys are DSL-computed (typically `${incoming.body.id}` +
         // constants), so different requests may or may not collide.
-        let key_value = self.script_engine.evaluate(&Value::String(body.key.clone()), context)?;
+        let key_value = self
+            .script_engine
+            .evaluate(&Value::String(body.key.clone()), context)?;
         let key = match key_value {
             Value::String(s) => s,
             other => other.to_string(),
@@ -310,10 +312,7 @@ impl SingleFlightStepExecutor {
                 // Either way, don't silently succeed.
                 Err(RuuterError::DslExecution {
                     step: "single_flight".to_string(),
-                    message: format!(
-                        "leader dropped without publishing (key={:?})",
-                        key
-                    ),
+                    message: format!("leader dropped without publishing (key={:?})", key),
                 })
             }
             Err(_timeout) => {

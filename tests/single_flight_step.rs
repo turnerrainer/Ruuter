@@ -3,6 +3,13 @@
 //! Every test here follows the audit-cycle discipline: assertions
 //! are chosen to BREAK an incorrect implementation, not to confirm
 //! a correct one.
+
+// Test-fixture AppConfig assembly + PARALLEL_TEST_LOCK held across
+// awaits by design (serialises the parallel-task scenarios so their
+// timing observations don't cross-contaminate). Multi-threaded tokio
+// runtime, no cross-lock deadlock risk in practice.
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::await_holding_lock)]
 //!
 //! The concurrency assertions use a shared `AtomicUsize` counter
 //! surfaced via a custom "test.count" step *shape* — actually,
@@ -34,7 +41,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 static PARALLEL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn uuid() -> String {
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 /// Build a router with the given DSLs. Returns the router AND the
@@ -122,9 +135,7 @@ async fn fire_concurrent(
     n: usize,
 ) -> Vec<serde_json::Value> {
     // Serialise vs other parallel-tokio-task tests in this file.
-    let _guard = PARALLEL_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = PARALLEL_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let barrier = Arc::new(tokio::sync::Barrier::new(n));
     let mut handles = Vec::with_capacity(n);
     for _ in 0..n {
@@ -141,7 +152,15 @@ async fn fire_concurrent(
             let mut body = HashMap::new();
             body.insert("k".to_string(), json!(k));
             let res = r
-                .execute_dsl(&p, &m, &ph, body, HashMap::new(), HashMap::new(), "test".into())
+                .execute_dsl(
+                    &p,
+                    &m,
+                    &ph,
+                    body,
+                    HashMap::new(),
+                    HashMap::new(),
+                    "test".into(),
+                )
                 .await
                 .expect("execute_dsl");
             res.value.unwrap_or(json!(null))
@@ -173,7 +192,12 @@ async fn concurrent_requests_same_key_execute_body_once() {
 
     // Exactly one execution across all 100 followers
     let count = state.get("p", "exec_count").unwrap();
-    assert_eq!(count, json!(1), "expected 1 body execution, got {:?}", count);
+    assert_eq!(
+        count,
+        json!(1),
+        "expected 1 body execution, got {:?}",
+        count
+    );
 
     // Every follower saw the same result value
     for (i, r) in results.iter().enumerate() {
@@ -193,9 +217,7 @@ async fn concurrent_requests_distinct_keys_do_not_coalesce() {
     // is that all 20 requests ran their body to completion (would
     // return 500 or hang otherwise) and that no single_flight
     // coalescing happened between distinct keys.
-    let _guard = PARALLEL_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = PARALLEL_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (router, _state) = build(&[("p/POST/lead.yml", DISTINCT_KEY_DSL)]);
 
     let mut handles = Vec::new();
@@ -204,9 +226,17 @@ async fn concurrent_requests_distinct_keys_do_not_coalesce() {
         handles.push(tokio::spawn(async move {
             let mut body = HashMap::new();
             body.insert("k".to_string(), json!(format!("unique-{}", i)));
-            r.execute_dsl("p", "POST", "lead", body, HashMap::new(), HashMap::new(), "test".into())
-                .await
-                .expect("execute_dsl")
+            r.execute_dsl(
+                "p",
+                "POST",
+                "lead",
+                body,
+                HashMap::new(),
+                HashMap::new(),
+                "test".into(),
+            )
+            .await
+            .expect("execute_dsl")
         }));
     }
     let mut echoed_keys = std::collections::HashSet::new();
@@ -259,7 +289,15 @@ async fn sequential_calls_same_key_are_not_coalesced() {
         let mut body = HashMap::new();
         body.insert("k".to_string(), json!("same"));
         router
-            .execute_dsl("p", "POST", "lead", body, HashMap::new(), HashMap::new(), "test".into())
+            .execute_dsl(
+                "p",
+                "POST",
+                "lead",
+                body,
+                HashMap::new(),
+                HashMap::new(),
+                "test".into(),
+            )
             .await
             .unwrap();
     }
@@ -284,7 +322,11 @@ async fn registry_is_empty_after_concurrent_burst_completes() {
     let _ = fire_concurrent(&router, "p", "POST", "lead", "burst-2", 50).await;
 
     let count = state.get("p", "exec_count").unwrap();
-    assert_eq!(count, json!(2), "expected exactly 2 executions (one per key)");
+    assert_eq!(
+        count,
+        json!(2),
+        "expected exactly 2 executions (one per key)"
+    );
 }
 
 // ── Follower value propagation ───────────────────────────────────
@@ -372,8 +414,16 @@ async fn leader_error_propagates_to_followers() {
         handles.push(tokio::spawn(async move {
             let mut body = HashMap::new();
             body.insert("k".to_string(), json!("always-fails"));
-            r.execute_dsl("p", "POST", "lead", body, HashMap::new(), HashMap::new(), "test".into())
-                .await
+            r.execute_dsl(
+                "p",
+                "POST",
+                "lead",
+                body,
+                HashMap::new(),
+                HashMap::new(),
+                "test".into(),
+            )
+            .await
         }));
     }
 
@@ -396,7 +446,10 @@ async fn leader_error_propagates_to_followers() {
         }
     }
     assert_eq!(ok_count, 0, "no follower should see the success return");
-    assert!(err_count > 0, "all followers must observe the leader's failure");
+    assert!(
+        err_count > 0,
+        "all followers must observe the leader's failure"
+    );
 }
 
 // ── Follower timeout ─────────────────────────────────────────────
@@ -439,9 +492,7 @@ respond:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follower_times_out_when_leader_slow() {
-    let _guard = PARALLEL_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = PARALLEL_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (router, _) = build(&[("p/POST/lead.yml", SLOW_LEADER_DSL)]);
 
     // Fire 2 concurrent — first is leader (slow), second is
@@ -452,8 +503,16 @@ async fn follower_times_out_when_leader_slow() {
     let leader_h = tokio::spawn(async move {
         let mut body = HashMap::new();
         body.insert("k".to_string(), json!("slow"));
-        r1.execute_dsl("p", "POST", "lead", body, HashMap::new(), HashMap::new(), "test".into())
-            .await
+        r1.execute_dsl(
+            "p",
+            "POST",
+            "lead",
+            body,
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
     });
 
     // Small delay to ensure r1 becomes leader before r2 arrives
@@ -480,7 +539,8 @@ async fn follower_times_out_when_leader_slow() {
     // Follower must have observed a Timeout error at ~ttl_ms, NOT
     // waited for the full leader duration.
     assert!(
-        follower_res.is_err() || matches!(&follower_res,
+        follower_res.is_err()
+            || matches!(&follower_res,
             Ok(exec) if exec.value != Some(json!({"ok": true}))),
         "follower must not succeed with leader's return; got {:?}",
         follower_res

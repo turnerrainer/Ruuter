@@ -21,7 +21,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 fn socket_path(tag: &str) -> PathBuf {
-    let ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     std::env::temp_dir().join(format!("ruuter-uds-pool-{}-{}.sock", tag, ns))
 }
 
@@ -161,7 +164,14 @@ async fn pool_survives_target_restart() {
     spawn_echo_uds(sock.clone(), rx1).await;
 
     let resp1 = client
-        .request(reqwest::Method::GET, "http://r/ping", None, None, None, None)
+        .request(
+            reqwest::Method::GET,
+            "http://r/ping",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("first request");
     assert_eq!(resp1.status, 200);
@@ -183,7 +193,14 @@ async fn pool_survives_target_restart() {
     let mut ok = false;
     for _ in 0..3 {
         if let Ok(resp) = client
-            .request(reqwest::Method::GET, "http://r/ping", None, None, None, None)
+            .request(
+                reqwest::Method::GET,
+                "http://r/ping",
+                None,
+                None,
+                None,
+                None,
+            )
             .await
         {
             if resp.status == 200 {

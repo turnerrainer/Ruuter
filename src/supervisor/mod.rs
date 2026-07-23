@@ -49,7 +49,9 @@ pub enum SourceStatus {
         next_attempt_in_ms: u64,
     },
     /// Intentional shutdown — no further restart attempts.
-    Dead { reason: String },
+    Dead {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,11 +92,7 @@ impl SourceSupervisor {
     /// Spawn one supervised source. Returns the watchdog JoinHandle.
     /// The watchdog itself is what tokio holds; the inner task is
     /// re-spawned on every failure.
-    pub fn supervise<F, Fut>(
-        &self,
-        id: SourceId,
-        build: F,
-    ) -> JoinHandle<()>
+    pub fn supervise<F, Fut>(&self, id: SourceId, build: F) -> JoinHandle<()>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
@@ -103,12 +101,15 @@ impl SourceSupervisor {
         let initial_backoff = self.initial_backoff_ms;
         let max_backoff = self.max_backoff_ms;
 
-        state.insert(id.clone(), SourceState {
-            id: id.clone(),
-            status: SourceStatus::Starting,
-            last_status_change_unix_ms: now_ms(),
-            restart_count: 0,
-        });
+        state.insert(
+            id.clone(),
+            SourceState {
+                id: id.clone(),
+                status: SourceStatus::Starting,
+                last_status_change_unix_ms: now_ms(),
+                restart_count: 0,
+            },
+        );
 
         tokio::spawn(async move {
             let mut backoff = initial_backoff;
@@ -132,7 +133,9 @@ impl SourceSupervisor {
                         set_status(
                             &state,
                             &id,
-                            SourceStatus::Dead { reason: "clean exit".into() },
+                            SourceStatus::Dead {
+                                reason: "clean exit".into(),
+                            },
                             restart_count,
                         );
                         return;
@@ -148,12 +151,7 @@ impl SourceSupervisor {
                         if join_err.is_cancelled() {
                             // Cancellation is also an intentional exit
                             // (shutdown / test teardown).
-                            set_status(
-                                &state,
-                                &id,
-                                SourceStatus::Dead { reason },
-                                restart_count,
-                            );
+                            set_status(&state, &id, SourceStatus::Dead { reason }, restart_count);
                             return;
                         }
                         restart_count += 1;
@@ -181,15 +179,31 @@ impl SourceSupervisor {
     }
 
     pub fn report(&self) -> SupervisorReport {
-        let sources: Vec<SourceState> = self.state
+        let sources: Vec<SourceState> = self
+            .state
             .iter()
             .map(|entry| entry.value().clone())
             .collect();
         let total = sources.len();
-        let running = sources.iter().filter(|s| matches!(s.status, SourceStatus::Running)).count();
-        let restarting = sources.iter().filter(|s| matches!(s.status, SourceStatus::Restarting { .. })).count();
-        let dead = sources.iter().filter(|s| matches!(s.status, SourceStatus::Dead { .. })).count();
-        SupervisorReport { sources, total, running, restarting, dead }
+        let running = sources
+            .iter()
+            .filter(|s| matches!(s.status, SourceStatus::Running))
+            .count();
+        let restarting = sources
+            .iter()
+            .filter(|s| matches!(s.status, SourceStatus::Restarting { .. }))
+            .count();
+        let dead = sources
+            .iter()
+            .filter(|s| matches!(s.status, SourceStatus::Dead { .. }))
+            .count();
+        SupervisorReport {
+            sources,
+            total,
+            running,
+            restarting,
+            dead,
+        }
     }
 
     /// Mount the `/_/sources` admin endpoint onto an axum Router.
@@ -257,7 +271,8 @@ pub fn supervise_all(
     for (project, name, cfg) in configs {
         match cfg {
             SourceConfig::WebSocket(ws_cfg) => {
-                let resolved = match crate::sources::config::resolve_constants(&ws_cfg, &constants) {
+                let resolved = match crate::sources::config::resolve_constants(&ws_cfg, &constants)
+                {
                     Ok(r) => r,
                     Err(e) => {
                         error!(%project, %name, "source config constant resolution failed: {}", e);

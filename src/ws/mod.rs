@@ -56,13 +56,12 @@ impl WsRegistry {
     }
 
     pub fn send(&self, id: &str, payload: Value) -> Result<()> {
-        let entry = self
-            .inner
-            .get(id)
-            .ok_or_else(|| RuuterError::InvalidStep(format!("ws_send: no such connection '{}'", id)))?;
-        entry
-            .send(Outbound::Json(payload))
-            .map_err(|e| RuuterError::InvalidStep(format!("ws_send: writer dropped for '{}': {}", id, e)))?;
+        let entry = self.inner.get(id).ok_or_else(|| {
+            RuuterError::InvalidStep(format!("ws_send: no such connection '{}'", id))
+        })?;
+        entry.send(Outbound::Json(payload)).map_err(|e| {
+            RuuterError::InvalidStep(format!("ws_send: writer dropped for '{}': {}", id, e))
+        })?;
         Ok(())
     }
 
@@ -74,10 +73,8 @@ impl WsRegistry {
     {
         let mut delivered = 0;
         for entry in self.inner.iter() {
-            if pred(entry.key()) {
-                if entry.value().send(Outbound::Json(payload.clone())).is_ok() {
-                    delivered += 1;
-                }
+            if pred(entry.key()) && entry.value().send(Outbound::Json(payload.clone())).is_ok() {
+                delivered += 1;
             }
         }
         delivered

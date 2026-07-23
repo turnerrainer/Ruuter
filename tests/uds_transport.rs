@@ -27,7 +27,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 fn socket_path() -> PathBuf {
-    let ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     std::env::temp_dir().join(format!("ruuter-uds-test-{}.sock", ns))
 }
 
@@ -43,7 +46,10 @@ async fn spawn_echo_server(path: &std::path::Path) -> oneshot::Sender<()> {
             let uri_query = req.uri().query().map(|s| s.to_string());
             let mut headers = serde_json::Map::new();
             for (k, v) in req.headers() {
-                headers.insert(k.to_string(), Value::String(v.to_str().unwrap_or("").to_string()));
+                headers.insert(
+                    k.to_string(),
+                    Value::String(v.to_str().unwrap_or("").to_string()),
+                );
             }
             let body_bytes = axum::body::to_bytes(req.into_body(), 65536)
                 .await
@@ -196,7 +202,11 @@ async fn uds_alias_query_arg_merges_with_url_query() {
     let echo = resp.body.unwrap();
     // Both the original page=2 and the added filter=active must appear
     let observed = echo["query"].as_str().unwrap();
-    assert!(observed.contains("page=2"), "missing page=2 in {}", observed);
+    assert!(
+        observed.contains("page=2"),
+        "missing page=2 in {}",
+        observed
+    );
     assert!(
         observed.contains("filter=active"),
         "missing filter=active in {}",
@@ -306,7 +316,14 @@ async fn uds_non_2xx_status_propagates_to_caller() {
     alias.insert("boomsvc".to_string(), sock.clone());
     let client = HttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
     let resp = client
-        .request(reqwest::Method::GET, "http://boomsvc/boom", None, None, None, None)
+        .request(
+            reqwest::Method::GET,
+            "http://boomsvc/boom",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("request should succeed at transport level");
     assert_eq!(resp.status, 500);
@@ -358,7 +375,14 @@ async fn uds_request_timeout_fires_when_server_slow() {
     let client = HttpClient::with_timeout_ms(200).with_unix_socket_map(alias);
     let started = std::time::Instant::now();
     let res = client
-        .request(reqwest::Method::GET, "http://slowsvc/slow", None, None, None, None)
+        .request(
+            reqwest::Method::GET,
+            "http://slowsvc/slow",
+            None,
+            None,
+            None,
+            None,
+        )
         .await;
     let elapsed = started.elapsed();
 

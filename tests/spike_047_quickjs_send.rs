@@ -114,18 +114,12 @@ async fn async_context_used_from_spawned_task() {
     // tokio::spawn. If this compiles, task 036 can hand a shared
     // Arc<AsyncContext> around freely.
     let rt = rquickjs::AsyncRuntime::new().expect("runtime");
-    let ctx = std::sync::Arc::new(
-        rquickjs::AsyncContext::full(&rt).await.expect("context"),
-    );
+    let ctx = std::sync::Arc::new(rquickjs::AsyncContext::full(&rt).await.expect("context"));
 
     let ctx1 = ctx.clone();
-    let h1 = tokio::spawn(async move {
-        ctx1.with(|ctx| ctx.eval::<i32, _>("10 * 10")).await
-    });
+    let h1 = tokio::spawn(async move { ctx1.with(|ctx| ctx.eval::<i32, _>("10 * 10")).await });
     let ctx2 = ctx.clone();
-    let h2 = tokio::spawn(async move {
-        ctx2.with(|ctx| ctx.eval::<i32, _>("20 * 20")).await
-    });
+    let h2 = tokio::spawn(async move { ctx2.with(|ctx| ctx.eval::<i32, _>("20 * 20")).await });
 
     assert_eq!(h1.await.unwrap().unwrap(), 100);
     assert_eq!(h2.await.unwrap().unwrap(), 400);

@@ -24,7 +24,7 @@
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
-use serde_yml::Value as YamlValue;
+use serde_yaml_ng::Value as YamlValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -201,13 +201,11 @@ fn is_dsl_file(p: &Path, include_disabled: bool) -> bool {
 }
 
 fn is_source_file(p: &Path) -> bool {
-    p.components()
-        .any(|c| c.as_os_str() == "sources")
+    p.components().any(|c| c.as_os_str() == "sources")
 }
 
 fn is_cron_job_file(p: &Path) -> bool {
-    p.components()
-        .any(|c| c.as_os_str() == "cronmanager-jobs")
+    p.components().any(|c| c.as_os_str() == "cronmanager-jobs")
 }
 
 struct ParsedFile {
@@ -234,12 +232,11 @@ fn parse_file(
     constants: &HashMap<String, String>,
     strict: bool,
 ) -> Result<ParsedFile, Vec<String>> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| vec![format!("read error: {}", e)])?;
+    let raw = std::fs::read_to_string(path).map_err(|e| vec![format!("read error: {}", e)])?;
 
     let substituted = substitute_constants(&raw, constants);
 
-    let map: IndexMap<String, YamlValue> = serde_yml::from_str(&substituted)
+    let map: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(&substituted)
         .map_err(|e| vec![format!("YAML parse error: {}", e)])?;
 
     let mut errs = Vec::new();
@@ -262,7 +259,7 @@ fn parse_file(
         // Which step kind is this? First match wins.
         let mut kind = String::from("unknown");
         for &k in KNOWN_STEP_KEYS {
-            if m.contains_key(&YamlValue::String(k.to_string())) {
+            if m.contains_key(YamlValue::String(k.to_string())) {
                 kind = k.to_string();
                 break;
             }
@@ -272,18 +269,16 @@ fn parse_file(
         // skip source/cron files that aren't step DSLs).
 
         let next = m
-            .get(&YamlValue::String("next".to_string()))
+            .get(YamlValue::String("next".to_string()))
             .and_then(|v| v.as_str().map(String::from));
 
         let mut switch_targets = Vec::new();
         if kind == "switch" {
-            if let Some(YamlValue::Sequence(seq)) =
-                m.get(&YamlValue::String("switch".to_string()))
-            {
+            if let Some(YamlValue::Sequence(seq)) = m.get(YamlValue::String("switch".to_string())) {
                 for cond in seq {
                     if let YamlValue::Mapping(cm) = cond {
                         if let Some(YamlValue::String(t)) =
-                            cm.get(&YamlValue::String("next".to_string()))
+                            cm.get(YamlValue::String("next".to_string()))
                         {
                             switch_targets.push(t.clone());
                         }
@@ -293,9 +288,7 @@ fn parse_file(
         }
 
         if kind == "template" {
-            if let Some(YamlValue::String(t)) =
-                m.get(&YamlValue::String("template".to_string()))
-            {
+            if let Some(YamlValue::String(t)) = m.get(YamlValue::String("template".to_string())) {
                 template_targets.push(t.clone());
             }
         }
@@ -388,9 +381,12 @@ fn check_dsl(
     report: &mut Report,
 ) {
     // Empty file? (No steps besides declaration.)
-    let real_steps: Vec<&ParsedStep> =
-        pf.steps.iter().filter(|s| s.kind != "declaration").collect();
-    if real_steps.is_empty() && !pf.template_targets.is_empty() == false {
+    let real_steps: Vec<&ParsedStep> = pf
+        .steps
+        .iter()
+        .filter(|s| s.kind != "declaration")
+        .collect();
+    if real_steps.is_empty() && pf.template_targets.is_empty() {
         // A guard-file that only says `declaration: { override_ancestors: true }`
         // and a `deny:` step is real. The check is: at least one non-declaration
         // step must exist. If not, error.
@@ -449,10 +445,7 @@ fn check_dsl(
             if !reachable.contains(&s.name) && s.kind != "declaration" {
                 report.file_warning(
                     path,
-                    format!(
-                        "step '{}' is not reachable from entry '{}'",
-                        s.name, entry
-                    ),
+                    format!("step '{}' is not reachable from entry '{}'", s.name, entry),
                 );
             }
         }
@@ -485,7 +478,9 @@ fn check_dsl(
     for t in &pf.template_targets {
         // The template step accepts either the exact key or a
         // convention-based key path. We check both.
-        let matches = dsl_keys.iter().any(|k| k == t || k.ends_with(t) || k == t.trim_start_matches('/'));
+        let matches = dsl_keys
+            .iter()
+            .any(|k| k == t || k.ends_with(t) || k == t.trim_start_matches('/'));
         if !matches {
             report.file_error(
                 path,
@@ -533,7 +528,7 @@ fn walk_reachable(start: &str, steps: &[ParsedStep], out: &mut BTreeSet<String>)
 fn check_source_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
     // sources/ files must have a top-level `kind:` field. We can't run
     // them through the DSL parser, so just verify shape.
-    let doc: Result<Value, _> = serde_yml::from_str(&pf.raw).map(yaml_to_json);
+    let doc: Result<Value, _> = serde_yaml_ng::from_str(&pf.raw).map(yaml_to_json);
     let doc = match doc {
         Ok(v) => v,
         Err(e) => {
@@ -545,7 +540,10 @@ fn check_source_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
         if kind != "websocket" {
             report.file_warning(
                 path,
-                format!("source kind '{}' is not currently supported (only 'websocket')", kind),
+                format!(
+                    "source kind '{}' is not currently supported (only 'websocket')",
+                    kind
+                ),
             );
         }
     } else {
@@ -557,7 +555,7 @@ fn check_source_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
 fn check_cron_job_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
     // Each top-level key must be a job with at least `trigger`, `type`,
     // `url`. This is the CronManager format, not the Ruuter DSL format.
-    let doc: Result<Value, _> = serde_yml::from_str(&pf.raw).map(yaml_to_json);
+    let doc: Result<Value, _> = serde_yaml_ng::from_str(&pf.raw).map(yaml_to_json);
     let doc = match doc {
         Ok(v) => v,
         Err(e) => {
@@ -568,7 +566,10 @@ fn check_cron_job_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
     let obj = match doc.as_object() {
         Some(o) => o,
         None => {
-            report.file_error(path, "cron-job file: top level must be a mapping of jobs".into());
+            report.file_error(
+                path,
+                "cron-job file: top level must be a mapping of jobs".into(),
+            );
             return;
         }
     };
@@ -576,10 +577,7 @@ fn check_cron_job_shape(path: &Path, pf: &ParsedFile, report: &mut Report) {
         let job = match job.as_object() {
             Some(o) => o,
             None => {
-                report.file_error(
-                    path,
-                    format!("cron-job '{}': body must be a mapping", name),
-                );
+                report.file_error(path, format!("cron-job '{}': body must be a mapping", name));
                 continue;
             }
         };
@@ -603,7 +601,9 @@ fn yaml_to_json(v: YamlValue) -> Value {
             if let Some(i) = n.as_i64() {
                 Value::Number(i.into())
             } else if let Some(f) = n.as_f64() {
-                serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+                serde_json::Number::from_f64(f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
             } else {
                 Value::Null
             }
@@ -613,7 +613,10 @@ fn yaml_to_json(v: YamlValue) -> Value {
         YamlValue::Mapping(m) => {
             let mut out = serde_json::Map::new();
             for (k, v) in m {
-                let key = k.as_str().map(String::from).unwrap_or_else(|| format!("{:?}", k));
+                let key = k
+                    .as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("{:?}", k));
                 out.insert(key, yaml_to_json(v));
             }
             Value::Object(out)

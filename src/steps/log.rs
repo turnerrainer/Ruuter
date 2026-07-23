@@ -20,15 +20,14 @@ impl LogStepExecutor {
 
 impl StepExecutor for LogStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
-        let message = self.script_engine.evaluate(
-            &serde_json::Value::String(self.step.log.clone()),
-            context
-        )?;
+        let message = self
+            .script_engine
+            .evaluate(&serde_json::Value::String(self.step.log.clone()), context)?;
 
         info!("LOG: {}", message);
 
         Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string())
+            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
         ))
     }
 }

@@ -1,0 +1,27 @@
+# cargo-audit configuration.
+#
+# Advisory IDs listed under `ignore` are downgraded to soft warnings
+# so `cargo audit --deny warnings` still passes. Every entry MUST
+# carry a rationale and a review date; unreviewed entries are a
+# code smell.
+
+[advisories]
+ignore = [
+    # `instant` is unmaintained. Pulled in transitively (parking_lot
+    # via boa_engine → hashbrown; hyper-util also touches it via
+    # tokio internals). No known vulnerability — the advisory is
+    # "no upstream maintainer." Track the upstream migrations that
+    # would drop it (parking_lot → std::sync, boa → later hashbrown)
+    # and re-audit.
+    #
+    # Review: 2026-10-01
+    "RUSTSEC-2024-0384",
+
+    # `paste` is unmaintained. Transitive via boa_engine's derive
+    # macros. Same posture as `instant`: no vulnerability, no
+    # upstream, waiting on the toolchain to drop it. Bumping
+    # boa_engine past 0.20 is the likely fix.
+    #
+    # Review: 2026-10-01
+    "RUSTSEC-2024-0436",
+]

@@ -35,9 +35,21 @@ async fn clean_return_marks_source_dead_no_restart() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let report = sup.report();
-    let state = report.sources.iter().find(|s| s.id.name == "clean").expect("found");
-    assert!(matches!(state.status, SourceStatus::Dead { .. }), "got {:?}", state.status);
-    assert_eq!(counter.load(Ordering::SeqCst), 1, "should NOT have restarted");
+    let state = report
+        .sources
+        .iter()
+        .find(|s| s.id.name == "clean")
+        .expect("found");
+    assert!(
+        matches!(state.status, SourceStatus::Dead { .. }),
+        "got {:?}",
+        state.status
+    );
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "should NOT have restarted"
+    );
 }
 
 #[tokio::test]
@@ -62,10 +74,25 @@ async fn panic_triggers_restart_with_backoff() {
     tokio::time::sleep(Duration::from_millis(4_000)).await;
 
     let report = sup.report();
-    let state = report.sources.iter().find(|s| s.id.name == "panicky").expect("found");
-    assert!(matches!(state.status, SourceStatus::Dead { .. }), "got {:?}", state.status);
-    assert!(counter.load(Ordering::SeqCst) >= 3, "spawned at least 3 times");
-    assert!(state.restart_count >= 2, "restart_count should reflect panics; got {}", state.restart_count);
+    let state = report
+        .sources
+        .iter()
+        .find(|s| s.id.name == "panicky")
+        .expect("found");
+    assert!(
+        matches!(state.status, SourceStatus::Dead { .. }),
+        "got {:?}",
+        state.status
+    );
+    assert!(
+        counter.load(Ordering::SeqCst) >= 3,
+        "spawned at least 3 times"
+    );
+    assert!(
+        state.restart_count >= 2,
+        "restart_count should reflect panics; got {}",
+        state.restart_count
+    );
 }
 
 #[tokio::test]
@@ -106,7 +133,12 @@ async fn admin_route_returns_supervisor_report() {
 
     let app = sup.clone().admin_router();
     let response = app
-        .oneshot(Request::builder().uri("/_/sources").body(axum::body::Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/_/sources")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -139,14 +171,23 @@ async fn supervised_task_restart_uses_exponential_backoff() {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let r = sup.report();
         if let Some(s) = r.sources.iter().find(|s| s.id.name == "always_panics") {
-            if let SourceStatus::Restarting { restart_count, next_attempt_in_ms, .. } = &s.status {
+            if let SourceStatus::Restarting {
+                restart_count,
+                next_attempt_in_ms,
+                ..
+            } = &s.status
+            {
                 max_observed_backoff = max_observed_backoff.max(*next_attempt_in_ms);
                 max_restart_count = max_restart_count.max(*restart_count);
             }
         }
     }
 
-    assert!(max_restart_count >= 2, "should have observed multiple restarts; got {}", max_restart_count);
+    assert!(
+        max_restart_count >= 2,
+        "should have observed multiple restarts; got {}",
+        max_restart_count
+    );
     assert!(
         max_observed_backoff >= 1_000,
         "backoff should grow past initial 500ms; observed max {}ms",

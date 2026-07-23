@@ -23,7 +23,7 @@ pub enum RuuterError {
     Io(#[from] std::io::Error),
 
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yml::Error),
+    Yaml(#[from] serde_yaml_ng::Error),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

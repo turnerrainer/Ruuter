@@ -1,16 +1,17 @@
-# Framework-layer Idempotency-Key (PATTERNS.md §2). First call runs
-# the DSL; second call with the same key replays the cached response
-# and sets Idempotency-Replayed: true.
+# DSL-authored idempotency (v0.7.0). The framework no longer sets
+# Idempotency-Replayed, so this file exercises the DSL's state.set
+# side effect and the returned body shape. Cross-scenario replay
+# semantics belong in a dedicated dedup-lookup DSL — this sample
+# only records the last transfer.
 mode: inprocess
 
 tests:
-  - name: first call runs DSL and accepts transfer
+  - name: accepts a transfer and echoes it back
     request:
       method: POST
       path: /samples/idempotent-transfer
       headers:
         content-type: "application/json"
-        idempotency-key: "0000-first-key"
       body: { from: "A", to: "B", amount: 100 }
     expect:
       status: 202
@@ -20,30 +21,26 @@ tests:
         to: "B"
         amount: 100
         ref: "$regex:^txn-\\d+$"
-      replayed: false
 
-  - name: second call with same key replays cached response
+  - name: second call runs the DSL again (no framework replay)
     request:
       method: POST
       path: /samples/idempotent-transfer
       headers:
         content-type: "application/json"
-        idempotency-key: "0000-first-key"
       body: { from: "A", to: "B", amount: 100 }
     expect:
       status: 202
       body_matches:
         accepted: true
         from: "A"
-      replayed: true
 
-  - name: different key runs DSL again
+  - name: different body runs and records the new transfer
     request:
       method: POST
       path: /samples/idempotent-transfer
       headers:
         content-type: "application/json"
-        idempotency-key: "0001-different-key"
       body: { from: "X", to: "Y", amount: 500 }
     expect:
       status: 202
@@ -51,9 +48,8 @@ tests:
         accepted: true
         from: "X"
         to: "Y"
-      replayed: false
 
-  - name: no key -> runs every time, no replay header
+  - name: minimal request without an Idempotency-Key header still runs
     request:
       method: POST
       path: /samples/idempotent-transfer
@@ -62,4 +58,3 @@ tests:
     expect:
       status: 202
       body_matches: { accepted: true }
-      replayed: false

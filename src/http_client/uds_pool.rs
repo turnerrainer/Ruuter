@@ -49,7 +49,8 @@ struct UdsConnector {
 impl tower::Service<Uri> for UdsConnector {
     type Response = TokioIo<UnixStream>;
     type Error = std::io::Error;
-    type Future = Pin<Box<dyn Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
+    type Future =
+        Pin<Box<dyn Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -86,13 +87,16 @@ impl From<crate::config::HttpVersion> for UdsHttpVersion {
     }
 }
 
+type PooledUdsClient = Arc<Client<UdsConnector, Full<Bytes>>>;
+type UdsClientMap = Arc<DashMap<PathBuf, PooledUdsClient>>;
+
 /// Pool of pooled UDS clients — one Client per unique socket path.
 ///
 /// Cloneable because it's just an `Arc<DashMap>` inside. Every
 /// clone of `HttpClient` shares the same pool.
 #[derive(Clone)]
 pub struct UdsPool {
-    inner: Arc<DashMap<PathBuf, Arc<Client<UdsConnector, Full<Bytes>>>>>,
+    inner: UdsClientMap,
     idle_timeout: Duration,
     max_idle_per_host: usize,
     http_version: UdsHttpVersion,
@@ -174,6 +178,12 @@ impl Default for UdsPool {
 /// Pool-backed replacement for the per-request handshake in
 /// `super::uds::request_over_unix`. Same signature (plus `pool`)
 /// and produces the same `HttpResponse` shape.
+///
+/// Argument count intentionally mirrors the underlying reqwest-shape
+/// (socket path, host, path, method, body, headers, timeout) — folding
+/// them into a struct would just move the plumbing without simplifying
+/// the call sites that already have each value in scope.
+#[allow(clippy::too_many_arguments)]
 pub async fn request_over_unix_pooled(
     pool: &UdsPool,
     socket_path: &Path,

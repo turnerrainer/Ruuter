@@ -73,7 +73,10 @@ fn malformed_yaml_is_a_hard_error() {
     std::env::remove_var("RUUTER_CONFIG");
     std::fs::remove_file(&tmp).ok();
 
-    assert!(result.is_err(), "malformed config should not fall back to defaults silently");
+    assert!(
+        result.is_err(),
+        "malformed config should not fall back to defaults silently"
+    );
 }
 
 #[test]

@@ -1,16 +1,14 @@
-# Idempotency-Key is handled at the framework layer — the DSL is
-# unaware of it. Client sends `Idempotency-Key: <uuid>`; the first
-# call runs this DSL, subsequent calls with the same key replay the
-# cached response with `Idempotency-Replayed: true` and don't re-run
-# the DSL. Enabled by default (config: idempotency.enabled=true,
-# ttl=24h, methods=[POST,PUT,PATCH,DELETE]).
+# DSL-authored idempotency (as of v0.7.0 — framework-level
+# Idempotency-Key handling was removed; see
+# book/src/dsl/idempotency-pattern.md for the canonical pattern).
+# This sample stores the latest transfer under a per-project state
+# key so downstream steps or a companion DSL can read it back. A
+# fuller pattern would derive a dedup key from
+# `sha256(canonical(incoming.body))` and short-circuit on hit.
 #
 # curl -X POST http://localhost:8080/samples/idempotent-transfer \
-#   -H 'Idempotency-Key: 7b1e9c5f-3f8f-4c8f-9f8f-4c8f9f8f4c8f' \
 #   -H 'Content-Type: application/json' \
 #   -d '{"from":"A","to":"B","amount":100}'
-# Second call with the same key → identical body, plus
-#   Idempotency-Replayed: true
 
 record:
   state:

@@ -68,13 +68,15 @@ async fn connect_and_drain(
     for (k, v) in cfg.headers.iter() {
         let header_value = HeaderValue::from_str(v).map_err(|e| {
             Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                "invalid header value for '{}': {}", k, e
+                "invalid header value for '{}': {}",
+                k, e
             ))
         })?;
         let header_name: tokio_tungstenite::tungstenite::http::HeaderName =
             k.parse().map_err(|e| {
                 Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                    "invalid header name '{}': {}", k, e
+                    "invalid header name '{}': {}",
+                    k, e
                 ))
             })?;
         request.headers_mut().insert(header_name, header_value);
@@ -140,13 +142,31 @@ async fn connect_and_drain(
             let frame = frame?;
             match frame {
                 Message::Text(text) => {
-                    if let Err(e) = handle_text(project, name, &text, &cfg.dispatch_channel(), &cfg.dispatch_key(), dispatcher).await {
+                    if let Err(e) = handle_text(
+                        project,
+                        name,
+                        &text,
+                        &cfg.dispatch_channel(),
+                        &cfg.dispatch_key(),
+                        dispatcher,
+                    )
+                    .await
+                    {
                         warn!(%project, %name, error = %e, "trigger dispatch failed");
                     }
                 }
                 Message::Binary(bytes) => {
                     if let Ok(text) = std::str::from_utf8(&bytes) {
-                        if let Err(e) = handle_text(project, name, text, &cfg.dispatch_channel(), &cfg.dispatch_key(), dispatcher).await {
+                        if let Err(e) = handle_text(
+                            project,
+                            name,
+                            text,
+                            &cfg.dispatch_channel(),
+                            &cfg.dispatch_key(),
+                            dispatcher,
+                        )
+                        .await
+                        {
                             warn!(%project, %name, error = %e, "trigger dispatch failed");
                         }
                     }

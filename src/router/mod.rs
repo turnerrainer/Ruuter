@@ -3,7 +3,6 @@ use crate::context::ExecutionContext;
 use crate::dsl::loader::GuardDsls;
 use crate::dsl::Dsl;
 use crate::http_client::{HttpResponse, SelfCallHandler};
-use crate::idempotency::IdempotencyStore;
 use crate::state::StateStore;
 use crate::steps::engine::{DslExecutionResult, StepEngine};
 use crate::ws::{random_client_id, Outbound, WsRegistry};
@@ -12,20 +11,21 @@ use async_trait::async_trait;
 use axum::{
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        FromRequestParts, Request, State,
+        ConnectInfo, FromRequestParts, Request, State,
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{any, get},
     Json, Router,
 };
-use rand::Rng;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use futures::{SinkExt, StreamExt};
+use rand::Rng;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, warn};
 
 pub struct DslRouter {
@@ -35,7 +35,6 @@ pub struct DslRouter {
     engine: StepEngine,
     state: StateStore,
     ws_registry: WsRegistry,
-    idempotency: IdempotencyStore,
     openapi_spec: Arc<Value>,
 }
 
@@ -63,12 +62,10 @@ impl DslRouter {
         ws_registry: WsRegistry,
         engine: StepEngine,
     ) -> Self {
-        let idempotency = IdempotencyStore::new(
-            std::time::Duration::from_secs(config.idempotency.ttl_seconds),
-        );
-        let openapi_spec = Arc::new(
-            crate::openapi::build_spec_from_http(&dsls, env!("CARGO_PKG_VERSION"))
-        );
+        let openapi_spec = Arc::new(crate::openapi::build_spec_from_http(
+            &dsls,
+            env!("CARGO_PKG_VERSION"),
+        ));
         Self {
             dsls,
             guards,
@@ -76,7 +73,6 @@ impl DslRouter {
             state,
             config,
             ws_registry,
-            idempotency,
             openapi_spec,
         }
     }
@@ -141,9 +137,7 @@ impl DslRouter {
         // Override handling: if any matching guard declares
         // `override_ancestors: true`, keep ONLY the longest-key override
         // guard. Multiple overrides → most-specific wins.
-        let has_override = matches
-            .iter()
-            .any(|(_, d)| is_override_guard(d));
+        let has_override = matches.iter().any(|(_, d)| is_override_guard(d));
         if has_override {
             let longest_override = matches
                 .iter()
@@ -181,6 +175,11 @@ impl DslRouter {
         router
     }
 
+    // Arguments mirror the raw request shape (project/method/path plus
+    // body/query/headers/origin); grouping them into a struct would just
+    // shuffle plumbing without simplifying handle_request's single call
+    // site — each value is already in scope there.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_dsl(
         &self,
         project: &str,
@@ -223,7 +222,10 @@ impl DslRouter {
         new_headers.insert("traceparent".to_string(), traceparent.clone());
 
         let context = ExecutionContext::with_state(
-            body, query, new_headers, origin,
+            body,
+            query,
+            new_headers,
+            origin,
             project.to_string(),
             self.state.clone(),
         )
@@ -289,11 +291,12 @@ impl SelfCallHandler for DslRouter {
 }
 
 async fn health_check() -> impl IntoResponse {
-    Json(json!({
-        "status": "ok",
-        "service": "ruuter-on-rust",
-        "version": env!("CARGO_PKG_VERSION")
-    }))
+    // h2ck.me S7 — return only what a load-balancer needs. The
+    // framework name and version used to be surfaced here, which is
+    // enough to fingerprint the Ruuter build for downstream
+    // advisory-matching. Operators who want that info should ship it
+    // through their own gated admin endpoint.
+    Json(json!({ "status": "ok" }))
 }
 
 /// Serve the OpenAPI 3.1 spec generated from the loaded DSL tree at
@@ -303,13 +306,19 @@ async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoRespo
     Json((*router.openapi_spec).clone())
 }
 
-async fn handle_request(
-    State(router): State<Arc<DslRouter>>,
-    request: Request,
-) -> Response {
+async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
+    // h2ck.me S4 — pull the socket peer out of the request's
+    // extensions if present. `into_make_service_with_connect_info`
+    // installs it on real TCP serves. Tests using `Router::oneshot`
+    // (no socket) leave it unset — those callers get `None` and
+    // XFF adoption is refused (safe default).
+    let peer_addr: Option<SocketAddr> = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
 
     // Detect WebSocket upgrade up front so we never try to read a body
     // off a hijacked connection. Same path namespace as HTTP — the
@@ -331,8 +340,15 @@ async fn handle_request(
     // Method allow-list — operator can lock the surface to a subset. Default
     // is all standard REST verbs (see IncomingRequestsConfig default).
     let allowed = &router.config.incoming_requests.allowed_method_types;
-    if !allowed.iter().any(|m| m.eq_ignore_ascii_case(method.as_str())) {
-        return (StatusCode::METHOD_NOT_ALLOWED, Json(json!({"error": "Method Not Allowed"}))).into_response();
+    if !allowed
+        .iter()
+        .any(|m| m.eq_ignore_ascii_case(method.as_str()))
+    {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({"error": "Method Not Allowed"})),
+        )
+            .into_response();
     }
 
     // CSRF: on state-changing methods, require Origin (or fall back to
@@ -346,14 +362,13 @@ async fn handle_request(
             .enforce_on_methods
             .iter()
             .any(|m| m.eq_ignore_ascii_case(method.as_str()))
+        && !origin_allowed(&headers, &router.config.csrf.allowed_origins)
     {
-        if !origin_allowed(&headers, &router.config.csrf.allowed_origins) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "CSRF: origin not allowed"})),
-            )
-                .into_response();
-        }
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "CSRF: origin not allowed"})),
+        )
+            .into_response();
     }
 
     // Optimistic-concurrency: reject state-changing calls without If-Match
@@ -454,71 +469,24 @@ async fn handle_request(
         HashMap::new()
     };
 
-    let origin = headers_map
-        .get("x-forwarded-for")
-        .or_else(|| headers_map.get("x-real-ip"))
-        .cloned()
-        .unwrap_or_else(|| "unknown".to_string());
+    // h2ck.me S4 — X-Forwarded-For / X-Real-IP are ONLY adopted as
+    // `incoming.origin` when the direct TCP peer is in
+    // `config.proxy.trusted`. From an untrusted peer those headers
+    // are still passed through in `incoming.headers` (a DSL can look
+    // if it wants) but the framework's own `origin` field — used by
+    // audit logs, rate-limit keys, and self-call bookkeeping —
+    // reflects the socket peer instead. Without this, any direct
+    // caller could spoof arbitrary origin values (S4).
+    let peer_addr: Option<SocketAddr> = peer_addr;
+    let origin = resolve_origin(&headers_map, peer_addr, &router.config.proxy.trusted);
 
-    // Idempotency-Key dedup — if a matching request has been cached,
-    // replay its response verbatim rather than re-running the DSL.
-    let idem_key_header = headers_map.get("idempotency-key").cloned();
-    let idem_active = router.config.idempotency.enabled
-        && idem_key_header.is_some()
-        && router
-            .config
-            .idempotency
-            .methods
-            .iter()
-            .any(|m| m.eq_ignore_ascii_case(method.as_str()));
-
-    let dedup_key = idem_key_header.as_ref().map(|k| {
-        IdempotencyStore::dedup_key(k, method.as_str(), &project, &endpoint_path)
-    });
-
-    if idem_active {
-        if let Some(key) = dedup_key {
-            if let Some(cached) = router.idempotency.get(&key) {
-                let status = StatusCode::from_u16(cached.status).unwrap_or(StatusCode::OK);
-                let mut resp =
-                    (status, Json(cached.body.unwrap_or(json!({})))).into_response();
-                for (k, v) in cached.headers {
-                    if let (Ok(name), Ok(value)) = (
-                        HeaderName::try_from(k.as_str()),
-                        HeaderValue::try_from(v.as_str()),
-                    ) {
-                        resp.headers_mut().insert(name, value);
-                    }
-                }
-                if let Ok(v) = HeaderValue::try_from("true") {
-                    resp.headers_mut().insert(HeaderName::from_static("idempotency-replayed"), v);
-                }
-                if let Some(k) = idem_key_header.as_ref() {
-                    if let Ok(v) = HeaderValue::try_from(k.as_str()) {
-                        resp.headers_mut().insert(HeaderName::from_static("idempotency-key"), v);
-                    }
-                }
-                // A replay still deserves traceparent + X-Trace-Id so
-                // ops can correlate across the original + replay in
-                // Tempo/Jaeger.
-                let replay_tp = headers
-                    .get("traceparent")
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_string)
-                    .unwrap_or_else(generate_traceparent);
-                if let Ok(v) = HeaderValue::try_from(replay_tp.as_str()) {
-                    resp.headers_mut().insert(HeaderName::from_static("traceparent"), v);
-                }
-                if let Some(tid) = trace_id_from(&replay_tp) {
-                    if let Ok(v) = HeaderValue::try_from(tid) {
-                        resp.headers_mut().insert(HeaderName::from_static("x-trace-id"), v);
-                    }
-                }
-                apply_default_response_headers(&mut resp, &router.config.response_default_headers);
-                return resp;
-            }
-        }
-    }
+    // v0.7.0: framework-level Idempotency-Key handling was removed
+    // (h2ck.me findings S1 + S5). DSL authors implement idempotency
+    // via `state.get`/`state.set` with their own identity + body-
+    // hash keys — see `book/src/dsl/idempotency-pattern.md`. This
+    // gives consumers control over what "same request" means (body
+    // canonicalisation, caller identity, tenant scope) instead of
+    // the framework guessing.
 
     let dsl_outcome = router
         .execute_dsl(
@@ -532,20 +500,16 @@ async fn handle_request(
         )
         .await;
 
-    // Snapshot the result so we can both build a response AND persist it
-    // in the idempotency store without re-executing.
-    let (status_code, body_value, extra_headers, exec_ok) = match &dsl_outcome {
+    let (status_code, body_value, extra_headers) = match &dsl_outcome {
         Ok(result) => (
             StatusCode::from_u16(result.status).unwrap_or(StatusCode::OK),
             result.value.clone().unwrap_or(json!({})),
             result.headers.clone(),
-            true,
         ),
         Err(RuuterError::FileNotFound(_)) => (
             StatusCode::NOT_FOUND,
             json!({"error": "Not Found"}),
             HashMap::new(),
-            false,
         ),
         Err(e) => {
             error!("Error executing DSL: {}", e);
@@ -553,18 +517,9 @@ async fn handle_request(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": e.to_string() }),
                 HashMap::new(),
-                false,
             )
         }
     };
-
-    if idem_active && exec_ok {
-        if let Some(key) = dedup_key {
-            router
-                .idempotency
-                .insert(key, status_code.as_u16(), Some(body_value.clone()), extra_headers.clone());
-        }
-    }
 
     let mut response = match &dsl_outcome {
         Ok(_) => {
@@ -575,14 +530,6 @@ async fn handle_request(
                     HeaderValue::try_from(v.as_str()),
                 ) {
                     resp.headers_mut().insert(name, value);
-                }
-            }
-            if let Some(k) = idem_key_header.as_ref() {
-                if idem_active {
-                    if let Ok(v) = HeaderValue::try_from(k.as_str()) {
-                        resp.headers_mut()
-                            .insert(HeaderName::from_static("idempotency-key"), v);
-                    }
                 }
             }
             resp
@@ -847,6 +794,76 @@ fn trace_id_from(traceparent: &str) -> Option<&str> {
 /// preflighted browsers always send Origin; a caller without it is either
 /// non-browser (which should authenticate with a Bearer token, not a cookie)
 /// or a stripped proxy (which is exactly what the CSRF check catches).
+/// h2ck.me S4 — compute the `origin` string handed to the DSL
+/// execution context. Adopts `X-Forwarded-For` (or `X-Real-IP` as a
+/// fallback) only when the direct TCP peer's IP is in the
+/// operator-configured `proxy.trusted` list; otherwise uses the peer
+/// socket address so a spoofed header never becomes the "origin"
+/// downstream code keys off. When there is no peer info at all
+/// (test harness `oneshot`, UDS connections), returns `"unknown"` —
+/// XFF is deliberately NOT trusted in that case.
+fn resolve_origin(
+    headers_map: &HashMap<String, String>,
+    peer_addr: Option<SocketAddr>,
+    trusted_proxies: &[String],
+) -> String {
+    // h2ck.me N3 — parse both the peer IP and the operator-configured
+    // trust list as `IpAddr` and canonicalise IPv4-mapped-IPv6 so the
+    // dual-stack accept path doesn't silently drop trust. An operator
+    // writing `trusted: ["127.0.0.1"]` continues to work whether the
+    // peer arrives as `127.0.0.1` or `::ffff:127.0.0.1`.
+    let peer_ip_canon: Option<IpAddr> = peer_addr.map(|p| canonicalise_ip(p.ip()));
+    let trusted_parsed: Vec<IpAddr> = trusted_proxies
+        .iter()
+        .filter_map(|t| t.parse::<IpAddr>().ok().map(canonicalise_ip))
+        .collect();
+    let peer_is_trusted = match &peer_ip_canon {
+        Some(ip) => trusted_parsed.iter().any(|t| t == ip),
+        None => false,
+    };
+    if peer_is_trusted {
+        // h2ck.me N2 — pick the leftmost value from the
+        // comma-separated `X-Forwarded-For` chain (RFC 7239 semantics:
+        // leftmost is the original client). Fall back to `X-Real-IP`
+        // when XFF is absent. Only accept a header value that parses
+        // as an `IpAddr` — anything else is a misconfigured proxy or a
+        // spoof attempt, and the safe move is to fall through to the
+        // socket peer.
+        let candidate = headers_map
+            .get("x-forwarded-for")
+            .and_then(|v| v.split(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                headers_map
+                    .get("x-real-ip")
+                    .map(String::as_str)
+                    .map(str::trim)
+            })
+            .and_then(|s| s.parse::<IpAddr>().ok())
+            .map(canonicalise_ip);
+        if let Some(ip) = candidate {
+            return ip.to_string();
+        }
+    }
+    peer_ip_canon
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Canonicalise an `IpAddr` — collapse IPv4-mapped-IPv6 (`::ffff:a.b.c.d`)
+/// back to plain IPv4 so comparisons on a dual-stack listener don't
+/// silently disagree.
+fn canonicalise_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        v4 => v4,
+    }
+}
+
 fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
     let origin_hdr = headers
         .get(axum::http::header::ORIGIN)
@@ -859,12 +876,14 @@ fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
         .get(axum::http::header::REFERER)
         .and_then(|v| v.to_str().ok())
         .and_then(|r| url::Url::parse(r).ok())
-        .map(|u| format!(
-            "{}://{}{}",
-            u.scheme(),
-            u.host_str().unwrap_or(""),
-            u.port().map(|p| format!(":{}", p)).unwrap_or_default(),
-        ));
+        .map(|u| {
+            format!(
+                "{}://{}{}",
+                u.scheme(),
+                u.host_str().unwrap_or(""),
+                u.port().map(|p| format!(":{}", p)).unwrap_or_default(),
+            )
+        });
     if let Some(o) = referer_origin {
         return allowed.iter().any(|a| a == &o);
     }
@@ -890,8 +909,20 @@ fn build_cors_layer(cfg: &crate::config::CorsConfig) -> Option<CorsLayer> {
     }
     let mut layer = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
-        .allow_headers([HeaderName::from_static("content-type"), HeaderName::from_static("authorization"), HeaderName::from_static("idempotency-key"), HeaderName::from_static("if-match"), HeaderName::from_static("traceparent")]);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("if-match"),
+            HeaderName::from_static("traceparent"),
+        ]);
     if cfg.allow_credentials {
         layer = layer.allow_credentials(true);
     }

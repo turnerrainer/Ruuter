@@ -44,7 +44,8 @@ impl StepExecutor for IterateStepExecutor {
         if items.len() > max {
             return Err(RuuterError::InvalidStep(format!(
                 "iterate.over has {} items but max_items is {}",
-                items.len(), max
+                items.len(),
+                max
             )));
         }
 
@@ -79,7 +80,7 @@ impl StepExecutor for IterateStepExecutor {
         }
 
         Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string())
+            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
         ))
     }
 }

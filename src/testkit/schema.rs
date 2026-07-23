@@ -168,10 +168,6 @@ pub struct ExpectHttp {
     /// Every listed header must be absent.
     #[serde(default)]
     pub header_absent: Vec<String>,
-    /// When true, the response must carry `Idempotency-Replayed: true`.
-    /// When false, that header must be absent.
-    #[serde(default)]
-    pub replayed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

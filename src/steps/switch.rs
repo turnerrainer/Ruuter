@@ -1,6 +1,6 @@
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
-use crate::steps::{SwitchStep, StepExecutor, StepResult};
+use crate::steps::{StepExecutor, StepResult, SwitchStep};
 use crate::Result;
 
 pub struct SwitchStepExecutor {
@@ -22,7 +22,7 @@ impl StepExecutor for SwitchStepExecutor {
         for condition in &self.step.switch {
             let result = self.script_engine.evaluate(
                 &serde_json::Value::String(condition.condition.clone()),
-                context
+                context,
             )?;
 
             if let Some(b) = result.as_bool() {
@@ -33,7 +33,7 @@ impl StepExecutor for SwitchStepExecutor {
         }
 
         Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string())
+            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
         ))
     }
 }

@@ -18,7 +18,13 @@ use std::sync::Arc;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 fn build(files: &[(&str, &str)]) -> DslRouter {
@@ -70,10 +76,18 @@ shape:
         ),
     ]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "call",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "call",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(r.status, 200);
     let body = r.value.unwrap();
@@ -96,8 +110,13 @@ fetch:
 
     let r = router
         .execute_dsl(
-            "svc", "GET", "broken",
-            HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
+            "svc",
+            "GET",
+            "broken",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
         )
         .await;
     assert!(r.is_err(), "unresolvable template must be an error");
@@ -130,10 +149,18 @@ shape:
         ),
     ]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "ping",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "ping",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["echoed"], true);
 }
@@ -167,10 +194,18 @@ shape:
         ),
     ]);
 
-    let r = router.execute_dsl(
-        "svc", "POST", "creator",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "POST",
+            "creator",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["name"], "hello world");
 }

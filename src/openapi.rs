@@ -49,10 +49,7 @@ pub fn build_spec(loaded: &LoadedProjects, service_version: &str) -> Value {
 
 /// Same as `build_spec`, but takes only the HTTP tree. Useful for the
 /// router which doesn't retain the triggers/guards views.
-pub fn build_spec_from_http(
-    http: &HttpDsls,
-    service_version: &str,
-) -> Value {
+pub fn build_spec_from_http(http: &HttpDsls, service_version: &str) -> Value {
     let mut paths = Map::new();
 
     // Deterministic order — projects then dsl_key alpha — so a diff on the
@@ -127,10 +124,6 @@ pub fn build_spec_from_http(
                 "traceparent": {
                     "description": "W3C traceparent (`00-<trace_id>-<span_id>-<flags>`) either adopted from the request or generated fresh.",
                     "schema": {"type": "string"}
-                },
-                "Idempotency-Replayed": {
-                    "description": "Present with value `true` on a cache-hit replay from the Idempotency-Key store.",
-                    "schema": {"type": "string", "enum": ["true"]}
                 }
             }
         }
@@ -184,11 +177,7 @@ fn operation_id(project: &str, method: &str, dsl_key: &str) -> String {
 }
 
 fn summary_from_key(dsl_key: &str) -> String {
-    dsl_key
-        .rsplit('/')
-        .next()
-        .unwrap_or(dsl_key)
-        .to_string()
+    dsl_key.rsplit('/').next().unwrap_or(dsl_key).to_string()
 }
 
 fn collect_return_statuses(dsl: &Dsl) -> Vec<u16> {
@@ -238,7 +227,7 @@ fn build_responses(statuses: &[u16]) -> Value {
     if !effective.iter().any(|c| (400..500).contains(c)) {
         effective.push(400);
     }
-    if !effective.iter().any(|c| *c == 500) {
+    if !effective.contains(&500) {
         effective.push(500);
     }
     for code in effective {
@@ -257,8 +246,7 @@ fn build_responses(statuses: &[u16]) -> Value {
                 "description": status_reason(code),
                 "headers": {
                     "traceparent": {"$ref": "#/components/headers/traceparent"},
-                    "X-Trace-Id": {"$ref": "#/components/headers/X-Trace-Id"},
-                    "Idempotency-Replayed": {"$ref": "#/components/headers/Idempotency-Replayed"}
+                    "X-Trace-Id": {"$ref": "#/components/headers/X-Trace-Id"}
                 },
                 "content": {
                     "application/json": {

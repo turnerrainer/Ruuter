@@ -42,11 +42,11 @@ use super::{
     DEFAULT_LIMITS, LINE_PATTERN,
 };
 use crate::context::{ExecutionContext, QuickJsSession};
-use std::sync::atomic::Ordering;
 use crate::{Result, RuuterError};
 use rquickjs::{Context as QjsContext, Runtime as QjsRuntime};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
 pub struct QuickJsScriptEngine {
     limits: ScriptLimits,
@@ -223,8 +223,10 @@ fn execute_js<'js>(
     // engine synthesises internally).
     let js_value: rquickjs::Value<'js> = match registry.id_for(script) {
         Some(id) => {
-            let already =
-                session.compiled_flags.get(id as usize).map(|f| f.load(Ordering::Acquire));
+            let already = session
+                .compiled_flags
+                .get(id as usize)
+                .map(|f| f.load(Ordering::Acquire));
             let script_bytes = if already == Some(true) {
                 format!("__fn_{}()", id)
             } else {
@@ -294,14 +296,22 @@ fn setup_bindings<'js>(ctx: &rquickjs::Ctx<'js>, context: &ExecutionContext) -> 
             None => Value::Null,
         },
     );
+    // h2ck.me S4 — mirror boa.rs: expose the trusted origin.
+    incoming.insert(
+        "origin",
+        Value::String(context.request_origin().to_string()),
+    );
 
     // QuickJS JSON.parse produces a native JS object; then attach to
     // globalThis under the expected name. No macro-generated bindings
     // needed for this small shape.
     let incoming_json = serde_json::to_string(&incoming)?;
     ctx.eval::<(), _>(
-        format!("globalThis.incoming = JSON.parse({});", js_string_literal(&incoming_json))
-            .as_bytes(),
+        format!(
+            "globalThis.incoming = JSON.parse({});",
+            js_string_literal(&incoming_json)
+        )
+        .as_bytes(),
     )
     .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs bind incoming: {}", e)))?;
 
@@ -372,10 +382,9 @@ fn js_value_to_json<'js>(value: rquickjs::Value<'js>) -> Result<Value> {
         ));
     }
     if let Some(s) = value.as_string() {
-        return Ok(Value::String(
-            s.to_string()
-                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs str: {}", e)))?,
-        ));
+        return Ok(Value::String(s.to_string().map_err(|e| {
+            RuuterError::ScriptEvaluation(format!("qjs str: {}", e))
+        })?));
     }
     // For arrays and objects, roundtrip through JSON. This handles
     // arbitrary nesting uniformly and matches how the Boa backend

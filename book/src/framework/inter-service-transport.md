@@ -89,7 +89,7 @@ listeners:
     unix: "/var/run/ruuter/admin.sock"    # sidecar / control plane
 ```
 
-Every listener serves the **same axum Router** — the same routes, the same guards, the same OpenAPI spec, the same CSRF/CORS/Idempotency-Key behaviour. Only the transport differs.
+Every listener serves the **same axum Router** — the same routes, the same guards, the same OpenAPI spec, the same CSRF/CORS behaviour. Only the transport differs.
 
 Rules and gotchas:
 

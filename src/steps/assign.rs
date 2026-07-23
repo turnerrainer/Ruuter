@@ -25,7 +25,7 @@ impl StepExecutor for AssignStepExecutor {
         }
 
         Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string())
+            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
         ))
     }
 }

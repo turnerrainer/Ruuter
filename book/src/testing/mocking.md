@@ -83,4 +83,4 @@ The mock server's registered mocks are cleared between scenarios in the same fil
 
 ## What NOT to mock
 
-Idempotency-Key handling, CSRF, traceparent — these all happen inside Ruuter, not on an outbound call. They're exercised by `inprocess` mode automatically because the harness routes through the full axum stack. Don't mock them; assert on their effects (`replayed: true`, `header_present: [x-trace-id]`, `status: 403` from a rejected CSRF).
+CSRF, traceparent, XFF trust — these all happen inside Ruuter, not on an outbound call. They're exercised by `inprocess` mode automatically because the harness routes through the full axum stack. Don't mock them; assert on their effects (`header_present: [x-trace-id]`, `status: 403` from a rejected CSRF).

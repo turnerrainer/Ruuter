@@ -40,8 +40,7 @@ compile_error!(
 
 // ── Engine-agnostic helpers ───────────────────────────────────────
 
-pub(crate) static LINE_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
+pub(crate) static LINE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$=(.+)=$").unwrap());
 
 /// Task 037 metric — count of native JS contexts constructed since
 /// process start. Both backends bump the same counter so downstream
@@ -50,8 +49,7 @@ pub(crate) static LINE_PATTERN: Lazy<Regex> =
 /// Only bumped when `evaluate()` fell OFF the literal fast-path and
 /// had to build an engine. Tests use this to verify the engine is
 /// not invoked for expression-free values.
-static CONTEXT_CREATED_COUNT: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static CONTEXT_CREATED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn bump_context_created() {
     CONTEXT_CREATED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

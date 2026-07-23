@@ -6,7 +6,7 @@ Declarative REST + WebSocket router. YAML DSLs on disk become HTTP routes and We
 - **YAML DSL.** Named steps with `${JS}` expressions between them. No compiling; DSLs are read at boot.
 - **WebSocket.** Server endpoints and upstream sources first-class.
 - **OpenAPI 3.1** auto-generated from every DSL at `/_/openapi.json`.
-- **Batteries included.** Idempotency-Key, CSRF, SSRF allow-list, traceparent propagation, response-size cap, request-method allow-list, in-process state store — all configurable, all off-by-default unless dangerous to default-off.
+- **Batteries included.** CSRF, SSRF allow-list, X-Forwarded-For trusted-proxy gating, traceparent propagation, response-size cap, request-method allow-list, in-process state store — all configurable, all off-by-default unless dangerous to default-off. Idempotency is a [DSL-authored pattern](./dsl/idempotency-pattern.md) rather than a framework primitive.
 
 Version: 0.4.0 · License: Apache-2.0.
 

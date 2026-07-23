@@ -180,6 +180,14 @@ fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()
             None => Value::Null,
         },
     );
+    // h2ck.me S4 — expose the framework-computed origin (peer IP, or
+    // an X-Forwarded-For value from a trusted proxy). Distinct from
+    // `incoming.headers["x-forwarded-for"]`, which is the raw
+    // client-controlled value.
+    incoming.insert(
+        "origin",
+        Value::String(context.request_origin().to_string()),
+    );
 
     let incoming_json = serde_json::to_string(&incoming)?;
     boa.eval(Source::from_bytes(&format!(
@@ -213,10 +221,9 @@ fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {
         if n.fract() == 0.0 && n.is_finite() {
             return Ok(Value::Number(serde_json::Number::from(n as i64)));
         }
-        return Ok(Value::Number(
-            serde_json::Number::from_f64(n)
-                .ok_or_else(|| RuuterError::ScriptEvaluation("Invalid number".to_string()))?,
-        ));
+        return Ok(Value::Number(serde_json::Number::from_f64(n).ok_or_else(
+            || RuuterError::ScriptEvaluation("Invalid number".to_string()),
+        )?));
     }
 
     if let Some(s) = value.as_string() {

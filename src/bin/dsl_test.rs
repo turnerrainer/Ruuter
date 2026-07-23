@@ -45,8 +45,8 @@ use tokio_tungstenite::tungstenite::Message;
 async fn main() -> ExitCode {
     let args = Args::parse();
 
-    let base_constants = load_constants(args.constants.to_str().unwrap_or("./constants.ini"))
-        .unwrap_or_default();
+    let base_constants =
+        load_constants(args.constants.to_str().unwrap_or("./constants.ini")).unwrap_or_default();
 
     let test_files = enumerate_test_files(&args.tests_root);
     if test_files.is_empty() {
@@ -202,7 +202,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn load_test_file(path: &Path) -> anyhow::Result<TestFile> {
     let raw = std::fs::read_to_string(path)?;
-    let file: TestFile = serde_yml::from_str(&raw)?;
+    let file: TestFile = serde_yaml_ng::from_str(&raw)?;
     Ok(file)
 }
 
@@ -248,7 +248,12 @@ async fn run_mock_http(
     // Apply per-file http_rewrite (with {MOCK} → mock base URL).
     apply_http_rewrite(&file.http_rewrite, mock.base_url());
 
-    let harness = Harness::build(&args.dsl_root, merged)?;
+    // The mock binds on 127.0.0.1 — v0.7.0's N4 default
+    // (block_private_networks=true) would reject the DSL's outbound
+    // to it. The mock is the target the test author IS opting into,
+    // so relax the guard for the test-runner process only. Production
+    // code paths keep the strict default.
+    let harness = Harness::build_with_config(mock_test_config(&args.dsl_root), merged)?;
 
     let mut results = Vec::new();
     for s in &file.tests {
@@ -282,7 +287,9 @@ async fn run_trigger_inject(
 
     apply_http_rewrite(&file.http_rewrite, mock.base_url());
 
-    let harness = Harness::build(&args.dsl_root, merged)?;
+    // Same rationale as run_mock_http — trigger DSLs also dispatch to
+    // the loopback mock. See mock_test_config() below.
+    let harness = Harness::build_with_config(mock_test_config(&args.dsl_root), merged)?;
 
     let mut results = Vec::new();
     for s in &file.tests {
@@ -312,8 +319,10 @@ async fn run_ws_client(
 ) -> anyhow::Result<Vec<(String, bool, Option<String>)>> {
     // Build our own router + engine + trigger dispatcher, mount them
     // as an axum app, bind on 127.0.0.1:0, and open a real WS client.
-    let mut config = AppConfig::default();
-    config.config_path = args.dsl_root.clone();
+    let config = AppConfig {
+        config_path: args.dsl_root.clone(),
+        ..AppConfig::default()
+    };
 
     let loader = DslLoader::new(config.clone(), constants);
     let loaded = loader.load_everything()?;
@@ -415,10 +424,9 @@ async fn run_ws_scenario(
     state: &StateStore,
     s: &Scenario,
 ) -> Result<(), String> {
-    let ws = s
-        .ws
-        .as_ref()
-        .ok_or_else(|| "scenario missing `ws:`".to_string())?;
+    let ws =
+        s.ws.as_ref()
+            .ok_or_else(|| "scenario missing `ws:`".to_string())?;
     let url = format!("ws://{}{}", addr, ws.path);
 
     let (mut socket, _resp) = tokio_tungstenite::connect_async(&url)
@@ -464,7 +472,10 @@ async fn run_ws_scenario(
     if got.len() != want {
         return Err(format!(
             "ws: expected {} frame(s), got {}\n  expected: {:?}\n  got: {:?}",
-            want, got.len(), ws.expect_frames, got
+            want,
+            got.len(),
+            ws.expect_frames,
+            got
         ));
     }
     for (i, expected) in ws.expect_frames.iter().enumerate() {
@@ -572,7 +583,10 @@ fn check_http_response(
 ) -> Result<(), String> {
     if let Some(s) = expect.status {
         if s != status {
-            return Err(format!("status: expected {}, got {} (body: {})", s, status, body));
+            return Err(format!(
+                "status: expected {}, got {} (body: {})",
+                s, status, body
+            ));
         }
     }
     if let Some(b) = &expect.body {
@@ -613,17 +627,6 @@ fn check_http_response(
             return Err(format!("header '{}': expected absent, was present", k));
         }
     }
-    if let Some(replayed) = expect.replayed {
-        let hit = get_header_ci(headers, "idempotency-replayed")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        if hit != replayed {
-            return Err(format!(
-                "replayed: expected {}, got {} (headers: {:?})",
-                replayed, hit, headers
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -649,6 +652,19 @@ fn merge_constants_with_mock(
     }
     constants.insert("__MOCK__".to_string(), mock_base.to_string());
     constants
+}
+
+/// AppConfig for the mock-http and trigger-inject test modes. Same as
+/// `AppConfig::default()` except `internal_requests.block_private_networks`
+/// is off, since the MockServer binds on 127.0.0.1 and the DSL under
+/// test must be able to reach it. Production behaviour is unchanged.
+fn mock_test_config(dsl_root: &Path) -> AppConfig {
+    let mut config = AppConfig {
+        config_path: dsl_root.to_path_buf(),
+        ..AppConfig::default()
+    };
+    config.internal_requests.block_private_networks = false;
+    config
 }
 
 /// Set `RUUTER_HTTP_REWRITE` env var from a per-file map. `{MOCK}` in
@@ -732,7 +748,9 @@ impl RunSummary {
                     "\x1b[31mfail\x1b[0m  {}::{}\n      {}",
                     p.display(),
                     name,
-                    err.as_deref().unwrap_or("(no message)").replace('\n', "\n      ")
+                    err.as_deref()
+                        .unwrap_or("(no message)")
+                        .replace('\n', "\n      ")
                 );
             }
         }

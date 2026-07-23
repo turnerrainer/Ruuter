@@ -34,15 +34,13 @@ pub struct DeclarationStep {
 
 impl Dsl {
     pub fn new(steps: IndexMap<String, DslStep>) -> Self {
-        let declaration = steps
-            .values()
-            .find_map(|step| {
-                if let DslStep::Declaration(decl) = step {
-                    Some(decl.clone())
-                } else {
-                    None
-                }
-            });
+        let declaration = steps.values().find_map(|step| {
+            if let DslStep::Declaration(decl) = step {
+                Some(decl.clone())
+            } else {
+                None
+            }
+        });
 
         Self { steps, declaration }
     }

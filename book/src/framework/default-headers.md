@@ -16,7 +16,7 @@ response_default_headers:
 Applied LAST — will NOT overwrite a header already set by:
 
 - The DSL's `return.headers`
-- Framework-added `traceparent`, `x-trace-id`, `idempotency-*`
+- Framework-added `traceparent`, `x-trace-id`
 - The JSON response body's `content-type`
 
 If you configure `content-type: text/xml` here, a DSL that returns JSON (auto-setting `content-type: application/json`) wins — your default is a no-op for that route.

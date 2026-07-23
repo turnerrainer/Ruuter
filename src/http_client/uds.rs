@@ -69,11 +69,7 @@ pub async fn request_over_unix(
     let fut = async move {
         // Connect
         let stream = UnixStream::connect(&socket_path).await.map_err(|e| {
-            RuuterError::HttpRequest(format!(
-                "unix connect {}: {}",
-                socket_path.display(),
-                e
-            ))
+            RuuterError::HttpRequest(format!("unix connect {}: {}", socket_path.display(), e))
         })?;
 
         // Handshake — hyper's low-level client API for HTTP/1

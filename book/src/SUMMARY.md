@@ -23,6 +23,7 @@
 - [Constants](./dsl/constants.md)
 - [Path parameters](./dsl/path-params.md)
 - [Guards](./dsl/guards.md)
+- [Idempotency pattern](./dsl/idempotency-pattern.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
 
 # WebSocket
@@ -36,7 +37,6 @@
 - [Response headers](./framework/response-headers.md)
 - [Built-in endpoints](./framework/endpoints.md)
 - [OpenAPI generation](./framework/openapi.md)
-- [Idempotency-Key](./framework/idempotency.md)
 - [CSRF](./framework/csrf.md)
 - [CORS](./framework/cors.md)
 - [SSRF allow-list](./framework/ssrf.md)

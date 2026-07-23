@@ -41,7 +41,7 @@ lookup:
 
 ## Composition
 
-- Composes with **Idempotency-Key** (framework-level): an Idempotency-Key-guarded route can wrap its work in `single_flight` for concurrent-duplicate collapsing on the same instance; the framework's key-based cache handles cross-request retry safety.
+- Composes with the **[DSL idempotency pattern](../idempotency-pattern.md)**: a route that dedups on `state.get(idempotency-key)` can wrap the `work:` branch in `single_flight` for concurrent-duplicate collapsing before the state store is hit.
 - Composes with **iterate**: a `single_flight` step can appear inside `iterate.do`, though usually the reverse is more useful (many items, each guarded by its own single_flight window).
 - Composes with **template**: the `do:` body can invoke another DSL via `template:` for reuse of computation-heavy work.
 
@@ -51,14 +51,14 @@ lookup:
 |---|---|
 | Guards | Run per-request (before single_flight step is reached), not coalesced |
 | CSRF Origin check | Same as guards |
-| Idempotency-Key | Framework cache consulted before DSL runs; independent of single_flight |
+| DSL idempotency pattern | DSL-level `state.get`/`state.set` runs inside the DSL body; single_flight coalesces the leader's `work:` branch |
 | Traceparent | Leader's traceparent is the one carried into `do:`; followers keep their own traceparent for their own response |
 | max_step_recursions | Applies to leader's transitions inside `do:` normally |
 | Response headers | Each follower builds its own response headers via subsequent DSL steps; leader's headers do NOT propagate |
 
 ## Non-goals
 
-- **Cross-instance coalescing.** Two Ruuter pods each maintain their own single_flight map — a duplicate landing on the other pod is not coalesced. Solving that requires the same shared-store work as Idempotency-Key would need for multi-instance dedup.
+- **Cross-instance coalescing.** Two Ruuter pods each maintain their own single_flight map — a duplicate landing on the other pod is not coalesced. Solving that requires a shared state backend that the DSL addresses via `state.get`/`state.set` (see the [DSL idempotency pattern](../idempotency-pattern.md)), not a framework-level cache.
 - **LRU eviction.** The registry has a soft cap (default 10 000 distinct in-flight keys); on overflow an arbitrary entry is evicted. LRU would need extra bookkeeping and isn't v1 scope. In practice the cap only engages under a pathological DSL that keys on unbounded distinct values (per-request UUIDs).
 - **Value caching after the leader completes.** `single_flight` is in-flight coalescing only — the moment the leader publishes, the slot is removed. For time-bounded caching, wrap `single_flight` output in a `state.set` with a TTL.
 

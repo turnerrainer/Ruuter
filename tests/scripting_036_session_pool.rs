@@ -67,7 +67,10 @@ fn second_evaluate_on_same_context_reuses_session() {
     let (_, boa_used_2) = engine
         .evaluate_tracked(&json!("${2 + 2}"), &ctx)
         .expect("second eval");
-    assert!(boa_used_2, "second eval also invokes the engine (different expr)");
+    assert!(
+        boa_used_2,
+        "second eval also invokes the engine (different expr)"
+    );
     let after_second = boa_context_created_count();
     assert_eq!(
         after_second - after_first,
@@ -107,7 +110,9 @@ fn cloned_context_shares_session() {
 
     let _guard = COUNTER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let before = boa_context_created_count();
-    let _ = engine.evaluate_tracked(&json!("${1 + 1}"), &parent).unwrap();
+    let _ = engine
+        .evaluate_tracked(&json!("${1 + 1}"), &parent)
+        .unwrap();
     let after_first = boa_context_created_count();
     assert_eq!(after_first - before, 1);
 

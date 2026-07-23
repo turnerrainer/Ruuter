@@ -14,11 +14,7 @@
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{
-    runtime::Tokio,
-    trace::TracerProvider,
-    Resource,
-};
+use opentelemetry_sdk::{runtime::Tokio, trace::TracerProvider, Resource};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 const SERVICE_NAME_DEFAULT: &str = "ruuter-on-rust";
@@ -36,7 +32,7 @@ pub fn init() -> Option<TracerProvider> {
         Some(url) if !url.is_empty() => {
             // W3C TraceContext propagation (interop with the other Buerostack components).
             opentelemetry::global::set_text_map_propagator(
-                opentelemetry_sdk::propagation::TraceContextPropagator::new()
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
             );
 
             let service_name = std::env::var("OTEL_SERVICE_NAME")
@@ -45,20 +41,28 @@ pub fn init() -> Option<TracerProvider> {
             let exporter = match opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(&url)
-                .build() {
+                .build()
+            {
                 Ok(e) => e,
                 Err(err) => {
-                    eprintln!("OTel exporter init failed ({}); falling back to fmt-only logging", err);
-                    tracing_subscriber::registry().with(env_filter).with(fmt_layer).init();
+                    eprintln!(
+                        "OTel exporter init failed ({}); falling back to fmt-only logging",
+                        err
+                    );
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(fmt_layer)
+                        .init();
                     return None;
                 }
             };
 
             let provider = TracerProvider::builder()
                 .with_batch_exporter(exporter, Tokio)
-                .with_resource(Resource::new(vec![
-                    KeyValue::new("service.name", service_name.clone()),
-                ]))
+                .with_resource(Resource::new(vec![KeyValue::new(
+                    "service.name",
+                    service_name.clone(),
+                )]))
                 .build();
             let tracer = provider.tracer(service_name);
             let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
@@ -72,7 +76,10 @@ pub fn init() -> Option<TracerProvider> {
             Some(provider)
         }
         _ => {
-            tracing_subscriber::registry().with(env_filter).with(fmt_layer).init();
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt_layer)
+                .init();
             None
         }
     }
