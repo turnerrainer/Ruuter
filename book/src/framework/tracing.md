@@ -44,7 +44,7 @@ The 32-hex trace id is what shows up as `X-Trace-Id`.
 
 ## Replay and trace correlation
 
-Framework-level `Idempotency-Key` handling was removed in v1.0.0.
+Framework-level `Idempotency-Key` handling was removed in v0.7.0.
 When a DSL implements the [DSL idempotency pattern](../dsl/idempotency-pattern.md)
 and short-circuits to a cached response, a fresh traceparent still
 fires — correlate the original and replay via whichever dedup key

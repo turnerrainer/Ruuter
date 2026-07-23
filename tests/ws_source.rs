@@ -4,6 +4,10 @@
 //! sends one JSON message, runs a `WsSource` against it, and asserts
 //! the trigger DSL fired and mutated state.
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs for
+// rationale.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
@@ -24,7 +28,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 async fn start_echo_server(messages: Vec<String>) -> (u16, tokio::task::JoinHandle<()>) {
@@ -64,7 +74,9 @@ fn build_dispatcher(triggers: &[(&str, &str, &str, &str)]) -> (Arc<TriggerDispat
     let state = StateStore::new();
     let engine = StepEngine::new(HttpClient::new(&cfg));
     let d = Arc::new(TriggerDispatcher::new(
-        loaded.triggers, state.clone(), engine,
+        loaded.triggers,
+        state.clone(),
+        engine,
     ));
     (d, state)
 }
@@ -113,7 +125,11 @@ respond:
     let _ = server.await;
 
     let stored = state.get("svc", "last");
-    assert_eq!(stored, Some(json!(42)), "state should reflect the dispatched message");
+    assert_eq!(
+        stored,
+        Some(json!(42)),
+        "state should reflect the dispatched message"
+    );
 }
 
 #[tokio::test]
@@ -132,7 +148,8 @@ write:
         {"T": "trade", "S": "AAPL", "p": 150},
         {"T": "trade", "S": "MSFT", "p": 380},
         {"T": "trade", "S": "GOOG", "p": 175},
-    ])).unwrap();
+    ]))
+    .unwrap();
 
     let (port, server) = start_echo_server(vec![msg]).await;
 
@@ -142,7 +159,7 @@ write:
         on_connect: vec![],
         dispatch: DispatchConfig {
             channel: "$.T".into(),
-            key:     "$.S".into(),
+            key: "$.S".into(),
         },
         reconnect: ReconnectPolicy::default(),
     };
@@ -190,17 +207,35 @@ async fn ws_source_sends_on_connect_payloads() {
             OnConnectAction::SendJson(json!({"action": "auth", "key": "K"})),
             OnConnectAction::SendJson(json!({"action": "subscribe", "bars": ["AAPL"]})),
         ],
-        dispatch: DispatchConfig { channel: "$.T".into(), key: "$.S".into() },
+        dispatch: DispatchConfig {
+            channel: "$.T".into(),
+            key: "$.S".into(),
+        },
         reconnect: ReconnectPolicy::default(),
     };
 
-    let h = tokio::spawn(async move { ws::run("svc".into(), "feed".into(), cfg, dispatcher, WsRegistry::new()).await });
-    let received = tokio::time::timeout(Duration::from_secs(2), rx).await.expect("timeout").unwrap();
+    let h = tokio::spawn(async move {
+        ws::run(
+            "svc".into(),
+            "feed".into(),
+            cfg,
+            dispatcher,
+            WsRegistry::new(),
+        )
+        .await
+    });
+    let received = tokio::time::timeout(Duration::from_secs(2), rx)
+        .await
+        .expect("timeout")
+        .unwrap();
     h.abort();
     let _ = server.await;
 
     assert_eq!(received.len(), 2);
-    let parsed: Vec<serde_json::Value> = received.iter().map(|s| serde_json::from_str(s).unwrap()).collect();
+    let parsed: Vec<serde_json::Value> = received
+        .iter()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
     assert_eq!(parsed[0]["action"], "auth");
     assert_eq!(parsed[0]["key"], "K");
     assert_eq!(parsed[1]["action"], "subscribe");
@@ -218,9 +253,7 @@ fn config_constant_substitution_resolves_known_and_errors_on_missing() {
     let cfg = WsSourceConfig {
         url: "[#ws_url]".into(),
         headers: HashMap::new(),
-        on_connect: vec![
-            OnConnectAction::SendJson(json!({"key": "[#api_key]"})),
-        ],
+        on_connect: vec![OnConnectAction::SendJson(json!({"key": "[#api_key]"}))],
         dispatch: DispatchConfig {
             channel: "$.T".into(),
             key: "$.S".into(),

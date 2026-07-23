@@ -157,11 +157,7 @@ pub struct OptimisticConcurrencyConfig {
 }
 
 fn default_ifmatch_methods() -> Vec<String> {
-    vec![
-        "PUT".to_string(),
-        "PATCH".to_string(),
-        "DELETE".to_string(),
-    ]
+    vec!["PUT".to_string(), "PATCH".to_string(), "DELETE".to_string()]
 }
 
 /// Server-side CSRF stance for state-changing methods. Implements
@@ -206,8 +202,12 @@ pub struct ScriptingConfig {
     pub max_stack_size: usize,
 }
 
-fn default_script_max_loop_iterations() -> u64 { 1_000_000 }
-fn default_script_max_stack_size() -> usize { 400 }
+fn default_script_max_loop_iterations() -> u64 {
+    1_000_000
+}
+fn default_script_max_stack_size() -> usize {
+    400
+}
 
 impl Default for ScriptingConfig {
     fn default() -> Self {
@@ -297,7 +297,7 @@ pub struct InternalRequestsConfig {
     /// `unix_socket_map` alias) are unaffected — those never touch
     /// TCP.
     ///
-    /// Set to false to restore the pre-v1.0 permissive behaviour if
+    /// Set to false to restore the pre-v0.7 permissive behaviour if
     /// you legitimately need a DSL to call a private-network sidecar
     /// over TCP loopback without migrating to `unix_socket_map`.
     #[serde(default = "default_block_private_networks")]
@@ -464,9 +464,8 @@ pub fn load_constants(path: &str) -> crate::Result<HashMap<String, String>> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
-    let file = File::open(path).map_err(|_| {
-        crate::RuuterError::Config(format!("Cannot open constants file: {}", path))
-    })?;
+    let file = File::open(path)
+        .map_err(|_| crate::RuuterError::Config(format!("Cannot open constants file: {}", path)))?;
 
     let reader = BufReader::new(file);
     let mut constants = HashMap::new();

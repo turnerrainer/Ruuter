@@ -7,13 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-07-20
+## [0.7.0] - 2026-07-24
 
 Security-hardening release. Closes 15 findings from the h2ck.me
 pre-publication audit (S1–S8, N1–N4, F1, F2) across three review
 rounds; adds a `cargo audit` CI gate. Every fix has a regression
 test in `tests/security*.rs` (68 tests total, all green).
 `cargo audit --deny warnings` is clean.
+
+Also in this batch (release audit sweep, 2026-07-24):
+
+- `state.delete` accepts `remove:` as a serde alias so DSL authors
+  from a Java Ruuter or Redis background can reach for either verb.
+  Verified end-to-end via the loader parse path
+  (`src/steps/state.rs` tests).
+- `dsl-test`'s `mock-http` and `trigger-inject` modes now build the
+  harness with `internal_requests.block_private_networks=false` so
+  DSLs under test can reach the in-process mock upstream on
+  127.0.0.1. Production behaviour of `check_ssrf` is unchanged;
+  only the test-runner process opts out of the private-network gate.
+- Repo-wide `cargo fmt` applied and `[lints.clippy]` posture in
+  `Cargo.toml` promoted `-D warnings` to a hard CI gate with a
+  small, documented allowlist for test-fixture patterns.
+- Book: five `v1.0.0` references corrected to `v0.7.0` in
+  framework/tracing, framework/self-call-optimization,
+  framework/pipeline, reference/non-goals, reference/changelog.
+- `DSL/samples/POST/idempotent-transfer.yml` header rewritten to
+  describe the DSL-authored idempotency pattern (framework-level
+  handling was removed in this same release).
 
 ### Breaking
 

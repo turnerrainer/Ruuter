@@ -11,6 +11,9 @@
 //! - No short-circuit when SelfOrigins doesn't match the URL
 //! - No short-circuit when router handle isn't wired
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::{HttpClient, SelfCallHandler, SelfOrigins};
@@ -72,13 +75,7 @@ respond:
     let mut q = HashMap::new();
     q.insert("q".to_string(), json!("hello"));
     let resp = router
-        .execute_by_url(
-            "GET",
-            "/svc/echo",
-            q,
-            HashMap::new(),
-            HashMap::new(),
-        )
+        .execute_by_url("GET", "/svc/echo", q, HashMap::new(), HashMap::new())
         .await
         .expect("execute_by_url");
 
@@ -299,7 +296,11 @@ async fn non_matching_url_falls_through_to_network_path() {
             None,
         )
         .await;
-    assert!(res.is_err(), "non-matching URL must not short-circuit; got {:?}", res);
+    assert!(
+        res.is_err(),
+        "non-matching URL must not short-circuit; got {:?}",
+        res
+    );
 }
 
 #[tokio::test]
@@ -322,7 +323,11 @@ async fn no_handler_wired_falls_through_to_network_path() {
             None,
         )
         .await;
-    assert!(res.is_err(), "no handler → must not silently succeed; got {:?}", res);
+    assert!(
+        res.is_err(),
+        "no handler → must not silently succeed; got {:?}",
+        res
+    );
 }
 
 // ── SelfOrigins detection unit tests ─────────────────────────────

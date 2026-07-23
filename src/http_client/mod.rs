@@ -239,7 +239,7 @@ impl HttpClient {
             outbound_disabled: false,
             allowed_url_prefixes: Vec::new(),
             allowed_ip_hosts: Vec::new(),
-            // Test-only bare client keeps the pre-v1.0 permissive
+            // Test-only bare client keeps the pre-v0.7 permissive
             // default so the many existing tests that use
             // `with_timeout_ms` and hit loopback fixtures continue to
             // work. Production clients built via `HttpClient::new` pull
@@ -277,9 +277,10 @@ impl HttpClient {
                     url
                 ))
             })?;
-            let ok = self.allowed_url_prefixes.iter().any(|entry| {
-                allow_entry_matches(entry, &req_origin, &parsed)
-            });
+            let ok = self
+                .allowed_url_prefixes
+                .iter()
+                .any(|entry| allow_entry_matches(entry, &req_origin, &parsed));
             if !ok {
                 return Err(RuuterError::HttpRequest(format!(
                     "url not in internal_requests.allowed_urls: {}",
@@ -356,16 +357,17 @@ impl HttpClient {
                 let lookup_target = format!("{}:{}", host, port);
                 let addrs = tokio::net::lookup_host(lookup_target.as_str())
                     .await
-                    .map_err(|e| RuuterError::HttpRequest(format!(
-                        "dns lookup for '{}' failed: {}", host, e
-                    )))?;
+                    .map_err(|e| {
+                        RuuterError::HttpRequest(format!("dns lookup for '{}' failed: {}", host, e))
+                    })?;
                 for a in addrs {
                     if is_private_or_local(a.ip()) {
                         return Err(RuuterError::HttpRequest(format!(
                             "outbound to '{}' blocked: DNS resolved to private / link-local {} \
                              (set internal_requests.block_private_networks=false or \
                              add the host to internal_requests.allowed_ips to opt in)",
-                            host, a.ip()
+                            host,
+                            a.ip()
                         )));
                     }
                 }
@@ -402,7 +404,7 @@ impl HttpClient {
         // matching a self-origin without a handler isn't a failure,
         // just a missed optimisation.
         //
-        // Post-v1.0 (h2ck.me S3 fix): the self-call short-circuit and
+        // v0.7.0 (h2ck.me S3 fix): the self-call short-circuit and
         // UDS transports now honour `internal_requests.disabled`.
         // The operator's mental model — "disabled means no HTTP
         // steps" — must hold for every transport, not just the TCP
@@ -424,15 +426,20 @@ impl HttpClient {
             }
         }
         if url.starts_with("unix://") {
-            return self.uds_request_from_unix_url(url, method, body, query, headers, timeout).await;
+            return self
+                .uds_request_from_unix_url(url, method, body, query, headers, timeout)
+                .await;
         }
         if let Some(sock_path) = self.host_alias_lookup(url) {
-            return self.uds_request_from_alias(&sock_path, url, method, body, query, headers, timeout).await;
+            return self
+                .uds_request_from_alias(&sock_path, url, method, body, query, headers, timeout)
+                .await;
         }
 
         self.check_ssrf(url).await?;
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .request(method, url)
             .timeout(timeout.unwrap_or(self.default_timeout));
 
@@ -463,9 +470,7 @@ impl HttpClient {
         let response = request.send().await?;
         let status = response.status().as_u16();
 
-        if !self.status_allow_list.is_empty()
-            && !self.status_allow_list.contains(&status)
-        {
+        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&status) {
             return Err(RuuterError::HttpRequest(format!(
                 "upstream status {} not in http_codes_allow_list",
                 status
@@ -499,9 +504,8 @@ impl HttpClient {
             let mut stream = response.bytes_stream();
             let mut buf: Vec<u8> = Vec::new();
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| {
-                    RuuterError::HttpRequest(format!("upstream read error: {}", e))
-                })?;
+                let chunk = chunk
+                    .map_err(|e| RuuterError::HttpRequest(format!("upstream read error: {}", e)))?;
                 if buf.len() + chunk.len() > cap {
                     return Err(RuuterError::HttpRequest(format!(
                         "upstream response body exceeded http_response_size_limit {}",
@@ -574,6 +578,10 @@ impl HttpClient {
         Ok(resp)
     }
 
+    // Mirrors the underlying `request_over_unix_pooled` shape; folding
+    // these into a struct would add plumbing without simplifying the
+    // single call site.
+    #[allow(clippy::too_many_arguments)]
     async fn uds_request_from_alias(
         &self,
         socket_path: &std::path::Path,
@@ -758,10 +766,8 @@ fn allow_entry_matches(entry: &str, req_origin: &str, req_url: &url::Url) -> boo
         //      a URL delimiter or end-of-string; otherwise the entry
         //      is a prefix of a longer segment (`.../v1anything`,
         //      invalid).
-        let entry_closed_at_boundary = matches!(
-            entry_full.chars().last(),
-            Some('/') | Some('?') | Some('#')
-        );
+        let entry_closed_at_boundary =
+            matches!(entry_full.chars().last(), Some('/') | Some('?') | Some('#'));
         if entry_closed_at_boundary {
             return true;
         }
@@ -789,7 +795,7 @@ fn has_path_component(entry: &str) -> bool {
         None => return false,
     };
     // Authority ends at the first `/`, `?`, or `#`.
-    after_scheme.find(|c: char| c == '/' || c == '?' || c == '#').is_some()
+    after_scheme.find(['/', '?', '#']).is_some()
 }
 
 /// Length of `scheme://authority` inside `entry`. Anything from this
@@ -800,7 +806,7 @@ fn entry_scheme_authority_len(entry: &str) -> usize {
         None => return entry.len(),
     };
     let tail = &entry[scheme_end..];
-    match tail.find(|c: char| c == '/' || c == '?' || c == '#') {
+    match tail.find(['/', '?', '#']) {
         Some(off) => scheme_end + off,
         None => entry.len(),
     }
@@ -830,7 +836,11 @@ fn merge_query_params(path_and_query: &str, extra: Option<&HashMap<String, Value
     if q.is_empty() {
         return path_and_query.to_string();
     }
-    let sep = if path_and_query.contains('?') { '&' } else { '?' };
+    let sep = if path_and_query.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     let parts: Vec<String> = q
         .iter()
         .map(|(k, v)| {
@@ -907,10 +917,7 @@ impl HttpClient {
         // under `_body` so DSLs that expect that structure can
         // still access them.
         let body_map: HashMap<String, Value> = match body {
-            Some(Value::Object(map)) => map
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            Some(Value::Object(map)) => map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             Some(other) => {
                 let mut m = HashMap::new();
                 m.insert("_body".to_string(), other.clone());
@@ -920,7 +927,13 @@ impl HttpClient {
         };
 
         let resp = handler
-            .execute_by_url(method.as_str(), &path, merged_query, header_strings, body_map)
+            .execute_by_url(
+                method.as_str(),
+                &path,
+                merged_query,
+                header_strings,
+                body_map,
+            )
             .await?;
         // Same status gate as the network path (size gate on self-
         // calls is a follow-up — no wire transfer to cap).

@@ -1,5 +1,5 @@
-use crate::state::StateStore;
 use crate::scripting::ExpressionRegistry;
+use crate::state::StateStore;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -211,7 +211,11 @@ impl ExecutionContext {
     }
 
     pub fn get_all_variables(&self) -> HashMap<String, Value> {
-        self.variables.read().ok().map(|v| v.clone()).unwrap_or_default()
+        self.variables
+            .read()
+            .ok()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 
     pub fn request_body(&self) -> &HashMap<String, Value> {

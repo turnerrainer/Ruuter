@@ -2,14 +2,25 @@
 //! `constants.ini` loader and its substitution into DSL parse-time
 //! and WS source-config paths.
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::{load_constants, AppConfig};
 use ruuter_on_rust::dsl::loader::DslLoader;
-use ruuter_on_rust::sources::config::{resolve_constants, DispatchConfig, ReconnectPolicy, WsSourceConfig};
+use ruuter_on_rust::sources::config::{
+    resolve_constants, DispatchConfig, ReconnectPolicy, WsSourceConfig,
+};
 use std::collections::HashMap;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 #[test]
@@ -25,7 +36,10 @@ fn loader_parses_sectioned_ini_file() {
     std::fs::remove_file(&tmp).ok();
 
     // Section headers are documented as decorative — keys are flat.
-    assert_eq!(c.get("DOMAIN_URL"), Some(&"https://example.com".to_string()));
+    assert_eq!(
+        c.get("DOMAIN_URL"),
+        Some(&"https://example.com".to_string())
+    );
     assert_eq!(c.get("PORT"), Some(&"8080".to_string()));
     assert_eq!(c.get("SECRET"), Some(&"hunter2".to_string()));
     assert_eq!(c.len(), 3);
@@ -65,7 +79,10 @@ respond:
     let mut cfg = AppConfig::default();
     cfg.config_path = tmp_root.clone();
     let mut constants = HashMap::new();
-    constants.insert("DOMAIN_URL".to_string(), "https://api.example.com".to_string());
+    constants.insert(
+        "DOMAIN_URL".to_string(),
+        "https://api.example.com".to_string(),
+    );
     let loader = DslLoader::new(cfg, constants);
     let loaded = loader.load_everything().expect("load");
 
@@ -96,13 +113,23 @@ fn ws_source_resolve_constants_errors_on_missing_key() {
         url: "[#missing_key]".into(),
         headers: HashMap::new(),
         on_connect: vec![],
-        dispatch: DispatchConfig { channel: "$.T".into(), key: "$.S".into() },
+        dispatch: DispatchConfig {
+            channel: "$.T".into(),
+            key: "$.S".into(),
+        },
         reconnect: ReconnectPolicy::default(),
     };
     let result = resolve_constants(&cfg, &HashMap::new());
-    assert!(result.is_err(), "unknown constant must be an error, not silent passthrough");
+    assert!(
+        result.is_err(),
+        "unknown constant must be an error, not silent passthrough"
+    );
     let msg = format!("{}", result.err().unwrap());
-    assert!(msg.contains("missing_key"), "error should name the offending key: {}", msg);
+    assert!(
+        msg.contains("missing_key"),
+        "error should name the offending key: {}",
+        msg
+    );
 }
 
 #[test]
@@ -113,7 +140,10 @@ fn ws_source_resolve_constants_substitutes_headers_and_url() {
         url: "[#ws_url]".into(),
         headers,
         on_connect: vec![],
-        dispatch: DispatchConfig { channel: "$.T".into(), key: "$.S".into() },
+        dispatch: DispatchConfig {
+            channel: "$.T".into(),
+            key: "$.S".into(),
+        },
         reconnect: ReconnectPolicy::default(),
     };
     let mut constants = HashMap::new();

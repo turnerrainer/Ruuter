@@ -42,7 +42,13 @@ fn pure_string_literal_takes_fastpath() {
 #[test]
 fn scalar_literals_take_fastpath() {
     let engine = ScriptEngine::new();
-    for s in &[json!(42), json!(-2.5), json!(true), json!(false), json!(null)] {
+    for s in &[
+        json!(42),
+        json!(-2.5),
+        json!(true),
+        json!(false),
+        json!(null),
+    ] {
         let (out, boa_used) = engine.evaluate_tracked(s, &ctx()).unwrap();
         assert_eq!(&out, s, "scalar {:?} must pass through unchanged", s);
         assert!(!boa_used, "Boa must NOT be constructed for scalar {:?}", s);
@@ -58,13 +64,22 @@ fn deeply_nested_literals_take_fastpath() {
     });
     let (out, boa_used) = ScriptEngine::new().evaluate_tracked(&deep, &ctx()).unwrap();
     assert_eq!(out, deep, "deeply-nested literal tree must pass through");
-    assert!(!boa_used, "Boa must NOT be constructed for deep literal tree");
+    assert!(
+        !boa_used,
+        "Boa must NOT be constructed for deep literal tree"
+    );
 }
 
 #[test]
 fn empty_containers_take_fastpath() {
     let engine = ScriptEngine::new();
-    for c in &[json!({}), json!([]), json!(""), json!({"a": []}), json!([{}])] {
+    for c in &[
+        json!({}),
+        json!([]),
+        json!(""),
+        json!({"a": []}),
+        json!([{}]),
+    ] {
         let (out, boa_used) = engine.evaluate_tracked(c, &ctx()).unwrap();
         assert_eq!(&out, c);
         assert!(!boa_used, "empty {:?} must skip Boa", c);
@@ -87,9 +102,9 @@ fn partial_dollar_delimiters_do_not_trigger_boa() {
     let engine = ScriptEngine::new();
     let cases = [
         "trailing = but no start", // no leading $=
-        "$=",                       // 2 chars, no closing
-        "$=$",                      // 3 chars, ends with $, not =
-        "$=x=$",                    // 5 chars, ends with $, not =
+        "$=",                      // 2 chars, no closing
+        "$=$",                     // 3 chars, ends with $, not =
+        "$=x=$",                   // 5 chars, ends with $, not =
         "just a $ sign",
         "text with { curly } braces but no dollar",
     ];
@@ -133,7 +148,10 @@ fn expression_in_deeply_nested_value_dispatches_to_boa() {
     let (out, boa_used) = ScriptEngine::new().evaluate_tracked(&v, &ctx()).unwrap();
     assert_eq!(out["outer"]["static"], "literal");
     assert_eq!(out["outer"]["nested"]["expr"], "hello world");
-    assert!(boa_used, "Boa must be constructed when any leaf has an expression");
+    assert!(
+        boa_used,
+        "Boa must be constructed when any leaf has an expression"
+    );
 }
 
 #[test]
@@ -209,7 +227,10 @@ fn incoming_body_reference_still_works() {
     let c = ExecutionContext::new(body, HashMap::new(), HashMap::new(), "test".into());
 
     let out = engine
-        .evaluate(&json!("hello ${incoming.body.name} (x${incoming.body.count})"), &c)
+        .evaluate(
+            &json!("hello ${incoming.body.name} (x${incoming.body.count})"),
+            &c,
+        )
         .unwrap();
     assert_eq!(out, "hello Ada (x7)");
 }

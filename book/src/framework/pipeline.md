@@ -18,6 +18,6 @@ Order of framework checks per HTTP request. Each stage can short-circuit with th
     - `Access-Control-*` added when CORS is configured and Origin matches.
     - `response_default_headers` merged last, without overwriting anything set above.
 
-Framework-level `Idempotency-Key` handling was removed in v1.0.0
+Framework-level `Idempotency-Key` handling was removed in v0.7.0
 (h2ck.me findings S1 + S5). See [Idempotency pattern](../dsl/idempotency-pattern.md)
 for the DSL-authored replacement.

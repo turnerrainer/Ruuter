@@ -1,5 +1,11 @@
 //! Integration tests for the event-trigger dispatcher (#004).
 
+// Test fixtures build AppConfig with `let mut cfg = default(); cfg.x = …`
+// — a natural test-setup shape when mixing production defaults with a
+// handful of overrides. Rewriting each site into struct-update syntax
+// adds noise without changing behaviour.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
@@ -12,7 +18,13 @@ use std::sync::Arc;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 fn build_dispatcher_with(triggers: &[(&str, &str, &str, &str)]) -> Arc<TriggerDispatcher> {
@@ -53,11 +65,17 @@ respond:
 "#;
 
     let d = build_dispatcher_with(&[("svc", "ticks", "AAPL", dsl)]);
-    let ok = d.dispatch("svc", "ticks", "AAPL", json!({"value": 42})).await.unwrap();
+    let ok = d
+        .dispatch("svc", "ticks", "AAPL", json!({"value": 42}))
+        .await
+        .unwrap();
     assert!(ok, "expected dispatch to find the DSL");
 
     // State must survive a second dispatch.
-    let ok2 = d.dispatch("svc", "ticks", "AAPL", json!({"value": 99})).await.unwrap();
+    let ok2 = d
+        .dispatch("svc", "ticks", "AAPL", json!({"value": 99}))
+        .await
+        .unwrap();
     assert!(ok2);
 }
 
@@ -83,7 +101,10 @@ respond:
 "#;
     let d = build_dispatcher_with(&[("svc", "ticks", "_default", dsl)]);
 
-    let ok = d.dispatch("svc", "fills", "anything", json!({})).await.unwrap();
+    let ok = d
+        .dispatch("svc", "fills", "anything", json!({}))
+        .await
+        .unwrap();
     assert!(!ok, "unknown channel should not match — returns false");
 }
 
@@ -97,12 +118,12 @@ respond: { return: { from: "beta" }, next: end }
 "#;
     let d = build_dispatcher_with(&[
         ("alpha", "ticks", "_default", dsl_a),
-        ("beta",  "ticks", "_default", dsl_b),
+        ("beta", "ticks", "_default", dsl_b),
     ]);
 
     // No leak: project A's trigger doesn't fire for project B and vice versa.
     let ok_a = d.dispatch("alpha", "ticks", "X", json!({})).await.unwrap();
-    let ok_b = d.dispatch("beta",  "ticks", "X", json!({})).await.unwrap();
+    let ok_b = d.dispatch("beta", "ticks", "X", json!({})).await.unwrap();
     let ok_c = d.dispatch("gamma", "ticks", "X", json!({})).await.unwrap();
     assert!(ok_a);
     assert!(ok_b);

@@ -42,9 +42,23 @@ impl Harness {
     /// Build a harness by loading the DSL tree from `dsl_root` with
     /// the given constants applied.
     pub fn build(dsl_root: &Path, constants: HashMap<String, String>) -> Result<Self> {
-        let mut config = AppConfig::default();
-        config.config_path = dsl_root.to_path_buf();
+        let config = AppConfig {
+            config_path: dsl_root.to_path_buf(),
+            ..AppConfig::default()
+        };
+        Self::build_with_config(config, constants)
+    }
 
+    /// Build a harness with a caller-supplied `AppConfig`. Callers must
+    /// still set `config.config_path` themselves; nothing here overrides
+    /// it. Used by the mock-http and trigger-inject test modes to relax
+    /// N4's `block_private_networks` default so the DSL under test can
+    /// reach the mock server bound on 127.0.0.1 without disabling SSRF
+    /// hardening in the production code path.
+    pub fn build_with_config(
+        config: AppConfig,
+        constants: HashMap<String, String>,
+    ) -> Result<Self> {
         let loader = DslLoader::new(config.clone(), constants);
         let loaded = loader.load_everything()?;
 
@@ -128,12 +142,7 @@ impl Harness {
         let resp_headers: HashMap<String, String> = resp
             .headers()
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.to_string(),
-                    v.to_str().unwrap_or("").to_string(),
-                )
-            })
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
         // 16 MiB parity with the live router.
@@ -141,9 +150,8 @@ impl Harness {
         let body_value: Value = if body_bytes.is_empty() {
             Value::Null
         } else {
-            serde_json::from_slice(&body_bytes).unwrap_or_else(|_| {
-                Value::String(String::from_utf8_lossy(&body_bytes).to_string())
-            })
+            serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body_bytes).to_string()))
         };
 
         // NOT_FOUND / server-injected errors surface here just like any

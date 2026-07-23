@@ -3,13 +3,13 @@
 //! Every case proves the outgoing HTTP method is literally PATCH and
 //! that the response shape reaches the caller intact.
 
+use indexmap::IndexMap;
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::context::ExecutionContext;
+use ruuter_on_rust::dsl::Dsl;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::steps::engine::StepEngine;
-use ruuter_on_rust::steps::{HttpArgs, HttpStep, DslStep};
-use ruuter_on_rust::dsl::Dsl;
-use indexmap::IndexMap;
+use ruuter_on_rust::steps::{DslStep, HttpArgs, HttpStep};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -39,9 +39,15 @@ async fn run_patch(url: String, timeout_ms: Option<u64>) -> Result<serde_json::V
     // private-network block so the acceptance test can hit it.
     cfg.internal_requests.block_private_networks = false;
     let engine = StepEngine::new(HttpClient::new(&cfg));
-    let ctx = ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), "test".into());
+    let ctx = ExecutionContext::new(
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        "test".into(),
+    );
     engine.run(&dsl, &ctx).await.map_err(|e| e.to_string())?;
-    ctx.get_variable("out").ok_or_else(|| "result binding missing".to_string())
+    ctx.get_variable("out")
+        .ok_or_else(|| "result binding missing".to_string())
 }
 
 #[tokio::test]
@@ -49,7 +55,9 @@ async fn http_patch_200_ok_preserves_body() {
     let mut server = mockito::Server::new_async().await;
     let m = server
         .mock("PATCH", "/orders/o-1")
-        .match_body(mockito::Matcher::JsonString(r#"{"note":"ratchet"}"#.to_string()))
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"note":"ratchet"}"#.to_string(),
+        ))
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(r#"{"id":"o-1","stop_price":123.45}"#)

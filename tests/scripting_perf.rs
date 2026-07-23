@@ -11,10 +11,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 fn make_context() -> ExecutionContext {
-    let body: HashMap<String, Value> = [
-        ("a".to_string(), json!(10)),
-        ("b".to_string(), json!(5)),
-    ].into_iter().collect();
+    let body: HashMap<String, Value> = [("a".to_string(), json!(10)), ("b".to_string(), json!(5))]
+        .into_iter()
+        .collect();
     ExecutionContext::new(body, HashMap::new(), HashMap::new(), "test".into())
 }
 

@@ -193,13 +193,21 @@ fn cached_expression_sees_refreshed_bindings_between_calls() {
     body1.insert("n".to_string(), json!(3));
     let ctx1 = ExecutionContext::new(body1, HashMap::new(), HashMap::new(), "test".into())
         .with_expr_registry(registry.clone());
-    let out1 = engine.evaluate(&json!("${incoming.body.n * 2}"), &ctx1).unwrap();
+    let out1 = engine
+        .evaluate(&json!("${incoming.body.n * 2}"), &ctx1)
+        .unwrap();
     assert_eq!(out1, json!(6));
 
     let mut body2 = HashMap::new();
     body2.insert("n".to_string(), json!(50));
     let ctx2 = ExecutionContext::new(body2, HashMap::new(), HashMap::new(), "test".into())
         .with_expr_registry(registry);
-    let out2 = engine.evaluate(&json!("${incoming.body.n * 2}"), &ctx2).unwrap();
-    assert_eq!(out2, json!(100), "second context must see its own body, not the first's");
+    let out2 = engine
+        .evaluate(&json!("${incoming.body.n * 2}"), &ctx2)
+        .unwrap();
+    assert_eq!(
+        out2,
+        json!(100),
+        "second context must see its own body, not the first's"
+    );
 }

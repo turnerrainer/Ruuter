@@ -122,8 +122,9 @@ impl StepEngine {
             budget -= 1;
 
             let step_name = &step_names[current_step_idx];
-            let step = dsl.get_step(step_name)
-                .ok_or_else(|| RuuterError::InvalidStep(format!("Step not found: {}", step_name)))?;
+            let step = dsl.get_step(step_name).ok_or_else(|| {
+                RuuterError::InvalidStep(format!("Step not found: {}", step_name))
+            })?;
 
             let result = self.execute_single_step(step, context).await?;
 
@@ -167,38 +168,58 @@ impl StepEngine {
         &'a self,
         step: &'a DslStep,
         context: &'a ExecutionContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::steps::StepResult>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::steps::StepResult>> + Send + 'a>,
+    > {
         Box::pin(self.execute_single_step_impl(step, context))
     }
 
-    async fn execute_single_step_impl(&self, step: &DslStep, context: &ExecutionContext) -> Result<crate::steps::StepResult> {
+    async fn execute_single_step_impl(
+        &self,
+        step: &DslStep,
+        context: &ExecutionContext,
+    ) -> Result<crate::steps::StepResult> {
         match step {
             DslStep::Assign(s) => {
-                assign::AssignStepExecutor::new(s.clone()).execute(context).await
+                assign::AssignStepExecutor::new(s.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::Return(s) => {
-                return_step::ReturnStepExecutor::new(s.clone()).execute(context).await
+                return_step::ReturnStepExecutor::new(s.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::Http(s) => {
-                http::HttpStepExecutor::new(s.clone(), self.http_client.clone()).execute(context).await
+                http::HttpStepExecutor::new(s.clone(), self.http_client.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::Switch(s) => {
-                switch::SwitchStepExecutor::new(s.clone()).execute(context).await
+                switch::SwitchStepExecutor::new(s.clone())
+                    .execute(context)
+                    .await
             }
-            DslStep::Log(s) => {
-                log::LogStepExecutor::new(s.clone()).execute(context).await
-            }
+            DslStep::Log(s) => log::LogStepExecutor::new(s.clone()).execute(context).await,
             DslStep::Template(s) => {
-                template::TemplateStepExecutor::new(s.clone(), self.clone()).execute(context).await
+                template::TemplateStepExecutor::new(s.clone(), self.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::State(s) => {
-                state::StateStepExecutor::new(s.clone()).execute(context).await
+                state::StateStepExecutor::new(s.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::Iterate(s) => {
-                iterate::IterateStepExecutor::new(s.clone(), self.clone()).execute(context).await
+                iterate::IterateStepExecutor::new(s.clone(), self.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::WsSend(s) => {
-                ws_send::WsSendStepExecutor::new(s.clone(), self.ws_registry.clone()).execute(context).await
+                ws_send::WsSendStepExecutor::new(s.clone(), self.ws_registry.clone())
+                    .execute(context)
+                    .await
             }
             DslStep::SingleFlight(s) => {
                 single_flight::SingleFlightStepExecutor::new(

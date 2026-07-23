@@ -5,7 +5,12 @@
 //! in the wiring order inside `router::handle_request` shows up
 //! here (unit tests on the modules alone can't catch that).
 
-use ruuter_on_rust::config::{AppConfig, CorsConfig, CsrfConfig, InternalRequestsConfig, IncomingRequestsConfig};
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
+use ruuter_on_rust::config::{
+    AppConfig, CorsConfig, CsrfConfig, IncomingRequestsConfig, InternalRequestsConfig,
+};
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::router::DslRouter;
@@ -18,7 +23,13 @@ use tokio::net::TcpListener;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 fn build_router(cfg: AppConfig, files: &[(&str, &str)]) -> DslRouter {
@@ -76,7 +87,10 @@ async fn csrf_rejects_state_change_from_disallowed_origin() {
     };
     let router = build_router(
         cfg,
-        &[("svc/POST/ping.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/POST/ping.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 
@@ -94,7 +108,10 @@ async fn csrf_bypassed_when_allowed_origins_empty() {
     let cfg = AppConfig::default(); // allowed_origins is empty by default
     let router = build_router(
         cfg,
-        &[("svc/POST/ping.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/POST/ping.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 
@@ -118,7 +135,10 @@ async fn method_not_in_allow_list_returns_405() {
     };
     let router = build_router(
         cfg,
-        &[("svc/POST/ping.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/POST/ping.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 
@@ -205,7 +225,10 @@ reply:
 async fn traceparent_adopted_from_request_and_echoed() {
     let router = build_router(
         AppConfig::default(),
-        &[("svc/GET/ping.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/GET/ping.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 
@@ -216,10 +239,25 @@ async fn traceparent_adopted_from_request_and_echoed() {
         .send()
         .await
         .unwrap();
-    let tp = resp.headers().get("traceparent").unwrap().to_str().unwrap().to_string();
-    let xtid = resp.headers().get("x-trace-id").unwrap().to_str().unwrap().to_string();
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let xtid = resp
+        .headers()
+        .get("x-trace-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
     assert_eq!(tp, incoming, "traceparent must be echoed verbatim");
-    assert_eq!(xtid, "4bf92f3577b34da6a3ce929d0e0e4736", "x-trace-id must be the 32-hex trace id");
+    assert_eq!(
+        xtid, "4bf92f3577b34da6a3ce929d0e0e4736",
+        "x-trace-id must be the 32-hex trace id"
+    );
 }
 
 // ── SSRF ────────────────────────────────────────────────────────────
@@ -259,10 +297,18 @@ reply:
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 500, "outbound-disabled must surface as 500 to the caller");
+    assert_eq!(
+        resp.status(),
+        500,
+        "outbound-disabled must surface as 500 to the caller"
+    );
     let body: serde_json::Value = resp.json().await.unwrap();
     let err = body["error"].as_str().unwrap_or("");
-    assert!(err.contains("outbound HTTP is disabled"), "message: {}", err);
+    assert!(
+        err.contains("outbound HTTP is disabled"),
+        "message: {}",
+        err
+    );
 }
 
 // ── Malformed JSON ──────────────────────────────────────────────────
@@ -271,7 +317,10 @@ reply:
 async fn malformed_json_body_returns_400() {
     let router = build_router(
         AppConfig::default(),
-        &[("svc/POST/echo.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/POST/echo.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 
@@ -296,7 +345,10 @@ async fn cors_adds_allow_origin_header_when_configured() {
     };
     let router = build_router(
         cfg,
-        &[("svc/GET/ping.yml", "respond: { return: { ok: true }, next: end }\n")],
+        &[(
+            "svc/GET/ping.yml",
+            "respond: { return: { ok: true }, next: end }\n",
+        )],
     );
     let port = serve(router).await;
 

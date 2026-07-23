@@ -221,10 +221,9 @@ fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {
         if n.fract() == 0.0 && n.is_finite() {
             return Ok(Value::Number(serde_json::Number::from(n as i64)));
         }
-        return Ok(Value::Number(
-            serde_json::Number::from_f64(n)
-                .ok_or_else(|| RuuterError::ScriptEvaluation("Invalid number".to_string()))?,
-        ));
+        return Ok(Value::Number(serde_json::Number::from_f64(n).ok_or_else(
+            || RuuterError::ScriptEvaluation("Invalid number".to_string()),
+        )?));
     }
 
     if let Some(s) = value.as_string() {

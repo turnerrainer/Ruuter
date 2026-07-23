@@ -3,6 +3,9 @@
 //! Stripped segments arrive as `incoming.params.pathParams` (array,
 //! URL order).
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
@@ -14,7 +17,13 @@ use std::collections::HashMap;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 fn build(files: &[(&str, &str)]) -> DslRouter {
@@ -30,7 +39,14 @@ fn build(files: &[(&str, &str)]) -> DslRouter {
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
     let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws.clone());
-    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), ws, engine)
+    DslRouter::new(
+        loaded.http,
+        loaded.guards,
+        cfg,
+        StateStore::new(),
+        ws,
+        engine,
+    )
 }
 
 #[tokio::test]
@@ -44,10 +60,18 @@ respond:
 "#,
     )]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "things",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "things",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["count"], 0);
 }
@@ -63,10 +87,18 @@ respond:
 "#,
     )]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "things/abc-123",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "things/abc-123",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["id"], "abc-123");
 }
@@ -82,10 +114,18 @@ respond:
 "#,
     )]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "things/abc-123/legs",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "things/abc-123/legs",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     let v = r.value.unwrap();
     assert_eq!(v["id"], "abc-123");
@@ -116,10 +156,18 @@ respond:
         ),
     ]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "things/legs",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "things/legs",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(r.value.unwrap()["hit"], "specific");
 }
@@ -135,10 +183,17 @@ respond:
 "#,
     )]);
 
-    let r = router.execute_dsl(
-        "svc", "GET", "other/1/2",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await;
+    let r = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "other/1/2",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await;
     assert!(r.is_err(), "must not match unrelated path");
 }
 
@@ -149,16 +204,31 @@ async fn path_params_do_not_leak_across_projects() {
         ("b/GET/other.yml", "respond: { return: { proj: B }, next: end }\n"),
     ]);
 
-    let r = router.execute_dsl(
-        "a", "GET", "things/x",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await.unwrap();
+    let r = router
+        .execute_dsl(
+            "a",
+            "GET",
+            "things/x",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.value.unwrap()["pp"], "x");
 
     // Project B doesn't have `things` — must not fall back to A's.
-    let r = router.execute_dsl(
-        "b", "GET", "things/x",
-        HashMap::new(), HashMap::new(), HashMap::new(), "t".into(),
-    ).await;
+    let r = router
+        .execute_dsl(
+            "b",
+            "GET",
+            "things/x",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "t".into(),
+        )
+        .await;
     assert!(r.is_err());
 }

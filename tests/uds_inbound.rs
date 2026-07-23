@@ -19,7 +19,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 fn socket_path(tag: &str) -> PathBuf {
-    let ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     std::env::temp_dir().join(format!("ruuter-uds-inbound-{}-{}.sock", tag, ns))
 }
 
@@ -68,7 +71,14 @@ async fn axum_router_over_unix_listener_round_trip() {
     let client = HttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
 
     let resp = client
-        .request(reqwest::Method::GET, "http://host/ping", None, None, None, None)
+        .request(
+            reqwest::Method::GET,
+            "http://host/ping",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("request");
 
@@ -95,7 +105,14 @@ async fn stale_socket_is_removed_before_bind() {
     alias.insert("hostx".to_string(), path.clone());
     let client = HttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
     let resp = client
-        .request(reqwest::Method::GET, "http://hostx/ok", None, None, None, None)
+        .request(
+            reqwest::Method::GET,
+            "http://hostx/ok",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("request");
     assert_eq!(resp.status, 200);

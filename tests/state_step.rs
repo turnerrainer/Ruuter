@@ -28,12 +28,25 @@ fn build_router_with_dsl(project: &str, method: &str, path: &str, body: &str) ->
     let dsls = loader.load_all().expect("load dsls");
     let ws_registry = WsRegistry::new();
     let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
-    DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), ws_registry, engine)
+    DslRouter::new(
+        dsls,
+        std::collections::HashMap::new(),
+        cfg,
+        StateStore::new(),
+        ws_registry,
+        engine,
+    )
 }
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 #[tokio::test]
@@ -63,11 +76,18 @@ respond:
     let router = build_router_with_dsl("svc", "POST", "inc", dsl);
 
     for expected in 1..=5 {
-        let res = router.execute_dsl(
-            "svc", "POST", "inc",
-            HashMap::new(), HashMap::new(), HashMap::new(),
-            "test".into(),
-        ).await.expect("exec");
+        let res = router
+            .execute_dsl(
+                "svc",
+                "POST",
+                "inc",
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                "test".into(),
+            )
+            .await
+            .expect("exec");
         assert_eq!(res.value.unwrap()["counter"], serde_json::json!(expected));
     }
 }
@@ -113,22 +133,43 @@ respond:
     let dsls = loader.load_all().expect("load");
     let ws_registry = WsRegistry::new();
     let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
-    let router = DslRouter::new(dsls, std::collections::HashMap::new(), cfg, StateStore::new(), ws_registry, engine);
+    let router = DslRouter::new(
+        dsls,
+        std::collections::HashMap::new(),
+        cfg,
+        StateStore::new(),
+        ws_registry,
+        engine,
+    );
 
     // Project A writes "x" = "alpha".
-    let a = router.execute_dsl(
-        "alpha", "POST", "write",
-        HashMap::new(), HashMap::new(), HashMap::new(),
-        "test".into(),
-    ).await.expect("alpha exec");
+    let a = router
+        .execute_dsl(
+            "alpha",
+            "POST",
+            "write",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect("alpha exec");
     assert_eq!(a.value.unwrap()["value"], serde_json::json!("alpha"));
 
     // Project B reads "x" — must not see project A's write.
-    let b = router.execute_dsl(
-        "beta", "POST", "read",
-        HashMap::new(), HashMap::new(), HashMap::new(),
-        "test".into(),
-    ).await.expect("beta exec");
+    let b = router
+        .execute_dsl(
+            "beta",
+            "POST",
+            "read",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect("beta exec");
     assert_eq!(b.value.unwrap()["value"], serde_json::json!(null));
 }
 
@@ -166,10 +207,16 @@ respond:
         let r = router.clone();
         tasks.push(tokio::spawn(async move {
             r.execute_dsl(
-                "conc", "POST", "inc",
-                HashMap::new(), HashMap::new(), HashMap::new(),
+                "conc",
+                "POST",
+                "inc",
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
                 "test".into(),
-            ).await.expect("exec")
+            )
+            .await
+            .expect("exec")
         }));
     }
     for t in tasks {
@@ -178,11 +225,18 @@ respond:
 
     // Final value is in [1, 50] — lost updates allowed, but state must
     // be a real number, not corrupted / missing.
-    let res = router.execute_dsl(
-        "conc", "POST", "inc",
-        HashMap::new(), HashMap::new(), HashMap::new(),
-        "test".into(),
-    ).await.unwrap();
+    let res = router
+        .execute_dsl(
+            "conc",
+            "POST",
+            "inc",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .unwrap();
     let final_value = res.value.unwrap()["counter"].as_i64().expect("number");
-    assert!(final_value >= 1 && final_value <= 51, "got {}", final_value);
+    assert!((1..=51).contains(&final_value), "got {}", final_value);
 }

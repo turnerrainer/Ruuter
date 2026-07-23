@@ -14,6 +14,9 @@
 //!   (proves h2 multiplexing is engaged; on h1 keep-alive this
 //!   would serialise, on h2 they parallelise).
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -24,7 +27,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 fn socket_path(tag: &str) -> PathBuf {
-    let ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     std::env::temp_dir().join(format!("ruuter-h2c-{}-{}.sock", tag, ns))
 }
 
@@ -78,14 +84,16 @@ async fn spawn_uds_server(path: PathBuf, h2: bool, shutdown: oneshot::Receiver<(
 fn client_with_h2(sock: &std::path::Path) -> HttpClient {
     let mut cfg = AppConfig::default();
     cfg.uds_http_version = HttpVersion::Http2;
-    cfg.unix_socket_map.insert("h2sv".to_string(), sock.to_path_buf());
+    cfg.unix_socket_map
+        .insert("h2sv".to_string(), sock.to_path_buf());
     HttpClient::new(&cfg)
 }
 
 fn client_with_h1(sock: &std::path::Path) -> HttpClient {
     let mut cfg = AppConfig::default();
     cfg.uds_http_version = HttpVersion::Http1;
-    cfg.unix_socket_map.insert("h1sv".to_string(), sock.to_path_buf());
+    cfg.unix_socket_map
+        .insert("h1sv".to_string(), sock.to_path_buf());
     HttpClient::new(&cfg)
 }
 

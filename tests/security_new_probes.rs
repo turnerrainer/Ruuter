@@ -7,9 +7,11 @@
 //! Every test here follows the CLAUDE.md "break the fix" discipline:
 //! we generate inputs that were NOT in the fix author's test set.
 
-use ruuter_on_rust::config::{
-    AppConfig, InternalRequestsConfig, ProxyConfig,
-};
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs for
+// rationale.
+#![allow(clippy::field_reassign_with_default)]
+
+use ruuter_on_rust::config::{AppConfig, InternalRequestsConfig, ProxyConfig};
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::router::DslRouter;
@@ -24,7 +26,10 @@ fn uuid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}", nanos, seq)
 }

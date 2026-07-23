@@ -14,6 +14,13 @@ pub type TriggerDsls = HashMap<(String, String), HashMap<String, Dsl>>;
 /// starts with `<METHOD>/<stem>/`. Multiple ancestor guards stack.
 pub type GuardDsls = HashMap<String, HashMap<String, Dsl>>;
 
+/// Per-project load result: HTTP method → key → Dsl, triggers, and guards.
+type ProjectLoad = (
+    HashMap<String, HashMap<String, Dsl>>,
+    TriggerDsls,
+    HashMap<String, Dsl>,
+);
+
 /// Reserved per-project subdirectory names — NOT treated as HTTP methods.
 /// `cronmanager-jobs` holds companion configs for the sibling CronManager
 /// service; it is documented in samples but does not produce Ruuter routes.
@@ -50,7 +57,8 @@ impl DslLoader {
             let path = entry.path();
 
             if path.is_dir() {
-                let project_name = path.file_name()
+                let project_name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| RuuterError::FileNotFound("Invalid project name".to_string()))?
                     .to_string();
@@ -58,7 +66,8 @@ impl DslLoader {
                 let (methods, triggers, guards) = self.load_project(&path, &project_name)?;
                 out.http.insert(project_name.clone(), methods);
                 for ((_, channel), per_key) in triggers {
-                    out.triggers.insert((project_name.clone(), channel), per_key);
+                    out.triggers
+                        .insert((project_name.clone(), channel), per_key);
                 }
                 if !guards.is_empty() {
                     out.guards.insert(project_name, guards);
@@ -69,11 +78,7 @@ impl DslLoader {
         Ok(out)
     }
 
-    fn load_project(
-        &self,
-        project_path: &Path,
-        project_name: &str,
-    ) -> Result<(HashMap<String, HashMap<String, Dsl>>, TriggerDsls, HashMap<String, Dsl>)> {
+    fn load_project(&self, project_path: &Path, project_name: &str) -> Result<ProjectLoad> {
         let mut methods = HashMap::new();
         let mut triggers: TriggerDsls = HashMap::new();
         let mut guards: HashMap<String, Dsl> = HashMap::new();
@@ -85,7 +90,8 @@ impl DslLoader {
                 continue;
             }
 
-            let name = path.file_name()
+            let name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| RuuterError::FileNotFound("Invalid dir name".to_string()))?
                 .to_string();
@@ -119,7 +125,8 @@ impl DslLoader {
             if !path.is_dir() {
                 continue;
             }
-            let channel = path.file_name()
+            let channel = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| RuuterError::FileNotFound("Invalid channel name".to_string()))?
                 .to_string();
@@ -131,7 +138,8 @@ impl DslLoader {
                 if !self.is_processable_file(&cp) || self.is_guard_file(&cp) {
                     continue;
                 }
-                let key = cp.file_stem()
+                let key = cp
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| RuuterError::FileNotFound("Invalid trigger key".to_string()))?
                     .to_string();
@@ -154,7 +162,14 @@ impl DslLoader {
         let mut guards = HashMap::new();
         let parser = DslParser::new(self.constants.clone());
 
-        self.scan_directory(method_path, method_path, method, &parser, &mut dsls, &mut guards)?;
+        self.scan_directory(
+            method_path,
+            method_path,
+            method,
+            &parser,
+            &mut dsls,
+            &mut guards,
+        )?;
 
         Ok((dsls, guards))
     }
@@ -200,7 +215,9 @@ impl DslLoader {
         path.extension()
             .and_then(|e| e.to_str())
             .map(|ext| {
-                self.config.dsl.processed_filetypes
+                self.config
+                    .dsl
+                    .processed_filetypes
                     .iter()
                     .any(|allowed| allowed == ext || allowed == &format!(".{}", ext))
             })
@@ -231,10 +248,12 @@ impl DslLoader {
     }
 
     fn build_dsl_key(&self, path: &Path, base_path: &Path, method: &str) -> Result<String> {
-        let rel_path = path.strip_prefix(base_path)
+        let rel_path = path
+            .strip_prefix(base_path)
             .map_err(|_| RuuterError::FileNotFound("Invalid path".to_string()))?;
 
-        let path_str = rel_path.with_extension("")
+        let path_str = rel_path
+            .with_extension("")
             .to_str()
             .ok_or_else(|| RuuterError::FileNotFound("Invalid path string".to_string()))?
             .replace('\\', "/");
@@ -254,15 +273,15 @@ impl DslLoader {
     /// Both shapes produce the same `<METHOD>/path/<stem>` key so
     /// `applicable_guards`'s prefix match works identically for both.
     fn build_guard_key(&self, path: &Path, base_path: &Path, method: &str) -> Result<String> {
-        let rel_path = path.strip_prefix(base_path)
+        let rel_path = path
+            .strip_prefix(base_path)
             .map_err(|_| RuuterError::FileNotFound("Invalid path".to_string()))?;
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| RuuterError::FileNotFound("Invalid guard name".into()))?;
 
-        let parent = rel_path.parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("");
+        let parent = rel_path.parent().and_then(|p| p.to_str()).unwrap_or("");
         let dir_part = parent.replace('\\', "/");
 
         // In-folder guard — key = containing directory. `parent` is what

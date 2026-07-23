@@ -7,6 +7,9 @@
 //! (b) broadcast_prefix fan-out across multiple clients, and
 //! (c) connection_id visibility inside the DSL.
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
 use futures::{SinkExt, StreamExt};
 use ruuter_on_rust::config::AppConfig;
 use ruuter_on_rust::dsl::loader::DslLoader;
@@ -22,7 +25,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 fn uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+    format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
 }
 
 fn build_router(files: &[(&str, &str)]) -> DslRouter {
@@ -198,7 +207,9 @@ reply:
     assert_eq!(v["type"], "saved");
     assert_eq!(v["name"], "alice");
 
-    ws.send(Message::Text(r#"{"type":"who"}"#.into())).await.unwrap();
+    ws.send(Message::Text(r#"{"type":"who"}"#.into()))
+        .await
+        .unwrap();
     let who = next_text(&mut ws).await;
     let v: Value = serde_json::from_str(&who).unwrap();
     assert_eq!(v["type"], "who");

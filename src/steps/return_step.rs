@@ -20,7 +20,9 @@ impl ReturnStepExecutor {
 
 impl StepExecutor for ReturnStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
-        let return_value = self.script_engine.evaluate(&self.step.return_value, context)?;
+        let return_value = self
+            .script_engine
+            .evaluate(&self.step.return_value, context)?;
 
         // status: literal u16 or script expression that resolves to a number
         let status = if let Some(s) = &self.step.status {
@@ -37,20 +39,19 @@ impl StepExecutor for ReturnStepExecutor {
             let mut evaluated = HashMap::new();
             for (k, v) in h {
                 let val = self.script_engine.evaluate(v, context)?;
-                evaluated.insert(k.clone(), match val {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                });
+                evaluated.insert(
+                    k.clone(),
+                    match val {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    },
+                );
             }
             Some(evaluated)
         } else {
             None
         };
 
-        Ok(StepResult::with_return(
-            return_value,
-            status,
-            headers,
-        ))
+        Ok(StepResult::with_return(return_value, status, headers))
     }
 }

@@ -52,9 +52,7 @@ impl MockServer {
         let state = MockServerState {
             inner: inner.clone(),
         };
-        let app = Router::new()
-            .fallback(any(handle))
-            .with_state(state);
+        let app = Router::new().fallback(any(handle)).with_state(state);
 
         let shutdown_signal = shutdown.clone();
         tokio::spawn(async move {
@@ -151,9 +149,8 @@ async fn handle(
     let body_json: Value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&body).unwrap_or(Value::String(
-            String::from_utf8_lossy(&body).to_string(),
-        ))
+        serde_json::from_slice(&body)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&body).to_string()))
     };
 
     let response = {
@@ -169,8 +166,7 @@ async fn handle(
             .mocks
             .iter()
             .find(|m| {
-                url_str.contains(&m.url_matches)
-                    && m.method.eq_ignore_ascii_case(method.as_str())
+                url_str.contains(&m.url_matches) && m.method.eq_ignore_ascii_case(method.as_str())
             })
             .cloned()
     };

@@ -28,10 +28,9 @@ impl StepExecutor for HttpStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         let method = self.parse_method()?;
 
-        let url = self.script_engine.evaluate(
-            &Value::String(self.step.args.url.clone()),
-            context
-        )?;
+        let url = self
+            .script_engine
+            .evaluate(&Value::String(self.step.args.url.clone()), context)?;
 
         let body = if let Some(b) = &self.step.args.body {
             Some(self.script_engine.evaluate(b, context)?)
@@ -62,23 +61,33 @@ impl StepExecutor for HttpStepExecutor {
         // Auto-forward traceparent unless the DSL already set one — every
         // Buerostack component participates in W3C tracecontext by default
         // (PATTERNS.md §4).
-        if !headers.keys().any(|k| k.eq_ignore_ascii_case("traceparent")) {
+        if !headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("traceparent"))
+        {
             if let Some(tp) = context.traceparent() {
                 headers.insert("traceparent".to_string(), Value::String(tp.to_string()));
             }
         }
-        let headers = if headers.is_empty() { None } else { Some(headers) };
+        let headers = if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        };
 
         let timeout = self.step.timeout.map(Duration::from_millis);
 
-        let response = self.http_client.request(
-            method,
-            url.as_str().unwrap_or(""),
-            body.as_ref(),
-            query.as_ref(),
-            headers.as_ref(),
-            timeout,
-        ).await?;
+        let response = self
+            .http_client
+            .request(
+                method,
+                url.as_str().unwrap_or(""),
+                body.as_ref(),
+                query.as_ref(),
+                headers.as_ref(),
+                timeout,
+            )
+            .await?;
 
         if let Some(result_name) = &self.step.result {
             let result_value = json!({
@@ -92,7 +101,7 @@ impl StepExecutor for HttpStepExecutor {
         }
 
         Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string())
+            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
         ))
     }
 }
@@ -105,7 +114,10 @@ impl HttpStepExecutor {
             "http.put" => Ok(Method::PUT),
             "http.patch" => Ok(Method::PATCH),
             "http.delete" => Ok(Method::DELETE),
-            _ => Err(RuuterError::InvalidStep(format!("Unknown HTTP method: {}", self.step.call))),
+            _ => Err(RuuterError::InvalidStep(format!(
+                "Unknown HTTP method: {}",
+                self.step.call
+            ))),
         }
     }
 }

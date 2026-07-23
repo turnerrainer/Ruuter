@@ -50,7 +50,10 @@ pub fn subset_matches(expected: &Value, actual: &Value) -> bool {
             .iter()
             .all(|(k, ev)| a.get(k).map(|av| subset_matches(ev, av)).unwrap_or(false)),
         (Value::Array(e), Value::Array(a)) => {
-            e.len() == a.len() && e.iter().zip(a.iter()).all(|(ev, av)| subset_matches(ev, av))
+            e.len() == a.len()
+                && e.iter()
+                    .zip(a.iter())
+                    .all(|(ev, av)| subset_matches(ev, av))
         }
         // Numeric tolerance: `400` and `400.0` should compare equal
         // even though serde_json stores them as different Number

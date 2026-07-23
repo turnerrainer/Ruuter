@@ -33,7 +33,7 @@ Match rules (default `SelfOrigins` from a fresh `AppConfig`):
 
 ## What is NOT preserved (yet)
 
-- **Framework `Idempotency-Key` cache.** Removed in v1.0.0 — no longer relevant. Idempotency is a [DSL-authored pattern](../dsl/idempotency-pattern.md), so the outer and inner DSLs share it naturally when both call `state.get`/`state.set` with the same key derivation.
+- **Framework `Idempotency-Key` cache.** Removed in v0.7.0 — no longer relevant. Idempotency is a [DSL-authored pattern](../dsl/idempotency-pattern.md), so the outer and inner DSLs share it naturally when both call `state.get`/`state.set` with the same key derivation.
 - **Response-size cap enforcement.** Self-calls have no wire transfer, so there's no natural point to apply the cap. If a DSL body could produce unbounded output, the outer TCP path's cap won't fire on inner self-calls.
 - **`force_network: true` escape hatch.** Not shipped in v1. If a DSL author needs to bypass the short-circuit (e.g. to specifically test the fronting-proxy path), the workaround is to hit a non-self URL or configure a distinct listener. File a follow-up if this becomes common.
 

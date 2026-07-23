@@ -35,7 +35,11 @@ pub struct TriggerDispatcher {
 
 impl TriggerDispatcher {
     pub fn new(triggers: TriggerDsls, state: StateStore, engine: StepEngine) -> Self {
-        Self { triggers, state, engine }
+        Self {
+            triggers,
+            state,
+            engine,
+        }
     }
 
     /// Dispatch an inbound event. `payload` becomes the DSL's request body.
@@ -93,7 +97,13 @@ impl TriggerDispatcher {
                     debug!(project, channel, key, ?v, "trigger DSL returned");
                 }
                 if result.status >= 400 {
-                    warn!(project, channel, key, status = result.status, "trigger DSL reported error status");
+                    warn!(
+                        project,
+                        channel,
+                        key,
+                        status = result.status,
+                        "trigger DSL reported error status"
+                    );
                 }
                 Ok(true)
             }

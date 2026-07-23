@@ -7,9 +7,7 @@
 //! about" — so every test here starts from "what wrong input would
 //! slip past this?"
 
-use ruuter_on_rust::config::{
-    AppConfig, InternalRequestsConfig, ProxyConfig,
-};
+use ruuter_on_rust::config::{AppConfig, InternalRequestsConfig, ProxyConfig};
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::router::DslRouter;
@@ -24,7 +22,10 @@ fn uuid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}", nanos, seq)
 }
@@ -536,8 +537,8 @@ async fn n3_unparseable_trusted_entries_silently_dropped() {
     cfg.proxy = ProxyConfig {
         trusted: vec![
             "127.0.0.1/8".to_string(),   // CIDR attempt — invalid IpAddr
-            "not-an-ip".to_string(),      // garbage
-            "192.168.1.999".to_string(),  // out-of-range octet
+            "not-an-ip".to_string(),     // garbage
+            "192.168.1.999".to_string(), // out-of-range octet
         ],
     };
     let dsl = r#"
@@ -573,7 +574,10 @@ respond:
 async fn confirm_s7_health_returns_only_status_ok() {
     let router = build_router(
         AppConfig::default(),
-        &[("svc/GET/ping.yml", "reply:\n  return: { ok: true }\n  next: end\n")],
+        &[(
+            "svc/GET/ping.yml",
+            "reply:\n  return: { ok: true }\n  next: end\n",
+        )],
     );
     let port = serve(router).await;
     let body: serde_json::Value = client()
@@ -585,6 +589,12 @@ async fn confirm_s7_health_returns_only_status_ok() {
         .await
         .unwrap();
     assert_eq!(body, serde_json::json!({"status": "ok"}));
-    assert!(body.get("service").is_none(), "S7 regression: `service` leaked");
-    assert!(body.get("version").is_none(), "S7 regression: `version` leaked");
+    assert!(
+        body.get("service").is_none(),
+        "S7 regression: `service` leaked"
+    );
+    assert!(
+        body.get("version").is_none(),
+        "S7 regression: `version` leaked"
+    );
 }

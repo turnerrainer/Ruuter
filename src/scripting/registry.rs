@@ -75,12 +75,8 @@ impl ExpressionRegistry {
     /// Iterate (id, source) for bulk-compile emission. Ordered by
     /// id so callers can rely on deterministic function names.
     pub fn ordered(&self) -> impl Iterator<Item = (u64, &str)> {
-        self.inner
-            .ordered
-            .iter()
-            .map(|(id, s)| (*id, s.as_str()))
+        self.inner.ordered.iter().map(|(id, s)| (*id, s.as_str()))
     }
-
 }
 
 /// Incremental builder. Add DSLs from multiple sources
@@ -141,21 +137,15 @@ impl Builder {
             .enumerate()
             .map(|(i, s)| (i as u64, s))
             .collect();
-        let by_source: HashMap<String, u64> = ordered
-            .iter()
-            .map(|(id, s)| (s.clone(), *id))
-            .collect();
+        let by_source: HashMap<String, u64> =
+            ordered.iter().map(|(id, s)| (s.clone(), *id)).collect();
         ExpressionRegistry {
             inner: Arc::new(ExpressionRegistryInner { by_source, ordered }),
         }
     }
 }
 
-fn walk_json(
-    v: &Value,
-    seen: &mut HashMap<String, u64>,
-    sources: &mut Vec<String>,
-) {
+fn walk_json(v: &Value, seen: &mut HashMap<String, u64>, sources: &mut Vec<String>) {
     match v {
         Value::String(s) => scan_string(s, seen, sources),
         Value::Object(m) => {
@@ -172,11 +162,7 @@ fn walk_json(
     }
 }
 
-fn scan_string(
-    s: &str,
-    seen: &mut HashMap<String, u64>,
-    sources: &mut Vec<String>,
-) {
+fn scan_string(s: &str, seen: &mut HashMap<String, u64>, sources: &mut Vec<String>) {
     // Every balanced `${...}` segment in the string.
     for (_, _, inner) in find_script_segments(s) {
         register(&inner, seen, sources);
@@ -185,7 +171,7 @@ fn scan_string(
     if s.starts_with("$=") {
         if let Some(caps) = LINE_PATTERN.captures(s) {
             if caps.get(0).unwrap().as_str() == s {
-                register(&caps[1].to_string(), seen, sources);
+                register(&caps[1], seen, sources);
             }
         }
     }
@@ -225,10 +211,7 @@ mod tests {
     #[test]
     fn extracts_multiple_in_one_string() {
         let got = reg_from_strings(&["${a} + ${b}"]);
-        assert_eq!(
-            got,
-            vec![(0, "a".to_string()), (1, "b".to_string())]
-        );
+        assert_eq!(got, vec![(0, "a".to_string()), (1, "b".to_string())]);
     }
 
     #[test]

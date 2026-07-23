@@ -38,7 +38,8 @@ impl DslParser {
                 Some(v) => v.clone(),
                 None => caps[0].to_string(),
             }
-        }).to_string()
+        })
+        .to_string()
     }
 
     fn parse_steps(&self, yaml: IndexMap<String, YamlValue>) -> Result<IndexMap<String, DslStep>> {
@@ -53,8 +54,9 @@ impl DslParser {
     }
 
     fn parse_step(&self, name: &str, value: YamlValue) -> Result<DslStep> {
-        let step = serde_yaml_ng::from_value(value)
-            .map_err(|e| RuuterError::DslParse(format!("Failed to parse step '{}': {}", name, e)))?;
+        let step = serde_yaml_ng::from_value(value).map_err(|e| {
+            RuuterError::DslParse(format!("Failed to parse step '{}': {}", name, e))
+        })?;
 
         Ok(step)
     }

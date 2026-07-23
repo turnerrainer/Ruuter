@@ -50,7 +50,9 @@ impl StateStore {
     }
 
     pub fn delete(&self, project: &str, key: &str) -> Option<Value> {
-        self.inner.remove(&StateKey::new(project, key)).map(|(_, v)| v)
+        self.inner
+            .remove(&StateKey::new(project, key))
+            .map(|(_, v)| v)
     }
 
     pub fn len(&self) -> usize {

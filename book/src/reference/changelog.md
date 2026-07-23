@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-07-20
+## [0.7.0] - 2026-07-24
 
 Security-hardening release. Closes 15 findings from the h2ck.me
 pre-publication audit (S1–S8, N1–N4, F1, F2) across three review
 rounds; adds a `cargo audit` CI gate. Every fix has a regression
 test in `tests/security*.rs` (68 tests total, all green).
 `cargo audit --deny warnings` is clean.
+
+Also in this batch (release audit sweep, 2026-07-24):
+
+- `state.delete` accepts `remove:` as a serde alias.
+- `dsl-test`'s `mock-http` and `trigger-inject` modes now build the
+  test harness with `block_private_networks=false` so DSLs under
+  test can reach the in-process mock upstream on 127.0.0.1.
+  Production `check_ssrf` behaviour unchanged.
+- Repo-wide `cargo fmt` applied; `[lints.clippy]` promoted to a
+  hard CI gate with a small, documented allowlist for test-fixture
+  patterns.
+- Five `v1.0.0` doc references corrected to `v0.7.0`.
+- `DSL/samples/POST/idempotent-transfer.yml` header rewritten to
+  describe the DSL-authored idempotency pattern.
 
 ### Breaking
 
@@ -73,7 +87,7 @@ test in `tests/security*.rs` (68 tests total, all green).
 - CORS layer wired from `cors.allowed_origins` / `cors.allow_credentials`.
 - Framework-level Idempotency-Key handling (PATTERNS.md §2) with an
   in-process TTL cache; `Idempotency-Replayed: true` on cache hits.
-  *(Removed in v1.0.0 — see the Unreleased section above.)*
+  *(Removed in v0.7.0 — see the [0.7.0] section above.)*
 - Origin/Referer CSRF check (PATTERNS.md §1) on state-changing methods.
 - W3C traceparent adoption/generation + echo on responses with
   `X-Trace-Id`; outbound http calls auto-forward traceparent.

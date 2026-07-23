@@ -33,10 +33,14 @@ impl WsSendStepExecutor {
 
 impl StepExecutor for WsSendStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
-        let payload = self.script_engine.evaluate(&self.step.ws_send.payload, context)?;
+        let payload = self
+            .script_engine
+            .evaluate(&self.step.ws_send.payload, context)?;
 
         if let Some(prefix) = &self.step.ws_send.broadcast_prefix {
-            let delivered = self.registry.broadcast(|id| id.starts_with(prefix), payload);
+            let delivered = self
+                .registry
+                .broadcast(|id| id.starts_with(prefix), payload);
             tracing::debug!(prefix, delivered, "ws_send broadcast");
         } else {
             let target_value = match &self.step.ws_send.to {
@@ -48,7 +52,8 @@ impl StepExecutor for WsSendStepExecutor {
 
             let target = target_value.ok_or_else(|| {
                 RuuterError::InvalidStep(
-                    "ws_send: no `to`, no `broadcast_prefix`, and context has no connection_id".into(),
+                    "ws_send: no `to`, no `broadcast_prefix`, and context has no connection_id"
+                        .into(),
                 )
             })?;
 

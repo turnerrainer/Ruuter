@@ -115,7 +115,10 @@ pub enum StateOp {
     Get { key: String, into: String },
     /// Write `value` (evaluated through the script engine) under `key`.
     Set { key: String, value: Value },
-    /// Remove `key`. No error if absent.
+    /// Remove `key`. No error if absent. Accepts both `delete:` and
+    /// `remove:` as YAML keys — DSL authors coming from Java Ruuter
+    /// or from a Redis/DEL background reach for either verb.
+    #[serde(alias = "remove")]
     Delete { key: String },
 }
 
@@ -238,10 +241,13 @@ pub struct TemplateStep {
 }
 
 pub trait StepExecutor {
-    fn execute(&self, context: &ExecutionContext) -> impl std::future::Future<Output = Result<StepResult>> + Send;
+    fn execute(
+        &self,
+        context: &ExecutionContext,
+    ) -> impl std::future::Future<Output = Result<StepResult>> + Send;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StepResult {
     pub next_step: Option<String>,
     pub goto_step: Option<String>,
@@ -253,14 +259,7 @@ pub struct StepResult {
 
 impl StepResult {
     pub fn new() -> Self {
-        Self {
-            next_step: None,
-            goto_step: None,
-            should_return: false,
-            return_value: None,
-            return_status: None,
-            return_headers: None,
-        }
+        Self::default()
     }
 
     pub fn with_next(next: String) -> Self {
@@ -270,7 +269,11 @@ impl StepResult {
         }
     }
 
-    pub fn with_return(value: Value, status: Option<u16>, headers: Option<HashMap<String, String>>) -> Self {
+    pub fn with_return(
+        value: Value,
+        status: Option<u16>,
+        headers: Option<HashMap<String, String>>,
+    ) -> Self {
         Self {
             should_return: true,
             return_value: Some(value),

@@ -62,7 +62,9 @@ async fn main() {
 
     let loaded = match loader.load_everything() {
         Ok(d) => {
-            let http_total: usize = d.http.values()
+            let http_total: usize = d
+                .http
+                .values()
                 .map(|methods| methods.values().map(|dsls| dsls.len()).sum::<usize>())
                 .sum();
             let trigger_total: usize = d.triggers.values().map(|m| m.len()).sum();
@@ -142,7 +144,10 @@ async fn main() {
     if source_configs.is_empty() {
         info!("No event sources declared");
     } else {
-        info!("Spawning {} event source(s) under supervision", source_configs.len());
+        info!(
+            "Spawning {} event source(s) under supervision",
+            source_configs.len()
+        );
     }
     let supervisor_arc = Arc::new(SourceSupervisor::new());
     let _source_handles = supervisor::supervise_all(
@@ -208,11 +213,11 @@ async fn main() {
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-            .await
-            .unwrap_or_else(|e| {
-                error!("Server error: {}", e);
-                std::process::exit(1);
-            });
+        .await
+        .unwrap_or_else(|e| {
+            error!("Server error: {}", e);
+            std::process::exit(1);
+        });
     } else {
         // Multi-listener mode. Each listener runs axum::serve on its
         // own task; the process stays alive until the first listener
@@ -224,11 +229,17 @@ async fn main() {
             let app = app.clone();
             match (&l.bind, &l.unix) {
                 (Some(_), Some(_)) => {
-                    error!("listener {}: exactly one of bind/unix required, both set", label);
+                    error!(
+                        "listener {}: exactly one of bind/unix required, both set",
+                        label
+                    );
                     std::process::exit(1);
                 }
                 (None, None) => {
-                    error!("listener {}: exactly one of bind/unix required, neither set", label);
+                    error!(
+                        "listener {}: exactly one of bind/unix required, neither set",
+                        label
+                    );
                     std::process::exit(1);
                 }
                 (Some(bind), None) => {
@@ -254,17 +265,26 @@ async fn main() {
                     // Remove stale socket from prior instance.
                     if path.exists() {
                         if let Err(e) = std::fs::remove_file(path) {
-                            error!("listener {}: cannot clear stale socket {}: {}", label, path.display(), e);
+                            error!(
+                                "listener {}: cannot clear stale socket {}: {}",
+                                label,
+                                path.display(),
+                                e
+                            );
                             std::process::exit(1);
                         }
                     }
                     let http_version = if l.http2 { "h2c" } else { "http/1.1" };
-                    info!("listener {} on UDS {} ({})", label, path.display(), http_version);
-                    let listener = tokio::net::UnixListener::bind(path)
-                        .unwrap_or_else(|e| {
-                            error!("listener {}: bind {} failed: {}", label, path.display(), e);
-                            std::process::exit(1);
-                        });
+                    info!(
+                        "listener {} on UDS {} ({})",
+                        label,
+                        path.display(),
+                        http_version
+                    );
+                    let listener = tokio::net::UnixListener::bind(path).unwrap_or_else(|e| {
+                        error!("listener {}: bind {} failed: {}", label, path.display(), e);
+                        std::process::exit(1);
+                    });
                     let use_h2 = l.http2;
                     // axum::serve is TcpListener-only; run a per-
                     // connection hyper accept loop instead. The

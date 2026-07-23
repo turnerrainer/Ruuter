@@ -21,7 +21,8 @@ pub fn load_all(app: &AppConfig) -> Result<Vec<(String, String, SourceConfig)>> 
         if !project_path.is_dir() {
             continue;
         }
-        let project_name = project_path.file_name()
+        let project_name = project_path
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| RuuterError::FileNotFound("Invalid project name".into()))?
             .to_string();
@@ -53,16 +54,15 @@ fn load_project_sources(
         if !ext_ok {
             continue;
         }
-        let name = path.file_stem()
+        let name = path
+            .file_stem()
             .and_then(|n| n.to_str())
             .ok_or_else(|| RuuterError::FileNotFound("Invalid source name".into()))?
             .to_string();
 
         let body = fs::read_to_string(&path)?;
         let cfg: SourceConfig = serde_yaml_ng::from_str(&body)
-            .map_err(|e| RuuterError::DslParse(format!(
-                "source {}/{}: {}", project, name, e
-            )))?;
+            .map_err(|e| RuuterError::DslParse(format!("source {}/{}: {}", project, name, e)))?;
         out.push((project.to_string(), name, cfg));
     }
     Ok(())

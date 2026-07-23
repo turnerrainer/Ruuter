@@ -18,14 +18,14 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
-use std::net::{IpAddr, SocketAddr};
-use rand::Rng;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use futures::{SinkExt, StreamExt};
+use rand::Rng;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, warn};
 
 pub struct DslRouter {
@@ -62,9 +62,10 @@ impl DslRouter {
         ws_registry: WsRegistry,
         engine: StepEngine,
     ) -> Self {
-        let openapi_spec = Arc::new(
-            crate::openapi::build_spec_from_http(&dsls, env!("CARGO_PKG_VERSION"))
-        );
+        let openapi_spec = Arc::new(crate::openapi::build_spec_from_http(
+            &dsls,
+            env!("CARGO_PKG_VERSION"),
+        ));
         Self {
             dsls,
             guards,
@@ -136,9 +137,7 @@ impl DslRouter {
         // Override handling: if any matching guard declares
         // `override_ancestors: true`, keep ONLY the longest-key override
         // guard. Multiple overrides → most-specific wins.
-        let has_override = matches
-            .iter()
-            .any(|(_, d)| is_override_guard(d));
+        let has_override = matches.iter().any(|(_, d)| is_override_guard(d));
         if has_override {
             let longest_override = matches
                 .iter()
@@ -176,6 +175,11 @@ impl DslRouter {
         router
     }
 
+    // Arguments mirror the raw request shape (project/method/path plus
+    // body/query/headers/origin); grouping them into a struct would just
+    // shuffle plumbing without simplifying handle_request's single call
+    // site — each value is already in scope there.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_dsl(
         &self,
         project: &str,
@@ -218,7 +222,10 @@ impl DslRouter {
         new_headers.insert("traceparent".to_string(), traceparent.clone());
 
         let context = ExecutionContext::with_state(
-            body, query, new_headers, origin,
+            body,
+            query,
+            new_headers,
+            origin,
             project.to_string(),
             self.state.clone(),
         )
@@ -299,10 +306,7 @@ async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoRespo
     Json((*router.openapi_spec).clone())
 }
 
-async fn handle_request(
-    State(router): State<Arc<DslRouter>>,
-    request: Request,
-) -> Response {
+async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
@@ -336,8 +340,15 @@ async fn handle_request(
     // Method allow-list — operator can lock the surface to a subset. Default
     // is all standard REST verbs (see IncomingRequestsConfig default).
     let allowed = &router.config.incoming_requests.allowed_method_types;
-    if !allowed.iter().any(|m| m.eq_ignore_ascii_case(method.as_str())) {
-        return (StatusCode::METHOD_NOT_ALLOWED, Json(json!({"error": "Method Not Allowed"}))).into_response();
+    if !allowed
+        .iter()
+        .any(|m| m.eq_ignore_ascii_case(method.as_str()))
+    {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({"error": "Method Not Allowed"})),
+        )
+            .into_response();
     }
 
     // CSRF: on state-changing methods, require Origin (or fall back to
@@ -351,14 +362,13 @@ async fn handle_request(
             .enforce_on_methods
             .iter()
             .any(|m| m.eq_ignore_ascii_case(method.as_str()))
+        && !origin_allowed(&headers, &router.config.csrf.allowed_origins)
     {
-        if !origin_allowed(&headers, &router.config.csrf.allowed_origins) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "CSRF: origin not allowed"})),
-            )
-                .into_response();
-        }
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "CSRF: origin not allowed"})),
+        )
+            .into_response();
     }
 
     // Optimistic-concurrency: reject state-changing calls without If-Match
@@ -470,7 +480,7 @@ async fn handle_request(
     let peer_addr: Option<SocketAddr> = peer_addr;
     let origin = resolve_origin(&headers_map, peer_addr, &router.config.proxy.trusted);
 
-    // v1.0.0: framework-level Idempotency-Key handling was removed
+    // v0.7.0: framework-level Idempotency-Key handling was removed
     // (h2ck.me findings S1 + S5). DSL authors implement idempotency
     // via `state.get`/`state.set` with their own identity + body-
     // hash keys — see `book/src/dsl/idempotency-pattern.md`. This
@@ -824,7 +834,12 @@ fn resolve_origin(
             .and_then(|v| v.split(',').next())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .or_else(|| headers_map.get("x-real-ip").map(String::as_str).map(str::trim))
+            .or_else(|| {
+                headers_map
+                    .get("x-real-ip")
+                    .map(String::as_str)
+                    .map(str::trim)
+            })
             .and_then(|s| s.parse::<IpAddr>().ok())
             .map(canonicalise_ip);
         if let Some(ip) = candidate {
@@ -841,7 +856,10 @@ fn resolve_origin(
 /// silently disagree.
 fn canonicalise_ip(ip: IpAddr) -> IpAddr {
     match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
         v4 => v4,
     }
 }
@@ -858,12 +876,14 @@ fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
         .get(axum::http::header::REFERER)
         .and_then(|v| v.to_str().ok())
         .and_then(|r| url::Url::parse(r).ok())
-        .map(|u| format!(
-            "{}://{}{}",
-            u.scheme(),
-            u.host_str().unwrap_or(""),
-            u.port().map(|p| format!(":{}", p)).unwrap_or_default(),
-        ));
+        .map(|u| {
+            format!(
+                "{}://{}{}",
+                u.scheme(),
+                u.host_str().unwrap_or(""),
+                u.port().map(|p| format!(":{}", p)).unwrap_or_default(),
+            )
+        });
     if let Some(o) = referer_origin {
         return allowed.iter().any(|a| a == &o);
     }
@@ -889,8 +909,20 @@ fn build_cors_layer(cfg: &crate::config::CorsConfig) -> Option<CorsLayer> {
     }
     let mut layer = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
-        .allow_headers([HeaderName::from_static("content-type"), HeaderName::from_static("authorization"), HeaderName::from_static("if-match"), HeaderName::from_static("traceparent")]);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("if-match"),
+            HeaderName::from_static("traceparent"),
+        ]);
     if cfg.allow_credentials {
         layer = layer.allow_credentials(true);
     }

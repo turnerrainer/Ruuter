@@ -5,9 +5,10 @@
 //! the seams of THOSE fixes plus a design flaw in how blocklist
 //! + allowlist interact.
 
-use ruuter_on_rust::config::{
-    AppConfig, InternalRequestsConfig,
-};
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
+#![allow(clippy::field_reassign_with_default)]
+
+use ruuter_on_rust::config::{AppConfig, InternalRequestsConfig};
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
 use ruuter_on_rust::router::DslRouter;
@@ -22,7 +23,10 @@ fn uuid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}", nanos, seq)
 }
@@ -129,8 +133,8 @@ async fn f2_seam_partial_allowlist_still_blocks_other_private_targets() {
         disabled: false,
         allowed_ips: vec![],
         allowed_urls: vec!["https://api.example.com/".to_string()],
-        block_private_networks: true,   // default; the operator
-                                        // didn't touch this either
+        block_private_networks: true, // default; the operator
+                                      // didn't touch this either
     };
     let dsl = format!(
         r#"

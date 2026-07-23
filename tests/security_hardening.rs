@@ -41,12 +41,17 @@
 //! - S6 = SSRF check does not re-run on redirects.
 //! - S7 = /health leaks framework version (fingerprinting).
 //! - S8 = Vulnerable/unmaintained dependencies present in Cargo.lock
-//!         (RUSTSEC-2025-0003 fast-float, RUSTSEC-2025-0068 serde_yml).
+//!   (RUSTSEC-2025-0003 fast-float, RUSTSEC-2025-0068 serde_yml).
+//!
 //! Each test doc-comment says which finding it exercises.
 
+// Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs for
+// rationale.
+#![allow(clippy::field_reassign_with_default)]
+
 use ruuter_on_rust::config::{
-    AppConfig, CsrfConfig, IncomingRequestsConfig,
-    InternalRequestsConfig, OptimisticConcurrencyConfig,
+    AppConfig, CsrfConfig, IncomingRequestsConfig, InternalRequestsConfig,
+    OptimisticConcurrencyConfig,
 };
 use ruuter_on_rust::dsl::loader::DslLoader;
 use ruuter_on_rust::http_client::HttpClient;
@@ -670,12 +675,12 @@ async fn response_default_headers_ignore_invalid_pairs() {
     let mut cfg = AppConfig::default();
     cfg.response_default_headers
         .insert("valid-header".to_string(), "value".to_string());
-    cfg.response_default_headers.insert(
-        "invalid header with space".to_string(),
-        "value".to_string(),
-    );
     cfg.response_default_headers
-        .insert("crlf".to_string(), "value\r\nSet-Cookie: pwned=1".to_string());
+        .insert("invalid header with space".to_string(), "value".to_string());
+    cfg.response_default_headers.insert(
+        "crlf".to_string(),
+        "value\r\nSet-Cookie: pwned=1".to_string(),
+    );
     let router = build_router(
         cfg,
         &[(
@@ -794,11 +799,7 @@ async fn csrf_origin_prefix_lookalike_is_rejected() {
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        403,
-        "lookalike origin passed CSRF check"
-    );
+    assert_eq!(resp.status(), 403, "lookalike origin passed CSRF check");
 }
 
 /// Trailing-slash and case variations must not sneak past the allow-
@@ -1386,7 +1387,9 @@ reply:
     let url = format!("ws://127.0.0.1:{}/svc/echo", port);
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     use futures::SinkExt;
-    ws.send(WsMsg::Binary(vec![0xff, 0xfe, 0xfd])).await.unwrap();
+    ws.send(WsMsg::Binary(vec![0xff, 0xfe, 0xfd]))
+        .await
+        .unwrap();
     // Send a valid JSON text frame afterwards — the server must
     // still be alive to handle it.
     ws.send(WsMsg::Text(r#"{"a":1}"#.to_string()))
@@ -1970,7 +1973,11 @@ fn cve_floor_cargo_lock_contains_known_bad_versions() {
     // below is a crate that MUST NOT reappear; if any regression pulls
     // it back in, the test fails and points at the review.
     let must_not_reappear: &[(&str, &str, &str)] = &[
-        ("fast-float", "0.2.0", "RUSTSEC-2025-0003 / RUSTSEC-2024-0379"),
+        (
+            "fast-float",
+            "0.2.0",
+            "RUSTSEC-2025-0003 / RUSTSEC-2024-0379",
+        ),
         ("serde_yml", "0.0.12", "RUSTSEC-2025-0068"),
         ("libyml", "0.0.5", "RUSTSEC-2025-0067"),
     ];
@@ -1980,7 +1987,9 @@ fn cve_floor_cargo_lock_contains_known_bad_versions() {
             !lock.contains(&needle),
             "S8 regression: {}@{} reappeared in Cargo.lock (advisory {}) — \
              a dep bump pulled the vulnerable crate back in",
-            name, ver, id
+            name,
+            ver,
+            id
         );
     }
 }
