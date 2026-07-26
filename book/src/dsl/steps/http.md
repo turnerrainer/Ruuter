@@ -7,9 +7,12 @@ fetch:
   call: http.get                 # http.{get,post,put,patch,delete}
   args:
     url: "https://api.example.com/orders/${id}"
-    headers: { Authorization: "Bearer [#API_TOKEN]" }
-    query:   { limit: 50 }
-    body:    { note: "hi" }      # POST/PUT/PATCH; serialized as JSON
+    headers:
+      Authorization: "Bearer [#API_TOKEN]"
+    query:
+      limit: 50
+    body:                        # POST/PUT/PATCH; serialised as JSON
+      note: "hi"
   result: upstream                # binds .response.{status,body,headers}
   timeout: 3000                   # ms; overrides default 15000
   next: reply

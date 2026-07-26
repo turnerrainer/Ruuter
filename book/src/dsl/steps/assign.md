@@ -24,10 +24,13 @@ compute:
 
 # RIGHT
 compute_x:
-  assign: { x: "${incoming.body.a + 1}" }
+  assign:
+    x: "${incoming.body.a + 1}"
   next: compute_y
+
 compute_y:
-  assign: { y: "${x * 2}" }
+  assign:
+    y: "${x * 2}"
   next: reply
 ```
 

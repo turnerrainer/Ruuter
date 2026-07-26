@@ -31,8 +31,17 @@ check:
     - condition: "${!incoming.headers['x-token']}"
       next: deny
   next: allow
-allow: { return: { auth: ok }, next: end }
-deny:  { status: 401, return: { error: "missing token" }, next: end }
+
+allow:
+  return:
+    auth: ok
+  next: end
+
+deny:
+  status: 401
+  return:
+    error: "missing token"
+  next: end
 ```
 
 ## Stacking
@@ -51,11 +60,23 @@ Guard-side `assign` values reach the main DSL:
 
 ```yaml
 # guard
-parse: { assign: { user_id: "${incoming.headers['x-token']}" }, next: allow }
-allow: { return: { ok: true }, next: end }
+parse:
+  assign:
+    user_id: "${incoming.headers['x-token']}"
+  next: allow
 
+allow:
+  return:
+    ok: true
+  next: end
+```
+
+```yaml
 # main
-respond: { return: { user: "${user_id}" }, next: end }
+respond:
+  return:
+    user: "${user_id}"
+  next: end
 ```
 
 ## Override — replace ancestors
@@ -69,13 +90,29 @@ check:
     - condition: "${!incoming.headers['authorization']}"
       next: deny
   next: ok
-ok:   { return: { auth: true }, next: end }
-deny: { status: 401, return: { error: "bearer required" }, next: end }
 
+ok:
+  return:
+    auth: true
+  next: end
+
+deny:
+  status: 401
+  return:
+    error: "bearer required"
+  next: end
+```
+
+```yaml
 # DSL/svc/POST/ops/inject-fault.guard.yml — override: production-disabled
 declaration:
   override_ancestors: true
-deny: { status: 403, return: { error: "inject-fault disabled" }, next: end }
+
+deny:
+  status: 403
+  return:
+    error: "inject-fault disabled"
+  next: end
 ```
 
 Result:

@@ -33,9 +33,28 @@ route:
     - condition: "${incoming.params.pathParams.length === 1}"
       next: detail
   next: sub
-list:   { return: { mode: "list", items: ["a","b","c"] }, next: end }
-detail: { return: { mode: "detail", id: "${incoming.params.pathParams[0]}" }, next: end }
-sub:    { return: { mode: "sub", id: "${incoming.params.pathParams[0]}", subresource: "${incoming.params.pathParams[1]}" }, next: end }
+
+list:
+  return:
+    mode: "list"
+    items:
+      - "a"
+      - "b"
+      - "c"
+  next: end
+
+detail:
+  return:
+    mode: "detail"
+    id: "${incoming.params.pathParams[0]}"
+  next: end
+
+sub:
+  return:
+    mode: "sub"
+    id: "${incoming.params.pathParams[0]}"
+    subresource: "${incoming.params.pathParams[1]}"
+  next: end
 ```
 
 Request — bare collection:

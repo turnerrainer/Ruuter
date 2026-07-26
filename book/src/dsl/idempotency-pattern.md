@@ -30,7 +30,10 @@ dedup-key:
   next: check
 
 check:
-  state: { get: { key: "${key}", into: cached } }
+  state:
+    get:
+      key: "${key}"
+      into: cached
   next: branch
 
 branch:
@@ -55,7 +58,9 @@ store:
   state:
     set:
       key: "${key}"
-      value: { status: 201, body: "${r.response.body}" }
+      value:
+        status: 201
+        body: "${r.response.body}"
       # DSL-side TTL — pick what fits your product
       ttl_seconds: 86400
   next: reply

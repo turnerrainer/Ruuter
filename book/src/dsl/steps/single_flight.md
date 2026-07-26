@@ -10,7 +10,8 @@ lookup:
     do:
       - http:
           call: http.get
-          args: { url: "https://slow-upstream/$_{'${incoming.body.uil}'}" }
+          args:
+            url: "https://slow-upstream/${incoming.body.uil}"
           result: upstream
       - assign:
           answer: "${upstream.body}"
@@ -82,11 +83,20 @@ coalesce:
       - iterate:
           over: "${Array.from({length: 300}, (_, i) => i)}"
           as: n
-          do: [ { assign: { sink: "${n * n}" } } ]
+          do:
+            - assign:
+                sink: "${n * n}"
       # Bump the shared execution counter so we can prove coalescing.
-      - state: { get: { key: "sf_demo_count", into: prior } }
-      - assign: { exec_count: "${(prior == null ? 0 : prior) + 1}" }
-      - state: { set: { key: "sf_demo_count", value: "${exec_count}" } }
+      - state:
+          get:
+            key: "sf_demo_count"
+            into: prior
+      - assign:
+          exec_count: "${(prior == null ? 0 : prior) + 1}"
+      - state:
+          set:
+            key: "sf_demo_count"
+            value: "${exec_count}"
       - assign:
           shared_result:
             id: "${incoming.body.id}"

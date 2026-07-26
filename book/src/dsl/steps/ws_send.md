@@ -10,7 +10,8 @@ Three addressing modes, checked in this priority order:
 fanout:
   ws_send:
     broadcast_prefix: "client:"     # every connection id starting with this
-    payload: { note: "server closing" }
+    payload:
+      note: "server closing"
 ```
 
 Server-side connections are automatically registered as `client:<32-hex>`. Sources are `source:<project>:<name>`.
@@ -21,7 +22,8 @@ Server-side connections are automatically registered as `client:<32-hex>`. Sourc
 direct:
   ws_send:
     to: "${target_cid}"             # string OR array of strings
-    payload: { dm: "${incoming.body.text}" }
+    payload:
+      dm: "${incoming.body.text}"
 ```
 
 Unknown connection id → step error.
@@ -31,7 +33,9 @@ Unknown connection id → step error.
 ```yaml
 reply:
   ws_send:
-    payload: { type: "echo", got: "${incoming.body}" }
+    payload:
+      type: "echo"
+      got: "${incoming.body}"
 ```
 
 Uses `context.connection_id` — the connection whose frame triggered this DSL. If the DSL was invoked outside a WebSocket context (i.e. HTTP), the step errors.

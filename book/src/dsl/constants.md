@@ -24,7 +24,8 @@ call:
     # Legacy Java-Ruuter syntax (indefinite backward compat):
     url: "[#DOMAIN_URL]/v1/orders"
     # Alternate syntax — visually mirrors `${...}` runtime variables:
-    headers: { Authorization: "Bearer #{API_TOKEN}" }
+    headers:
+      Authorization: "Bearer #{API_TOKEN}"
 ```
 
 ## Which syntax to pick

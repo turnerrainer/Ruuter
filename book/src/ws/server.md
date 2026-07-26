@@ -19,7 +19,9 @@ The DSL runs **once per inbound frame** (text or binary).
 # DSL/svc/WS/echo.yml
 reply:
   ws_send:
-    payload: { type: "echo", got: "${incoming.body}" }
+    payload:
+      type: "echo"
+      got: "${incoming.body}"
   next: end
 ```
 
@@ -43,7 +45,8 @@ fanout:
 send:
   ws_send:
     to: "${incoming.body.to}"        # e.g. "client:abc..."
-    payload: { text: "${incoming.body.text}" }
+    payload:
+      text: "${incoming.body.text}"
   next: end
 ```
 
@@ -60,14 +63,23 @@ increment:
       key: "count:${incoming.connection_id}"
       into: prev
   next: bump
+
 bump:
-  assign: { n: "${(prev ?? 0) + 1}" }
+  assign:
+    n: "${(prev ?? 0) + 1}"
   next: write
+
 write:
-  state: { set: { key: "count:${incoming.connection_id}", value: "${n}" } }
+  state:
+    set:
+      key: "count:${incoming.connection_id}"
+      value: "${n}"
   next: reply
+
 reply:
-  ws_send: { payload: { count: "${n}" } }
+  ws_send:
+    payload:
+      count: "${n}"
   next: end
 ```
 

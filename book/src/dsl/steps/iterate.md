@@ -9,9 +9,10 @@ work:
     as: order                         # per-iteration binding
     max_items: 100                    # cap; default 10_000
     do:
-      - assign: { net: "${order.qty * order.price}" }
+      - assign:
+          net: "${order.qty * order.price}"
     collect: "${({ id: order.id, net: net })}"   # optional; per-iter value
-    into: totals                                # collected array bound here
+    into: totals                                 # collected array bound here
   next: reply
 ```
 
@@ -56,7 +57,9 @@ work:
   next: reply
 
 reply:
-  return: { count: "${totals.length}", totals: "${totals}" }
+  return:
+    count: "${totals.length}"
+    totals: "${totals}"
   status: 200
   next: end
 ```

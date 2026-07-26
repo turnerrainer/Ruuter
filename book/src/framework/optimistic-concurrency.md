@@ -22,15 +22,26 @@ When `require_if_match: true` and the request method is in `enforce_on_methods`:
 ```yaml
 # The framework only checks presence — the DSL compares against actual state.
 check_etag:
-  state: { get: { key: "user:${incoming.body.id}:etag", into: current } }
+  state:
+    get:
+      key: "user:${incoming.body.id}:etag"
+      into: current
   next: compare
+
 compare:
   switch:
     - condition: "${current !== incoming.headers['if-match']}"
       next: stale
   next: mutate
-stale:  { status: 412, return: { error: "resource changed" }, next: end }
-mutate: # ... perform the write ...
+
+stale:
+  status: 412
+  return:
+    error: "resource changed"
+  next: end
+
+mutate:
+  # ... perform the write ...
 ```
 
 ## Companion `ETag` on GET responses
@@ -39,11 +50,17 @@ Set an `ETag` on read responses so clients can send it back:
 
 ```yaml
 read:
-  state: { get: { key: "user:${incoming.body.id}:etag", into: etag } }
+  state:
+    get:
+      key: "user:${incoming.body.id}:etag"
+      into: etag
   next: reply
+
 reply:
-  return:  { ... }
-  headers: { ETag: "${etag}" }
+  return:
+    # ... your response body ...
+  headers:
+    ETag: "${etag}"
   next: end
 ```
 

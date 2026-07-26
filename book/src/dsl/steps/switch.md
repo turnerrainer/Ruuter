@@ -23,8 +23,10 @@ route:
 
 ```yaml
 check_age:
-  assign: { age: "${parseFloat(incoming.params.age)}" }
+  assign:
+    age: "${parseFloat(incoming.params.age)}"
   next: validate
+
 validate:
   switch:
     - condition: "${age >= 18}"
@@ -32,9 +34,21 @@ validate:
     - condition: "${age >= 13}"
       next: teen
   next: child
-adult: { return: { category: "adult" }, next: end }
-teen:  { return: { category: "teenager" }, next: end }
-child: { return: { category: "child" }, next: end }
+
+adult:
+  return:
+    category: "adult"
+  next: end
+
+teen:
+  return:
+    category: "teenager"
+  next: end
+
+child:
+  return:
+    category: "child"
+  next: end
 ```
 
 Request — teenage branch:

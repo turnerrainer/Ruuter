@@ -9,9 +9,14 @@ declaration:
   method: "POST"
   accepts: "application/json"
   returns: "application/json"
-  allowed_body:   [order_id, reason]
-  allowed_header: [Authorization, Idempotency-Key]
-  allowed_params: [correlation_id]
+  allowed_body:
+    - order_id
+    - reason
+  allowed_header:
+    - Authorization
+    - Idempotency-Key
+  allowed_params:
+    - correlation_id
   override_ancestors: false        # only meaningful in guard DSLs
 ```
 

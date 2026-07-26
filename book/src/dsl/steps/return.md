@@ -4,9 +4,11 @@ Send an HTTP response. Terminates the DSL run.
 
 ```yaml
 respond:
-  return: { ok: true, echo: "${incoming.body.value}" }   # required
-  status: 202                                             # optional; default 200
-  headers:                                                # optional
+  return:                       # required
+    ok: true
+    echo: "${incoming.body.value}"
+  status: 202                   # optional; default 200
+  headers:                      # optional
     X-Custom: "yes"
   next: end
 ```

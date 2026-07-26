@@ -6,9 +6,12 @@ Call another DSL in the same project as if it were an HTTP endpoint.
 fetch:
   template: templates/user-profile   # project-relative path, no extension
   request_type: GET                  # default: GET
-  body:    { name: "alice" }         # sets callee's incoming.body
-  query:   { verbose: "1" }          # sets callee's incoming.query
-  headers: { X-Trace: "yes" }        # sets callee's incoming.headers
+  body:                              # sets callee's incoming.body
+    name: "alice"
+  query:                             # sets callee's incoming.query
+    verbose: "1"
+  headers:                           # sets callee's incoming.headers
+    X-Trace: "yes"
   result: profile                    # binds .response.{status,body,headers}
   next: reply
 ```
