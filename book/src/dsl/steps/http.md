@@ -48,3 +48,52 @@ Reference downstream: `${upstream.response.status}`, `${upstream.response.body.f
 - Response body is capped at `http_response_size_limit`; over-cap = step error.
 - Upstream status is filtered against `http_codes_allow_list` when non-empty; disallowed = step error.
 - On network error / timeout: the step returns an error; the DSL response is `500` unless the DSL handles it via a wrapping guard.
+
+## Runnable example
+
+`DSL/samples/GET/http/simple-get.yml`:
+
+```yaml
+fetch_data:
+  call: http.get
+  args:
+    url: "https://jsonplaceholder.typicode.com/users/1"
+  result: api_response
+  next: respond
+
+respond:
+  return:
+    status: "success"
+    data: ${api_response.response.body}
+  next: end
+```
+
+```console
+$ curl -s http://localhost:8080/samples/http/simple-get | jq .
+{
+  "data": {
+    "address": {
+      "city": "Gwenborough",
+      "geo": { "lat": "-37.3159", "lng": "81.1496" },
+      "street": "Kulas Light",
+      "suite": "Apt. 556",
+      "zipcode": "92998-3874"
+    },
+    "company": {
+      "bs": "harness real-time e-markets",
+      "catchPhrase": "Multi-layered client-server neural-net",
+      "name": "Romaguera-Crona"
+    },
+    "email": "Sincere@april.biz",
+    "id": 1,
+    "name": "Leanne Graham",
+    "phone": "1-770-736-8031 x56442",
+    "username": "Bret",
+    "website": "hildegard.org"
+  },
+  "status": "success"
+}
+```
+
+Requires outbound internet + the target host on the SSRF allow-list
+if you've enabled the allow-list.

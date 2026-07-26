@@ -55,10 +55,11 @@ gone:
 - **No TTL, no size cap, no eviction.** If the workload grows keys unboundedly, delete them explicitly.
 - **No cross-replica coordination.** Each Ruuter pod keeps its own copy. Two replicas WILL diverge — see [Multi-instance caveat](#multi-instance-caveat).
 
-## Sample — increment a counter
+## Runnable example — increment a counter
+
+`DSL/samples/POST/state/inc.yml`:
 
 ```yaml
-# POST /samples/state/inc — increment counter, return new value
 read_counter:
   state:
     get:
@@ -83,6 +84,39 @@ respond:
     counter: "${next_value}"
   next: end
 ```
+
+`DSL/samples/POST/state/get.yml` reads it back without mutating:
+
+```yaml
+read_counter:
+  state:
+    get:
+      key: "counter"
+      into: current
+  next: respond
+
+respond:
+  return:
+    counter: "${current}"
+  next: end
+```
+
+Hit the increment endpoint twice, then read:
+
+```console
+$ curl -sX POST http://localhost:8080/samples/state/inc
+{"counter":1}
+
+$ curl -sX POST http://localhost:8080/samples/state/inc
+{"counter":2}
+
+$ curl -sX POST http://localhost:8080/samples/state/get
+{"counter":2}
+```
+
+Restart the server → the value is gone (`get` returns `{"counter":null}`).
+`state` is process-local and non-durable by design; see the multi-instance
+caveat at the bottom of this page.
 
 ## Sample — cache an upstream REST response
 

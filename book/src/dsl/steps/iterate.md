@@ -33,12 +33,42 @@ collect: "${({ id: order.id, net: net })}"     # right
 collect: "${{ id: order.id, net: net }}"       # WRONG — SyntaxError
 ```
 
-## Verified example
+## Runnable example
 
+`DSL/samples/POST/advanced/iterate-batch.yml`:
+
+```yaml
+setup:
+  assign:
+    orders: "${incoming.body.orders || []}"
+  next: work
+
+work:
+  iterate:
+    over: "${orders}"
+    as: order
+    max_items: 100
+    do:
+      - assign:
+          net: "${order.qty * order.price}"
+    collect: "${({ id: order.id, net: net })}"
+    into: totals
+  next: reply
+
+reply:
+  return: { count: "${totals.length}", totals: "${totals}" }
+  status: 200
+  next: end
 ```
-$ curl -X POST http://localhost:8080/samples/advanced/iterate-batch \
-    -H 'Content-Type: application/json' \
-    -d '{"orders":[{"id":"o1","qty":2,"price":10},{"id":"o2","qty":3,"price":5}]}'
 
-{"count":2,"totals":[{"id":"o1","net":20},{"id":"o2","net":15}]}
+```console
+$ curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+    -H 'Content-Type: application/json' \
+    -d '{"orders":[{"id":"A","qty":3,"price":10.0},{"id":"B","qty":2,"price":25.5}]}'
+{"count":2,"totals":[{"id":"A","net":30},{"id":"B","net":51}]}
+
+# Empty body → empty result, still a 200
+$ curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+    -H 'Content-Type: application/json' -d '{}'
+{"count":0,"totals":[]}
 ```
