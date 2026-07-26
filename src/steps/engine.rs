@@ -4,7 +4,7 @@
 //! event originated.
 
 use crate::context::ExecutionContext;
-use crate::dsl::loader::HttpDsls;
+use crate::dsl::loader::{HttpDsls, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
 use crate::scripting::ExpressionRegistry;
@@ -15,6 +15,7 @@ use crate::steps::{
 };
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
+use arc_swap::ArcSwap;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,10 +25,13 @@ pub struct StepEngine {
     http_client: HttpClient,
     ws_registry: WsRegistry,
     max_iterations: u32,
-    /// Shared handle to the loaded HTTP DSL tree. Used by the
-    /// template step to look up callee DSLs at runtime. `None` = template
-    /// step still works as a placeholder (logs a warning and advances).
-    dsls: Option<Arc<HttpDsls>>,
+    /// Shared, atomically-swappable handle to the loaded HTTP DSL
+    /// tree. Used by the template step to resolve callee DSLs at
+    /// runtime. `None` = template step still works as a placeholder
+    /// (logs a warning and advances). When hot-reload is enabled, the
+    /// router and this handle point at the same `ArcSwap`, so a
+    /// single publish on the router is visible here immediately.
+    dsls: Option<SharedHttpDsls>,
     /// Task 042 — process-wide single_flight coalescing registry.
     /// Shared by cloning (Arc inside). One StepEngine → one map;
     /// every single_flight step in every DSL keys into it. Since
@@ -88,12 +92,25 @@ impl StepEngine {
 
     /// Attach a shared handle to the loaded HTTP DSL tree so the
     /// template step can resolve callee DSLs at runtime.
+    ///
+    /// Wraps the input `Arc<HttpDsls>` in a fresh `ArcSwap` internally.
+    /// Callers that want hot-reload — i.e. a single `ArcSwap` shared
+    /// with `DslRouter` — should use `with_dsls_shared` instead.
     pub fn with_dsls(mut self, dsls: Arc<HttpDsls>) -> Self {
+        self.dsls = Some(Arc::new(ArcSwap::from(dsls)));
+        self
+    }
+
+    /// Attach a shared, atomically-swappable handle to the loaded
+    /// HTTP DSL tree so the template step can resolve callee DSLs at
+    /// runtime. The same handle should also be passed to `DslRouter`
+    /// so a single hot-reload publish is visible to both.
+    pub fn with_dsls_shared(mut self, dsls: SharedHttpDsls) -> Self {
         self.dsls = Some(dsls);
         self
     }
 
-    pub fn dsls(&self) -> Option<&Arc<HttpDsls>> {
+    pub fn dsls(&self) -> Option<&SharedHttpDsls> {
         self.dsls.as_ref()
     }
 

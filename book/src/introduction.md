@@ -19,7 +19,9 @@ xpingstatusheader: pong delivered
 ```
 
 No compile step, no annotations, no code-gen. Restart the container
-after editing a file and the route is live.
+after editing a file and the route is live — or opt in to
+[hot reload](./ops/hot-reload.md) for zero-restart edits during
+development.
 
 **Version:** 0.7.0 · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
 

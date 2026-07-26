@@ -63,7 +63,7 @@ scripting:
 dsl:
   allowed_filetypes:  [.yml, .yaml]
   processed_filetypes: [.yml, .yaml]
-  allow_dsl_reloading: false              # not implemented in 0.4.0
+  allow_dsl_reloading: false              # dev only — see book/src/ops/hot-reload.md
 
 logging:
   display_request_content:  false

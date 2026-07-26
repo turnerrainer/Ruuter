@@ -74,6 +74,7 @@
 - [Configuration](./ops/configuration.md)
 - [Environment variables](./ops/env.md)
 - [Docker](./ops/docker.md)
+- [Hot reload (dev only)](./ops/hot-reload.md)
 - [Security hardening checklist](./ops/security-checklist.md)
 - [Failure modes](./ops/failure-modes.md)
 - [Troubleshooting](./ops/troubleshooting.md)

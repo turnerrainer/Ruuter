@@ -55,6 +55,6 @@ docker compose down
 
 - `DSL/samples/GET/ping.yml` was auto-mounted as `GET /samples/ping`. The response body, status, and headers all came from that YAML file.
 - The same is true for every file under `DSL/<project>/<METHOD>/<path>.yml`.
-- Editing a DSL requires `docker compose restart ruuter-on-rust` (sub-second reload; hot-reload is not shipped in 0.7.0).
+- Editing a DSL: by default, `docker compose restart ruuter-on-rust` (sub-second reload). For a dev-only zero-restart workflow, see [Hot reload](../ops/hot-reload.md).
 
 Next: [Watch the automated tests pass](./automated-tests.md).

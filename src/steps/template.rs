@@ -25,13 +25,17 @@ impl TemplateStepExecutor {
 
 impl StepExecutor for TemplateStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
-        let dsls = self.engine.dsls().ok_or_else(|| {
+        let dsls_handle = self.engine.dsls().ok_or_else(|| {
             RuuterError::InvalidStep(
                 "template step invoked but the engine has no DSL tree \
                  attached — use StepEngine::with_dsls at boot"
                     .into(),
             )
         })?;
+        // Snapshot the tree for the duration of this lookup. Hot-reload
+        // publishes replace the underlying pointer atomically, so the
+        // guard we hold here observes a coherent view even mid-swap.
+        let dsls = dsls_handle.load();
 
         let project = context.project();
         let method = self

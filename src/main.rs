@@ -1,6 +1,7 @@
+use arc_swap::ArcSwap;
 use ruuter_on_rust::{
     config::{load_constants, AppConfig},
-    dsl::loader::DslLoader,
+    dsl::{hot_reload, loader::DslLoader},
     http_client::HttpClient,
     observability,
     router::DslRouter,
@@ -90,11 +91,16 @@ async fn main() {
     // (`ws_send` step) all hold a clone of this same Arc-backed map.
     let ws_registry = WsRegistry::new();
 
-    // Wrap the loaded HTTP DSL tree in an Arc so both the router and
-    // the step engine can share it without duplicating memory. The
-    // engine uses this handle to resolve `template:` step callees at
-    // runtime.
-    let shared_http_dsls = Arc::new(loaded.http);
+    // Wrap the loaded HTTP DSL tree + guards in ArcSwaps so both the
+    // router and the step engine can share them without duplicating
+    // memory — and so the hot-reload watcher can atomically swap the
+    // published tree without stopping in-flight requests. The engine
+    // uses the HTTP handle to resolve `template:` step callees at
+    // runtime; both handles are handed to `DslRouter::from_shared`.
+    let shared_http_dsls: ruuter_on_rust::dsl::loader::SharedHttpDsls =
+        Arc::new(ArcSwap::from_pointee(loaded.http));
+    let shared_guards: ruuter_on_rust::dsl::loader::SharedGuards =
+        Arc::new(ArcSwap::from_pointee(loaded.guards));
 
     // Task 045 — pre-parsed expression registry, built once at
     // boot by walking every HTTP DSL, guard, and trigger DSL for
@@ -103,8 +109,12 @@ async fn main() {
     // every expression; Boa ignores it.
     let expr_registry = {
         let mut b = ruuter_on_rust::scripting::registry::Builder::new();
-        b.add_http(&shared_http_dsls);
-        b.add_guards(&loaded.guards);
+        // Snapshot the current tree for boot-time bulk-compile. Hot
+        // reloads publish new trees at runtime; QuickJS re-scanning
+        // that registry per-reload is out of scope for the first
+        // hot-reload cut (documented in dsl/hot_reload.rs).
+        b.add_http(&shared_http_dsls.load());
+        b.add_guards(&shared_guards.load());
         b.add_trigger_dsls(&loaded.triggers);
         b.freeze()
     };
@@ -121,7 +131,11 @@ async fn main() {
     let http_client_for_handle = http_client.clone();
     let mut engine = StepEngine::new(http_client)
         .with_ws_registry(ws_registry.clone())
-        .with_dsls(shared_http_dsls.clone())
+        // `with_dsls_shared` (not `with_dsls`) so the engine and the
+        // router below observe the *same* ArcSwap. Without this, a
+        // hot-reload publish on the router would leave the engine's
+        // template-lookup handle pointing at the stale tree.
+        .with_dsls_shared(shared_http_dsls.clone())
         .with_expr_registry(expr_registry);
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
@@ -152,7 +166,7 @@ async fn main() {
     let supervisor_arc = Arc::new(SourceSupervisor::new());
     let _source_handles = supervisor::supervise_all(
         source_configs,
-        constants,
+        constants.clone(),
         trigger_dispatcher,
         ws_registry.clone(),
         supervisor_arc.as_ref(),
@@ -160,10 +174,11 @@ async fn main() {
 
     // Build router (which internally generates the OpenAPI spec from the
     // HTTP DSL tree and serves it at GET /_/openapi.json). Shares the
-    // same Arc<HttpDsls> the engine uses for template lookup.
-    let router = Arc::new(DslRouter::from_arc(
-        shared_http_dsls,
-        loaded.guards,
+    // same ArcSwap-wrapped handles the engine uses for template lookup
+    // so a single hot-reload publish is visible to both.
+    let router = Arc::new(DslRouter::from_shared(
+        shared_http_dsls.clone(),
+        shared_guards.clone(),
         config.clone(),
         state,
         ws_registry,
@@ -187,6 +202,16 @@ async fn main() {
     } else {
         http_client_for_handle.set_self_call_handler(router.clone());
     }
+
+    // DSL hot-reload watcher (dev-only). Off by default. See the
+    // module docstring for security posture and the exhaustive list
+    // of what does / does not reload.
+    if config.dsl.allow_dsl_reloading {
+        if let Err(e) = hot_reload::spawn(config.clone(), constants.clone(), router.clone()) {
+            error!("Failed to start DSL hot-reload watcher: {}", e);
+        }
+    }
+
     let mut app = router.build_axum_router_from_arc();
 
     // Merge in admin routes when enabled.
