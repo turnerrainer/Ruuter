@@ -1,6 +1,7 @@
-//! Integration tests for `[#KEY]` constants handling — both the
-//! `constants.ini` loader and its substitution into DSL parse-time
-//! and WS source-config paths.
+//! Integration tests for constant handling — both the `constants.ini`
+//! loader and its substitution into DSL parse-time and WS source-config
+//! paths. Two surface syntaxes must produce identical output: the
+//! legacy `[#KEY]` form and the `#{KEY}` alias added by task 067.
 
 // Test-fixture AppConfig assembly. See tests/trigger_dispatch.rs.
 #![allow(clippy::field_reassign_with_default)]
@@ -153,4 +154,128 @@ fn ws_source_resolve_constants_substitutes_headers_and_url() {
     let out = resolve_constants(&cfg, &constants).expect("resolve");
     assert_eq!(out.url, "wss://feed.example.com");
     assert_eq!(out.headers.get("X-API-Key"), Some(&"s3cret".to_string()));
+}
+
+// -------- task 067: `#{KEY}` alternate syntax parity tests --------
+
+/// Parser accepts `#{KEY}` and produces the same DSL a `[#KEY]`
+/// version would.
+#[test]
+fn dsl_parser_substitutes_brace_syntax_at_parse_time() {
+    let tmp_root = std::env::temp_dir().join(format!("ruuter-constants-dsl-brace-{}", uuid()));
+    let proj = tmp_root.join("svc").join("GET");
+    std::fs::create_dir_all(&proj).unwrap();
+    let dsl_body = "
+respond:
+  return: { url: \"#{DOMAIN_URL}/ping\" }
+  status: 200
+";
+    std::fs::write(proj.join("hello.yml"), dsl_body).unwrap();
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = tmp_root.clone();
+    let mut constants = HashMap::new();
+    constants.insert(
+        "DOMAIN_URL".to_string(),
+        "https://api.example.com".to_string(),
+    );
+    let loader = DslLoader::new(cfg, constants);
+    let loaded = loader.load_everything().expect("load");
+
+    let dsl = loaded
+        .http
+        .get("svc")
+        .and_then(|m| m.get("GET"))
+        .and_then(|d| d.get("GET/hello"))
+        .expect("dsl present");
+
+    let json = serde_json::to_string(&dsl.steps).unwrap();
+    assert!(
+        json.contains("https://api.example.com/ping"),
+        "substituted URL missing from parsed DSL. Got: {}",
+        json
+    );
+    assert!(
+        !json.contains("#{DOMAIN_URL}"),
+        "unsubstituted brace marker still present"
+    );
+}
+
+/// Mixing both syntaxes in one file is fine — both resolve
+/// against the same constants map.
+#[test]
+fn dsl_parser_accepts_both_syntaxes_in_same_file() {
+    let tmp_root = std::env::temp_dir().join(format!("ruuter-constants-dsl-mixed-{}", uuid()));
+    let proj = tmp_root.join("svc").join("GET");
+    std::fs::create_dir_all(&proj).unwrap();
+    let dsl_body = "
+respond:
+  return: { legacy: \"[#DOMAIN_URL]/a\", modern: \"#{DOMAIN_URL}/b\" }
+  status: 200
+";
+    std::fs::write(proj.join("hello.yml"), dsl_body).unwrap();
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = tmp_root.clone();
+    let mut constants = HashMap::new();
+    constants.insert("DOMAIN_URL".to_string(), "https://ex.com".to_string());
+    let loader = DslLoader::new(cfg, constants);
+    let loaded = loader.load_everything().expect("load");
+
+    let dsl = loaded
+        .http
+        .get("svc")
+        .and_then(|m| m.get("GET"))
+        .and_then(|d| d.get("GET/hello"))
+        .expect("dsl present");
+    let json = serde_json::to_string(&dsl.steps).unwrap();
+    assert!(json.contains("https://ex.com/a"), "legacy form missing");
+    assert!(json.contains("https://ex.com/b"), "brace form missing");
+    assert!(!json.contains("[#DOMAIN_URL]"));
+    assert!(!json.contains("#{DOMAIN_URL}"));
+}
+
+/// WebSocket source configs also accept `#{KEY}` (task 067 parity).
+#[test]
+fn ws_source_resolve_constants_accepts_brace_syntax() {
+    let mut headers = HashMap::new();
+    headers.insert("X-API-Key".into(), "#{api_key}".into());
+    let cfg = WsSourceConfig {
+        url: "#{ws_url}".into(),
+        headers,
+        on_connect: vec![],
+        dispatch: DispatchConfig {
+            channel: "$.T".into(),
+            key: "$.S".into(),
+        },
+        reconnect: ReconnectPolicy::default(),
+    };
+    let mut constants = HashMap::new();
+    constants.insert("ws_url".to_string(), "wss://feed.example.com".to_string());
+    constants.insert("api_key".to_string(), "s3cret".to_string());
+
+    let out = resolve_constants(&cfg, &constants).expect("resolve");
+    assert_eq!(out.url, "wss://feed.example.com");
+    assert_eq!(out.headers.get("X-API-Key"), Some(&"s3cret".to_string()));
+}
+
+/// A missing constant in brace form errors the same way it does in
+/// bracket form — this is critical for WS source configs where a
+/// typo'd key must not silently ship a literal over the wire.
+#[test]
+fn ws_source_resolve_constants_errors_on_missing_brace_key() {
+    let cfg = WsSourceConfig {
+        url: "#{missing_key}".into(),
+        headers: HashMap::new(),
+        on_connect: vec![],
+        dispatch: DispatchConfig {
+            channel: "$.T".into(),
+            key: "$.S".into(),
+        },
+        reconnect: ReconnectPolicy::default(),
+    };
+    let result = resolve_constants(&cfg, &HashMap::new());
+    assert!(result.is_err(), "unknown brace constant must be an error");
+    let msg = format!("{}", result.err().unwrap());
+    assert!(msg.contains("missing_key"), "should name the key: {}", msg);
 }

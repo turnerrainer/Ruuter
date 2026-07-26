@@ -22,7 +22,6 @@
 //!   dsl-lint --json                   # machine-readable output
 
 use indexmap::IndexMap;
-use regex::Regex;
 use serde_json::Value;
 use serde_yaml_ng::Value as YamlValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -318,14 +317,8 @@ fn parse_file(
 }
 
 fn substitute_constants(content: &str, constants: &HashMap<String, String>) -> String {
-    let re = Regex::new(r"\[#([^\]]+)\]").unwrap();
-    re.replace_all(content, |caps: &regex::Captures| {
-        constants
-            .get(&caps[1])
-            .cloned()
-            .unwrap_or_else(|| caps[0].to_string())
-    })
-    .to_string()
+    // Both `[#NAME]` and `#{NAME}` are handled (task 067).
+    ruuter_on_rust::dsl::interpolate::substitute(content, |k| constants.get(k).cloned())
 }
 
 fn yaml_kind(v: &YamlValue) -> &'static str {
@@ -451,28 +444,21 @@ fn check_dsl(
         }
     }
 
-    // Unresolved [#constant] references (post-substitution: any surviving
-    // [#...] token means the constant wasn't defined).
-    let re = Regex::new(r"\[#([^\]]+)\]").unwrap();
-    let mut unresolved = BTreeSet::new();
-    for caps in re.captures_iter(&pf.raw) {
-        // Only flag if the substitution didn't happen; we check by
-        // re-scanning after substitution below. Here, dedupe raw names.
-        unresolved.insert(caps[1].to_string());
-    }
-    // The raw file's [#X] tokens are always present; check the
-    // post-substitution content to see which survived.
+    // Unresolved constant references — post-substitution, any surviving
+    // `[#NAME]` or `#{NAME}` literal means the key wasn't in
+    // constants.ini. Both syntaxes are surfaced with the exact form
+    // the author used, so error messages show `[#api_key]` when they
+    // wrote `[#api_key]` and `#{api_key}` when they wrote that.
     let after = substitute_constants(&pf.raw, _constants);
-    for caps in re.captures_iter(&after) {
+    for r in ruuter_on_rust::dsl::interpolate::iter_refs(&after) {
         report.file_warning(
             path,
             format!(
-                "unresolved constant reference '[#{}]' — add to constants.ini or the runner will forward the literal to reqwest",
-                &caps[1]
+                "unresolved constant reference '{}' — add to constants.ini or the runner will forward the literal to reqwest",
+                r.literal
             ),
         );
     }
-    let _ = unresolved;
 
     // Template targets must exist in the loaded DSL tree.
     for t in &pf.template_targets {

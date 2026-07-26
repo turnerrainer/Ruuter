@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 pub mod hot_reload;
+pub mod interpolate;
 pub mod loader;
 pub mod parser;
 
