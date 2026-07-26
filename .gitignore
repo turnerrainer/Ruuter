@@ -36,3 +36,6 @@ build/
 .env
 .env.local
 constants.local.ini
+
+# Postman workspace — regenerated from `curl /_/openapi.json`
+postman/openapi.json

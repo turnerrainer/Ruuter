@@ -1,15 +1,56 @@
 # Ruuter-on-Rust
 
-Declarative REST + WebSocket router. YAML DSLs on disk become HTTP routes and WebSocket endpoints.
+Declarative HTTP + WebSocket router. You drop YAML files on disk;
+Ruuter serves them as routes.
 
-- **File-based routing.** `DSL/<project>/<METHOD>/<path>.yml` → `<METHOD> /<project>/<path>`.
-- **YAML DSL.** Named steps with `${JS}` expressions between them. No compiling; DSLs are read at boot.
-- **WebSocket.** Server endpoints and upstream sources first-class.
-- **OpenAPI 3.1** auto-generated from every DSL at `/_/openapi.json`.
-- **Batteries included.** CSRF, SSRF allow-list, X-Forwarded-For trusted-proxy gating, traceparent propagation, response-size cap, request-method allow-list, in-process state store — all configurable, all off-by-default unless dangerous to default-off. Idempotency is a [DSL-authored pattern](./dsl/idempotency-pattern.md) rather than a framework primitive.
+```yaml
+# DSL/samples/GET/ping.yml
+response:
+  status: 202
+  return: pong
+```
 
-Version: 0.4.0 · License: Apache-2.0.
+```console
+$ curl -i http://localhost:8080/samples/ping
+HTTP/1.1 202 Accepted
+xpingstatusheader: pong delivered
 
-## Audience for this book
+"pong"
+```
 
-Third-party clients: DSL authors, integrators, operators. Not internal-code contributors. If you're modifying Ruuter itself, read the source and `docs/todo.md`.
+No compile step, no annotations, no code-gen. Restart the container
+after editing a file and the route is live.
+
+**Version:** 0.7.0 · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
+
+## What ships in the box
+
+- File-based routing: `DSL/<project>/<METHOD>/<path>.yml` → `<METHOD> /<project>/<path>`
+- 11 DSL step primitives (`assign`, `return`, `switch`, `log`, `http`, `state`, `iterate`, `template`, `ws_send`, `single_flight`, `declaration`)
+- WebSocket server endpoints + upstream WebSocket source consumption
+- OpenAPI 3.1 spec auto-generated from the DSL tree at `/_/openapi.json`
+- Two shipped test binaries: `dsl-lint` (static) and `dsl-test` (runtime)
+- A Postman collection covering every shipped sample
+- Batteries: CSRF, SSRF allow-list, `X-Forwarded-For` trusted-proxy gating, W3C traceparent, response-size cap, request-method allow-list, in-process state store — all configurable, safe defaults
+
+## Read in order
+
+If it's your first time, follow these five short chapters — you'll have
+a running server, three green test suites, and a working Postman
+collection in about ten minutes.
+
+1. [Prerequisites](./getting-started/prerequisites.md)
+2. [Run it locally](./getting-started/run-locally.md)
+3. [Watch the automated tests pass](./getting-started/automated-tests.md)
+4. [Try the Postman collection](./getting-started/postman.md)
+5. [What to read next](./getting-started/next-steps.md)
+
+The rest of the book is reference material — DSL, framework, testing,
+ops — organised by topic, meant to be dipped into once you know what
+you're looking for.
+
+## Audience
+
+Third-party clients: DSL authors, integrators, operators. Not internal
+contributors. If you're modifying Ruuter itself, read the source and
+`HANDOFF.md`.
