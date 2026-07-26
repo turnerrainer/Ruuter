@@ -53,6 +53,47 @@ file is fine. There is no plan to deprecate `[#KEY]`.
 - Section headers (`[DSL]`, etc.) are accepted for Java-Ruuter
   compatibility and silently dropped — keys are always flat.
 
+## Runnable example
+
+`constants.ini` (shipped with the repo):
+
+```ini
+[DSL]
+DOMAIN_URL=https://example.com
+LOCAL_RUUTER=http://localhost:8080
+PORT=8080
+```
+
+`DSL/samples/GET/constants/demo.yml`:
+
+```yaml
+respond:
+  return:
+    domain: "[#DOMAIN_URL]"
+    also_domain: "#{DOMAIN_URL}"
+    port: "#{PORT}"
+    note: "Both bracket and brace forms are equivalent — pick whichever reads better."
+  next: end
+```
+
+Request:
+
+```bash
+curl -s http://localhost:8080/samples/constants/demo | jq .
+```
+
+Response — the constants were baked in at DSL parse time (no runtime
+lookup):
+
+```json
+{
+  "also_domain": "https://example.com",
+  "domain": "https://example.com",
+  "note": "Both bracket and brace forms are equivalent — pick whichever reads better.",
+  "port": "8080"
+}
+```
+
 ## File location
 
 Read from `./constants.ini` at Ruuter's working directory. In Docker:

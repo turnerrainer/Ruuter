@@ -44,6 +44,72 @@ deny:
   next: end
 ```
 
+## Runnable example — in-folder guard
+
+Both files ship under `DSL/samples/GET/vault/`.
+
+`DSL/samples/GET/vault/.guard.yml`:
+
+```yaml
+check:
+  switch:
+    - condition: "${!incoming.headers['x-vault-token']}"
+      next: deny
+  next: ok
+
+ok:
+  return:
+    passed: true
+  next: end
+
+deny:
+  status: 401
+  return:
+    error: "vault: missing x-vault-token header"
+  next: end
+```
+
+`DSL/samples/GET/vault/secret.yml`:
+
+```yaml
+respond:
+  return:
+    secret: "42"
+  next: end
+```
+
+Request — missing header, guard rejects:
+
+```bash
+curl -si http://localhost:8080/samples/vault/secret
+```
+
+Response:
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error":"vault: missing x-vault-token header"}
+```
+
+Request — header present, guard passes, main DSL runs:
+
+```bash
+curl -si -H 'X-Vault-Token: hunter2' http://localhost:8080/samples/vault/secret
+```
+
+Response:
+
+```
+HTTP/1.1 200 OK
+```
+
+```json
+{"secret":"42"}
+```
+
 ## Stacking
 
 Multiple ancestor guards on the same path stack. **All** must pass. Outermost runs first.
@@ -83,8 +149,13 @@ respond:
 
 Add `declaration.override_ancestors: true` to a guard to make it REPLACE (not stack with) ancestor guards for its subtree. Most-specific override wins if multiple match.
 
+## Runnable example — folder guard + override
+
+Three files under `DSL/samples/POST/ops/`.
+
+`DSL/samples/POST/ops/.guard.yml` — folder guard, requires Bearer:
+
 ```yaml
-# DSL/svc/POST/ops/.guard.yml — folder guard: requires Bearer
 check:
   switch:
     - condition: "${!incoming.headers['authorization']}"
@@ -99,27 +170,96 @@ ok:
 deny:
   status: 401
   return:
-    error: "bearer required"
+    error: "ops: bearer token required"
   next: end
 ```
 
+`DSL/samples/POST/ops/restart.yml` — protected by the folder guard:
+
 ```yaml
-# DSL/svc/POST/ops/inject-fault.guard.yml — override: production-disabled
+respond:
+  return:
+    restarted: true
+  next: end
+```
+
+`DSL/samples/POST/ops/inject-fault.guard.yml` — override guard that
+replaces the folder guard for its subtree:
+
+```yaml
 declaration:
   override_ancestors: true
 
 deny:
   status: 403
   return:
-    error: "inject-fault disabled"
+    error: "inject-fault is disabled in production"
   next: end
 ```
 
-Result:
+`DSL/samples/POST/ops/inject-fault/trigger.yml` — main DSL that is
+now unreachable, because the override always denies:
+
+```yaml
+respond:
+  return:
+    fired: true
+  next: end
+```
+
+Request — restart without Authorization: folder guard rejects:
+
+```bash
+curl -si -X POST http://localhost:8080/samples/ops/restart \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
 
 ```
-POST /svc/ops/restart              → folder guard runs, needs Bearer
-POST /svc/ops/inject-fault/trigger → override guard runs, always 403 (folder guard skipped)
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error":"ops: bearer token required"}
+```
+
+Request — restart WITH Authorization: folder guard passes, main
+DSL runs:
+
+```bash
+curl -si -X POST http://localhost:8080/samples/ops/restart \
+     -H 'Authorization: Bearer abc' \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
+
+```
+HTTP/1.1 200 OK
+```
+
+```json
+{"restarted":true}
+```
+
+Request — inject-fault WITH Authorization: override guard runs
+instead of the folder one and still denies:
+
+```bash
+curl -si -X POST http://localhost:8080/samples/ops/inject-fault/trigger \
+     -H 'Authorization: Bearer abc' \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
+
+```
+HTTP/1.1 403 Forbidden
+```
+
+```json
+{"error":"inject-fault is disabled in production"}
 ```
 
 ## Order of framework checks
