@@ -25,10 +25,18 @@ respond:
   next: end
 ```
 
+Request:
+
+```bash
+curl -i http://localhost:8080/samples/ping
 ```
-$ curl -i http://localhost:8080/samples/ping
+
+Response:
+
+```http
 HTTP/1.1 202 Accepted
 content-type: application/json
 xpingstatusheader: pong delivered
+
 "pong"
 ```

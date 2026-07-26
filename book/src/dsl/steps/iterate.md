@@ -61,14 +61,29 @@ reply:
   next: end
 ```
 
-```console
-$ curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
-    -H 'Content-Type: application/json' \
-    -d '{"orders":[{"id":"A","qty":3,"price":10.0},{"id":"B","qty":2,"price":25.5}]}'
-{"count":2,"totals":[{"id":"A","net":30},{"id":"B","net":51}]}
+Request — with two orders:
 
-# Empty body → empty result, still a 200
-$ curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
-    -H 'Content-Type: application/json' -d '{}'
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+     -H 'Content-Type: application/json' \
+     -d '{"orders":[{"id":"A","qty":3,"price":10.0},{"id":"B","qty":2,"price":25.5}]}'
+```
+
+Response:
+
+```json
+{"count":2,"totals":[{"id":"A","net":30},{"id":"B","net":51}]}
+```
+
+Request — empty body (still returns 200 with an empty result):
+
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
+
+```json
 {"count":0,"totals":[]}
 ```

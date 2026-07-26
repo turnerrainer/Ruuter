@@ -101,16 +101,35 @@ respond:
   next: end
 ```
 
-Hit the increment endpoint twice, then read:
+Hit the increment endpoint twice, then read.
 
-```console
-$ curl -sX POST http://localhost:8080/samples/state/inc
+First bump:
+
+```bash
+curl -sX POST http://localhost:8080/samples/state/inc
+```
+
+```json
 {"counter":1}
+```
 
-$ curl -sX POST http://localhost:8080/samples/state/inc
+Second bump:
+
+```bash
+curl -sX POST http://localhost:8080/samples/state/inc
+```
+
+```json
 {"counter":2}
+```
 
-$ curl -sX POST http://localhost:8080/samples/state/get
+Read without mutating:
+
+```bash
+curl -sX POST http://localhost:8080/samples/state/get
+```
+
+```json
 {"counter":2}
 ```
 

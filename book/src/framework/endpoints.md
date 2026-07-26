@@ -8,12 +8,22 @@
 
 ## `/health`
 
-```
-$ curl http://localhost:8080/health
-{"service":"ruuter-on-rust","status":"ok","version":"0.4.0"}
+Request:
+
+```bash
+curl http://localhost:8080/health
 ```
 
-Always returns `200` when the process is up. Used by Docker's `HEALTHCHECK`.
+Response:
+
+```json
+{"status":"ok"}
+```
+
+Always returns `200` when the process is up. Used by Docker's
+`HEALTHCHECK`. Deliberately slim — no framework name, no version — so
+a probe against `/health` can't be used to fingerprint the Ruuter
+build for advisory-matching (h2ck.me S7 hardening).
 
 ## `/_/openapi.json`
 

@@ -25,11 +25,18 @@ Any declaration field is optional. All are metadata only — nothing enforces `a
 ## Runnable example — what the OpenAPI output looks like
 
 A DSL without a `declaration:` block still appears in the spec — the
-generator falls back to a synthesised description:
+generator falls back to a synthesised description.
 
-```console
-$ curl -s http://localhost:8080/_/openapi.json | \
-    jq '.paths["/samples/ping"].get | {description, operationId}'
+Request:
+
+```bash
+curl -s http://localhost:8080/_/openapi.json | \
+     jq '.paths["/samples/ping"].get | {description, operationId}'
+```
+
+Response:
+
+```json
 {
   "description": "Auto-generated from DSL `GET/ping` in project `samples`. Add a `declaration.description` to override.",
   "operationId": "get_samples_ping"

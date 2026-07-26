@@ -10,8 +10,15 @@ response:
   return: pong
 ```
 
-```console
-$ curl -i http://localhost:8080/samples/ping
+Request:
+
+```bash
+curl -i http://localhost:8080/samples/ping
+```
+
+Response:
+
+```http
 HTTP/1.1 202 Accepted
 xpingstatusheader: pong delivered
 

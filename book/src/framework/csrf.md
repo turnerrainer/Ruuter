@@ -23,16 +23,32 @@ csrf:
   allowed_origins: ["https://admin.example.com"]
 ```
 
+Request — disallowed origin:
+
+```bash
+curl -sS -w "\nHTTP %{http_code}\n" -X POST \
+     -H 'Origin: https://evil.example.com' \
+     http://localhost:8080/svc/action
 ```
-$ curl -sS -w "\nHTTP %{http_code}\n" -X POST \
-    -H 'Origin: https://evil.example.com' \
-    http://localhost:8080/svc/action
+
+Response:
+
+```
 {"error":"CSRF: origin not allowed"}
 HTTP 403
+```
 
-$ curl -sS -w "\nHTTP %{http_code}\n" -X POST \
-    -H 'Origin: https://admin.example.com' \
-    http://localhost:8080/svc/action
+Request — allowlisted origin:
+
+```bash
+curl -sS -w "\nHTTP %{http_code}\n" -X POST \
+     -H 'Origin: https://admin.example.com' \
+     http://localhost:8080/svc/action
+```
+
+Response:
+
+```
 {"ok":true}
 HTTP 200
 ```

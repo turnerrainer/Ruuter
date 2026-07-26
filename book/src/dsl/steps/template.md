@@ -96,11 +96,17 @@ missing_name:
   next: end
 ```
 
-```console
-# Happy path
-$ curl -sX POST http://localhost:8080/samples/templates/call-create-template \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"widget","type":"gadget"}' | jq .
+Request — happy path:
+
+```bash
+curl -sX POST http://localhost:8080/samples/templates/call-create-template \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"widget","type":"gadget"}' | jq .
+```
+
+Response:
+
+```json
 {
   "entity": {
     "response": {
@@ -118,10 +124,18 @@ $ curl -sX POST http://localhost:8080/samples/templates/call-create-template \
   },
   "success": true
 }
+```
 
-# Guard branch fires — template never runs
-$ curl -sX POST http://localhost:8080/samples/templates/call-create-template \
-    -H 'Content-Type: application/json' -d '{}'
+Request — validation branch fires; the template never runs:
+
+```bash
+curl -sX POST http://localhost:8080/samples/templates/call-create-template \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
+
+```json
 {"error":"Name is required"}
 ```
 

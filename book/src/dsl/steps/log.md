@@ -49,10 +49,17 @@ respond:
   next: end
 ```
 
-Run the server with `RUST_LOG=info` and hit it:
+Run the server with `RUST_LOG=info`, then hit it.
 
-```console
-$ curl -s 'http://localhost:8080/samples/advanced/logging-demo?userId=42'
+Request:
+
+```bash
+curl -s 'http://localhost:8080/samples/advanced/logging-demo?userId=42'
+```
+
+Response:
+
+```json
 {"processedAt":1785079808330.0,"status":"completed","userId":"42"}
 ```
 

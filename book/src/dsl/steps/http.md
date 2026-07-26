@@ -68,8 +68,15 @@ respond:
   next: end
 ```
 
-```console
-$ curl -s http://localhost:8080/samples/http/simple-get | jq .
+Request:
+
+```bash
+curl -s http://localhost:8080/samples/http/simple-get | jq .
+```
+
+Response:
+
+```json
 {
   "data": {
     "address": {

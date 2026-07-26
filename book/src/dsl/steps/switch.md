@@ -37,11 +37,27 @@ teen:  { return: { category: "teenager" }, next: end }
 child: { return: { category: "child" }, next: end }
 ```
 
-```console
-$ curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=15'
-{"age":15,"category":"teenager","message":"You are a teenager"}
+Request — teenage branch:
 
-$ curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=25'
+```bash
+curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=15'
+```
+
+Response:
+
+```json
+{"age":15,"category":"teenager","message":"You are a teenager"}
+```
+
+Request — adult branch:
+
+```bash
+curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=25'
+```
+
+Response:
+
+```json
 {"age":25,"category":"adult","message":"You are an adult"}
 ```
 

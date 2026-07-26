@@ -52,8 +52,15 @@ return_result:
   next: end
 ```
 
-```console
-$ curl -s http://localhost:8080/samples/variables/assign-simple
+Request:
+
+```bash
+curl -s http://localhost:8080/samples/variables/assign-simple
+```
+
+Response:
+
+```json
 {"user":{"age":30,"city":"Tallinn","name":"John Doe"}}
 ```
 
@@ -77,7 +84,14 @@ respond:
   next: end
 ```
 
-```console
-$ curl -s 'http://localhost:8080/samples/variables/incoming-params?id=42&name=Ada'
+Request:
+
+```bash
+curl -s 'http://localhost:8080/samples/variables/incoming-params?id=42&name=Ada'
+```
+
+Response:
+
+```json
 {"message":"Received parameters successfully","received":{"id":"42","name":"Ada"}}
 ```

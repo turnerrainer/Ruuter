@@ -47,9 +47,17 @@ The generated spec passes `redocly lint` cleanly (0 errors, 0 warnings on the sa
 
 ## Consumption
 
-```
-$ curl http://localhost:8080/_/openapi.json > openapi.json
-$ redocly lint openapi.json         # or swagger-cli validate openapi.json
+Fetch the spec:
+
+```bash
+curl http://localhost:8080/_/openapi.json > openapi.json
 ```
 
-Point Swagger UI, Redoc, Stoplight, or any OpenAPI-consuming tool at `/_/openapi.json`.
+Validate it (swagger-cli works equivalently):
+
+```bash
+redocly lint openapi.json
+```
+
+Point Swagger UI, Redoc, Stoplight, or any OpenAPI-consuming tool at
+`/_/openapi.json`.

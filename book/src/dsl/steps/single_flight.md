@@ -100,23 +100,37 @@ respond:
   next: end
 ```
 
-Single request — one execution, `execution_count = 1`:
+Single request — one execution, `execution_count = 1`.
 
-```console
-$ curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
-    -H 'Content-Type: application/json' -d '{"id":"item-42"}'
+Request:
+
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
+     -H 'Content-Type: application/json' -d '{"id":"item-42"}'
+```
+
+Response:
+
+```json
 {"computed_at":1785079302100.0,"execution_count":1,"id":"item-42"}
 ```
 
 Five concurrent requests on the **same id** — all five see the same
 `computed_at` and `execution_count`, proving only one real execution
-ran:
+ran.
 
-```console
-$ for i in 1 2 3 4 5; do
-    curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
-        -H 'Content-Type: application/json' -d '{"id":"burst-1"}' &
-  done; wait
+Request:
+
+```bash
+for i in 1 2 3 4 5; do
+  curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
+       -H 'Content-Type: application/json' -d '{"id":"burst-1"}' &
+done; wait
+```
+
+Response:
+
+```json
 {"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
 {"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
 {"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}

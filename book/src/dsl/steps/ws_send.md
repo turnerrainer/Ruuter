@@ -55,10 +55,17 @@ reply:
   next: end
 ```
 
-Drive it with `wscat` (or any WS client):
+Drive it with `wscat` (or any WS client).
 
-```console
-$ wscat -c ws://localhost:8080/samples/echo -x '{"greet":"hello"}' -w 1
+Request:
+
+```bash
+wscat -c ws://localhost:8080/samples/echo -x '{"greet":"hello"}' -w 1
+```
+
+Response frame:
+
+```json
 {"connection_id":"client:ed5b374ce44a5acd474839644e27de85","received":{"greet":"hello"},"type":"echo"}
 ```
 
