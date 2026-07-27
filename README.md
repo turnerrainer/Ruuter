@@ -28,6 +28,14 @@ docker run -d --name ruuter -p 8080:8080 \
     turnerrainer/ruuter:0.8.0-rc.1
 ```
 
+Prefer a shorter pull recipe? While we're on release candidates,
+`:rc` always points at the latest RC — it moves each time a new
+`-rc.N` publishes, and it never touches `:latest`:
+
+```bash
+docker pull turnerrainer/ruuter:rc
+```
+
 Every published digest is signed keyless via cosign — verify with the
 recipe in [book/src/ops/docker.md](book/src/ops/docker.md#verify-the-image-cosign).
 

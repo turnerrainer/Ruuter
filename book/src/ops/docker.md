@@ -16,14 +16,22 @@ Both registries carry the same digests. Pick either. Tag conventions:
 | Tag              | Meaning                                                                                    |
 |------------------|--------------------------------------------------------------------------------------------|
 | `0.8.0-rc.1`     | Immutable pre-release. Never moves. Never promoted to `:latest` or `:0.8` automatically.   |
+| `rc`             | Latest release-candidate on any line. Moves each time a new `-rc.N` publishes. |
+| `beta` *(future)* | Latest `-beta.N` publish, if we ever cut betas. Same pattern as `:rc`, one maturity level down. |
 | `1.0.0` *(future)* | Immutable stable version. Pin this in production once cut.                              |
 | `1.0` *(future)*   | Latest patch on the 1.0 line. Auto-updates on 1.0.x.                                    |
 | `latest` *(future)*| Whatever the most recent **stable** release tag pointed at. Never a pre-release.        |
 
-Pre-release tags (`-rc.N`, `-beta.N`, `-alpha.N`) publish **only** the
-specific version tag — they never move `:latest` or the moving
-`:major.minor` tag. Casual pullers on `:latest` are unaffected by a
-pre-release publish.
+Pre-release tags publish two things: the immutable
+`<version>-<suffix>.<n>` tag and a moving `<suffix>` tag scoped to
+the maturity level. Concretely:
+
+- `v0.8.0-rc.1` publishes → `:0.8.0-rc.1` (immutable) **and** `:rc` (moving).
+- `v0.9.0-beta.2` would publish → `:0.9.0-beta.2` **and** `:beta`.
+- `v0.9.5-alpha.3` would publish → `:0.9.5-alpha.3` **and** `:alpha`.
+
+Pre-release publishes **never** move `:latest` or `:major.minor`.
+Casual pullers on `:latest` see only stable releases.
 
 ## Verify the image (cosign)
 
