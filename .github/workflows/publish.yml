@@ -228,6 +228,16 @@ jobs:
           set -euo pipefail
           for platform in linux/amd64 linux/arm64; do
             echo "::group::smoke test on ${platform}"
+            # Docker keys locally-cached images by digest, not by
+            # (digest, platform). So running `docker run --platform X
+            # image@sha256:...` after a previous `docker run
+            # --platform Y image@sha256:...` fails with "cannot
+            # overwrite digest" — the cached image is Y's variant
+            # and Docker refuses to displace it. Clean slate before
+            # each iteration by removing the image; the `--platform`
+            # pull that follows then fetches the right variant.
+            docker image rm -f "${IMAGE}" >/dev/null 2>&1 || true
+            docker pull --quiet --platform "${platform}" "${IMAGE}"
             cid="$(docker run -d --rm --platform "${platform}" \
                    -p 18080:8080 "${IMAGE}")"
 
