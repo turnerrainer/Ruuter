@@ -9,9 +9,10 @@ work:
     as: order                         # per-iteration binding
     max_items: 100                    # cap; default 10_000
     do:
-      - assign: { net: "${order.qty * order.price}" }
+      - assign:
+          net: "${order.qty * order.price}"
     collect: "${({ id: order.id, net: net })}"   # optional; per-iter value
-    into: totals                                # collected array bound here
+    into: totals                                 # collected array bound here
   next: reply
 ```
 
@@ -33,12 +34,59 @@ collect: "${({ id: order.id, net: net })}"     # right
 collect: "${{ id: order.id, net: net }}"       # WRONG — SyntaxError
 ```
 
-## Verified example
+## Runnable example
 
+`DSL/samples/POST/advanced/iterate-batch.yml`:
+
+```yaml
+setup:
+  assign:
+    orders: "${incoming.body.orders || []}"
+  next: work
+
+work:
+  iterate:
+    over: "${orders}"
+    as: order
+    max_items: 100
+    do:
+      - assign:
+          net: "${order.qty * order.price}"
+    collect: "${({ id: order.id, net: net })}"
+    into: totals
+  next: reply
+
+reply:
+  return:
+    count: "${totals.length}"
+    totals: "${totals}"
+  status: 200
+  next: end
 ```
-$ curl -X POST http://localhost:8080/samples/advanced/iterate-batch \
-    -H 'Content-Type: application/json' \
-    -d '{"orders":[{"id":"o1","qty":2,"price":10},{"id":"o2","qty":3,"price":5}]}'
 
-{"count":2,"totals":[{"id":"o1","net":20},{"id":"o2","net":15}]}
+Request — with two orders:
+
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+     -H 'Content-Type: application/json' \
+     -d '{"orders":[{"id":"A","qty":3,"price":10.0},{"id":"B","qty":2,"price":25.5}]}'
+```
+
+Response:
+
+```json
+{"count":2,"totals":[{"id":"A","net":30},{"id":"B","net":51}]}
+```
+
+Request — empty body (still returns 200 with an empty result):
+
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/iterate-batch \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+Response:
+
+```json
+{"count":0,"totals":[]}
 ```

@@ -1,10 +1,36 @@
-# 066 — Add `#{const}` alternate syntax for constant interpolation
+# 067 — Add `#{const}` alternate syntax for constant interpolation
 
 ## Filed
 
 2026-07-20 — surfaced during DSL-hygiene discussion for Baye/desk
 (iron condor 0DTE DSL). Downstream user proposed the alternate
 syntax; keeping [#const] indefinitely for backward-compat.
+
+## Landed
+
+2026-07-26 — Component 1 (parser alias) shipped. Component 2
+(`ruuter-lint fix` migration tool) intentionally deferred as
+opt-in tooling; not required by any current caller. Implementation
+notes:
+
+- Central helper `src/dsl/interpolate.rs` (`substitute`, `iter_refs`,
+  `ConstantRef`) — one regex now covers both syntaxes across the
+  three call sites that previously each had their own copy.
+- Migrated call sites: `src/dsl/parser.rs`, `src/bin/dsl_lint.rs`
+  (both the substitution and unresolved-scan spots),
+  `src/sources/config.rs::sub`.
+- Tests: 9 unit tests in `interpolate.rs` cover both syntaxes,
+  mixing, missing keys, adjacency, and non-interference with
+  `${runtime}` variables. 4 integration tests in `tests/constants.rs`
+  mirror every existing `[#KEY]` scenario with a `#{KEY}` twin
+  (parser round-trip, mixed usage, WS source config, and error
+  parity for missing keys).
+- Docs: `book/src/dsl/constants.md` now documents both syntaxes and
+  explains when to pick which. `[#KEY]` is retained for backward
+  compatibility with a soft-deprecation stance — may be deprecated
+  in a future major release; new DSLs should prefer `#{KEY}`. The
+  original proposal body above (which said "keep indefinitely") is
+  the historical record at filing time and predates this decision.
 
 ## Severity
 

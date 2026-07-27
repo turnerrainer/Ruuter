@@ -18,8 +18,14 @@ headers:
 # JSON frames sent right after the handshake completes.
 # Replayed after every successful reconnect.
 on_connect:
-  - send_json: { action: auth,      key: "[#feed_api_key]" }
-  - send_json: { action: subscribe, symbols: ["AAPL","MSFT"] }
+  - send_json:
+      action: auth
+      key: "[#feed_api_key]"
+  - send_json:
+      action: subscribe
+      symbols:
+        - "AAPL"
+        - "MSFT"
 
 # How to derive (channel, key) from each inbound JSON message.
 dispatch:
@@ -40,14 +46,20 @@ reconnect:
 ```yaml
 # DSL/svc/triggers/bars/AAPL.yml — per-symbol handler
 handle:
-  state: { set: { key: "last.AAPL", value: "${incoming.body.c}" } }
+  state:
+    set:
+      key: "last.AAPL"
+      value: "${incoming.body.c}"
   next: end
 ```
 
 ```yaml
 # DSL/svc/triggers/bars/_default.yml — fallback for every other symbol
 handle:
-  state: { set: { key: "last.${incoming.body.S}", value: "${incoming.body.c}" } }
+  state:
+    set:
+      key: "last.${incoming.body.S}"
+      value: "${incoming.body.c}"
   next: end
 ```
 
@@ -69,7 +81,10 @@ The source's own outbound sink is registered as `source:<project>:<name>` — a 
 resubscribe:
   ws_send:
     to: "source:svc:stock-feed"
-    payload: { action: "subscribe", symbols: ["TSLA"] }
+    payload:
+      action: "subscribe"
+      symbols:
+        - "TSLA"
   next: end
 ```
 

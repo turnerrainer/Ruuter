@@ -1,8 +1,8 @@
+use crate::dsl::interpolate;
 use crate::dsl::Dsl;
 use crate::steps::DslStep;
 use crate::{Result, RuuterError};
 use indexmap::IndexMap;
-use regex::Regex;
 use serde_yaml_ng::Value as YamlValue;
 use std::collections::HashMap;
 use std::fs;
@@ -30,16 +30,10 @@ impl DslParser {
     }
 
     fn replace_constants(&self, content: &str) -> String {
-        let re = Regex::new(r"\[#([^\]]+)\]").unwrap();
-
-        re.replace_all(content, |caps: &regex::Captures| {
-            let key = &caps[1];
-            match self.constants.get(key) {
-                Some(v) => v.clone(),
-                None => caps[0].to_string(),
-            }
-        })
-        .to_string()
+        // Both `[#NAME]` and `#{NAME}` are accepted (task 067). Missing
+        // keys are preserved as their original literal; the lint tool
+        // surfaces them.
+        interpolate::substitute(content, |k| self.constants.get(k).cloned())
     }
 
     fn parse_steps(&self, yaml: IndexMap<String, YamlValue>) -> Result<IndexMap<String, DslStep>> {

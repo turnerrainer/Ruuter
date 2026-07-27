@@ -45,7 +45,8 @@ fetch_orders:
   call: http.get
   args:
     url: "http://resql/query/orders/latest"        # transparently UDS
-    headers: { "content-type": "application/json" }
+    headers:
+      content-type: "application/json"
   result: upstream
 ```
 

@@ -114,24 +114,24 @@ pub fn resolve_constants(
 }
 
 fn sub(s: &str, constants: &HashMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\[#([^\]]+)\]").unwrap();
+    // Both `[#NAME]` and `#{NAME}` are accepted (task 067). Unlike the
+    // DSL parser, this substitution is STRICT: a missing constant is
+    // a config error, not a silent literal — a typo'd `[#api_key]`
+    // that hit the wire would be a real problem for source configs.
     let mut missing: Option<String> = None;
-    let result = re.replace_all(s, |caps: &regex::Captures| {
-        let key = &caps[1];
-        match constants.get(key) {
-            Some(v) => v.clone(),
-            None => {
-                if missing.is_none() {
-                    missing = Some(key.to_string());
-                }
-                caps[0].to_string()
+    let result = crate::dsl::interpolate::substitute(s, |key| match constants.get(key) {
+        Some(v) => Some(v.clone()),
+        None => {
+            if missing.is_none() {
+                missing = Some(key.to_string());
             }
+            None
         }
     });
     if let Some(k) = missing {
         return Err(RuuterError::Config(format!("undefined constant [#{}]", k)));
     }
-    Ok(result.to_string())
+    Ok(result)
 }
 
 fn sub_value(v: Value, constants: &HashMap<String, String>) -> Result<Value> {

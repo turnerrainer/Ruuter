@@ -39,16 +39,37 @@ Rationale: separate trees keep `DSL/` clean (production surface), tests parallel
 
 ## Verified corpus
 
-```
-$ cargo build --bin dsl-lint --bin dsl-test
-$ ./target/debug/dsl-lint --dsl DSL --constants constants.ini
-dsl-lint: 54 file(s) scanned, 54 ok, 0 error(s), 3 warning(s)
+Build both binaries:
 
-$ ./target/debug/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
-dsl-test: 98 scenario(s) — 98 passed, 0 failed
+```bash
+cargo build --bin dsl-lint --bin dsl-test
 ```
 
-The three warnings are unresolved `[#constant]` references in DSLs that document external integration points (`API_KEY`, `aapl_alert_webhook`, `stock_alert_webhook`) — they're expected to be provided by the operator, not by the shipped `constants.ini`.
+Static lint:
+
+```bash
+./target/debug/dsl-lint --dsl DSL --constants constants.ini
+```
+
+```
+dsl-lint: 61 file(s) scanned, 61 ok, 0 error(s), 3 warning(s)
+```
+
+Scenario runner:
+
+```bash
+./target/debug/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+```
+
+```
+dsl-test: 99 scenario(s) — 99 passed, 0 failed
+```
+
+The three warnings are unresolved constant references in DSLs that
+document external integration points (`API_KEY`,
+`aapl_alert_webhook`, `stock_alert_webhook`) — they're expected to
+be provided by the operator, not by the shipped `constants.ini`.
+Both `[#KEY]` and `#{KEY}` forms are recognised by the linter.
 
 ## Design principles
 

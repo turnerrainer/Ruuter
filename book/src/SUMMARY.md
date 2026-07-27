@@ -1,7 +1,14 @@
 # Summary
 
 [Introduction](./introduction.md)
-[Quickstart](./quickstart.md)
+
+# Getting started
+
+- [Prerequisites](./getting-started/prerequisites.md)
+- [Run it locally](./getting-started/run-locally.md)
+- [Watch the automated tests pass](./getting-started/automated-tests.md)
+- [Try the Postman collection](./getting-started/postman.md)
+- [What to read next](./getting-started/next-steps.md)
 
 # DSL
 
@@ -67,6 +74,7 @@
 - [Configuration](./ops/configuration.md)
 - [Environment variables](./ops/env.md)
 - [Docker](./ops/docker.md)
+- [Hot reload (dev only)](./ops/hot-reload.md)
 - [Security hardening checklist](./ops/security-checklist.md)
 - [Failure modes](./ops/failure-modes.md)
 - [Troubleshooting](./ops/troubleshooting.md)

@@ -4,9 +4,11 @@ Send an HTTP response. Terminates the DSL run.
 
 ```yaml
 respond:
-  return: { ok: true, echo: "${incoming.body.value}" }   # required
-  status: 202                                             # optional; default 200
-  headers:                                                # optional
+  return:                       # required
+    ok: true
+    echo: "${incoming.body.value}"
+  status: 202                   # optional; default 200
+  headers:                      # optional
     X-Custom: "yes"
   next: end
 ```
@@ -25,10 +27,18 @@ respond:
   next: end
 ```
 
+Request:
+
+```bash
+curl -i http://localhost:8080/samples/ping
 ```
-$ curl -i http://localhost:8080/samples/ping
+
+Response:
+
+```http
 HTTP/1.1 202 Accepted
 content-type: application/json
 xpingstatusheader: pong delivered
+
 "pong"
 ```

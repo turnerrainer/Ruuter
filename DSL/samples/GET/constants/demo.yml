@@ -1,0 +1,12 @@
+# Constants demo. `[#DOMAIN_URL]` and `#{PORT}` both come from
+# constants.ini at DSL parse time (before the DSL is loaded), so the
+# response body is a plain string with no runtime substitution.
+# See book/src/dsl/constants.md for the syntax reference.
+
+respond:
+  return:
+    domain: "[#DOMAIN_URL]"
+    also_domain: "#{DOMAIN_URL}"
+    port: "#{PORT}"
+    note: "Both bracket and brace forms are equivalent — pick whichever reads better."
+  next: end

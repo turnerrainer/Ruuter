@@ -2,7 +2,8 @@
 /target/
 /target-local/
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock IS tracked — binary crate, needed for reproducible
+# Docker image builds and locked CI runs.
 
 # IDE
 .idea/
@@ -36,3 +37,6 @@ build/
 .env
 .env.local
 constants.local.ini
+
+# Postman workspace — regenerated from `curl /_/openapi.json`
+postman/openapi.json

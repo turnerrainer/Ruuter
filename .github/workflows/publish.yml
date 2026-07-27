@@ -1,0 +1,245 @@
+name: Publish container image
+
+# Trigger only on release tags — never on merges or manual pushes.
+# Two accepted shapes:
+#   v0.7.1         → stable release
+#   v0.7.1-rc.1    → pre-release (rc / beta / alpha / preview / any suffix)
+# The `derive version tags` step below reads which shape was pushed
+# and chooses whether to move :latest and :major.minor accordingly.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+# One publish job per tag; never run two publish jobs against the
+# same tag concurrently. If a second push somehow arrives for the
+# same ref, queue it rather than racing.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for pushing to GHCR under the repo's namespace.
+  packages: write
+  # Required for cosign keyless signing (Sigstore OIDC token).
+  id-token: write
+  # Required so build-push-action can attach provenance attestations.
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Derive the tag list. Two paths:
+      #   * Stable release (`v0.7.1`):
+      #       → push :0.7.1, :0.7, :latest
+      #   * Pre-release  (`v0.7.1-rc.1`, `v0.8.0-beta.2`, ...):
+      #       → push :0.7.1-rc.1 ONLY. Never move :latest or :0.7
+      #         from a pre-release — those are the implicit-trust
+      #         tags and casual pullers get bit when they point at
+      #         something unfinished.
+      - name: Compose image tags
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"        # v0.7.1     -> 0.7.1
+                                                # v0.7.1-rc.1 -> 0.7.1-rc.1
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+            TAG_LINES=$(cat <<END
+          ghcr.io/turnerrainer/ruuter:$VERSION
+          docker.io/turnerrainer/ruuter-on-rust:$VERSION
+          END
+          )
+          else
+            PRERELEASE=false
+            MAJOR_MINOR="${VERSION%.*}"         # 0.7.1 -> 0.7
+            TAG_LINES=$(cat <<END
+          ghcr.io/turnerrainer/ruuter:$VERSION
+          ghcr.io/turnerrainer/ruuter:$MAJOR_MINOR
+          ghcr.io/turnerrainer/ruuter:latest
+          docker.io/turnerrainer/ruuter-on-rust:$VERSION
+          docker.io/turnerrainer/ruuter-on-rust:$MAJOR_MINOR
+          docker.io/turnerrainer/ruuter-on-rust:latest
+          END
+          )
+          fi
+          echo "version=$VERSION"        >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE"  >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<END_OF_TAGS"
+            echo "$TAG_LINES"
+            echo "END_OF_TAGS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing tags:"
+          echo "$TAG_LINES"
+
+      # SOURCE_DATE_EPOCH pins every layer timestamp to the git-tag
+      # commit time. Buildx honours it since v0.14 (image output +
+      # rewrite-timestamp=true, set on the build step below). Result:
+      # rebuilding this same commit produces an image with the same
+      # digest — the manifest is a function of source, not clock.
+      # Full Rust binary determinism is a separate concern (needs
+      # --remap-path-prefix, CARGO_INCREMENTAL=0, codegen-units=1)
+      # and is not enforced here.
+      - name: Compute SOURCE_DATE_EPOCH from commit time
+        id: sde
+        run: echo "epoch=$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
+
+      # QEMU emulates linux/arm64 on the amd64 runner. Slower than
+      # native arm64 hardware but keeps the whole publish in one job.
+      # Swap to matrix + real arm64 runners if build time becomes
+      # painful (>25 min).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub secrets are configured under repo settings →
+      # secrets and variables → actions.
+      # DOCKERHUB_USERNAME = the Docker Hub account name.
+      # DOCKERHUB_TOKEN    = an access token with "Read, Write, Delete"
+      #                      scope on the repository.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Single build, six tags, two platforms, two registries. Layers
+      # are cached in GHA cache so the second platform's Rust compile
+      # can reuse the first's when the sources match.
+      - name: Build and push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        env:
+          # Buildx honours SOURCE_DATE_EPOCH when the image output has
+          # rewrite-timestamp=true (set on the `outputs:` line below).
+          SOURCE_DATE_EPOCH: ${{ steps.sde.outputs.epoch }}
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          # We use `outputs:` instead of `push: true` so we can also
+          # pass `rewrite-timestamp=true` for reproducible layer times.
+          outputs: type=image,push=true,rewrite-timestamp=true
+          # Composed by the `meta` step above so stable and pre-release
+          # tags get different tag sets (see that step's comment).
+          tags: ${{ steps.meta.outputs.tags }}
+          # Supply-chain metadata:
+          # - `provenance: true` records the source ref + build steps
+          #   as an in-toto attestation attached to the manifest.
+          # - `sbom: true` generates a SPDX SBOM and attaches it the
+          #   same way. Downstream users can inspect both with
+          #   `docker buildx imagetools inspect --format '{{ json .Provenance }}' <image>`.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Vulnerability scan of the built image. Trivy checks the OS
+      # layer (Debian slim) plus every language-level dependency
+      # (Rust deps via the Cargo.lock in the layer). `--exit-code 1`
+      # on HIGH or CRITICAL findings turns the workflow red BEFORE
+      # sign — a broken supply-chain never gets a cosign signature.
+      #
+      # `ignore-unfixed: true` — we can't ship a patch for a Debian
+      # base-image CVE that upstream hasn't fixed yet. Rebuilding
+      # daily via a scheduled workflow (out of scope here) is the
+      # long-term answer for those.
+      - name: Trivy vulnerability scan (linux/amd64 layer)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          scanners: vuln
+
+      # Smoke test each per-arch image before we sign anything. The
+      # image is already pushed at this point, so a failure here
+      # leaves the tags pointing at an UNSIGNED digest — downstream
+      # `cosign verify` will refuse it, which is the correct behaviour
+      # for a broken release. We prefer that over hiding the failure.
+      #
+      # QEMU (installed above) emulates arm64 on the amd64 runner so
+      # both platforms run in this same job.
+      - name: Smoke test — /health and /samples/ping on both arches
+        env:
+          IMAGE: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            echo "::group::smoke test on ${platform}"
+            cid="$(docker run -d --rm --platform "${platform}" \
+                   -p 18080:8080 "${IMAGE}")"
+
+            # Wait for /health. arm64-via-QEMU cold boot can take
+            # noticeably longer than amd64 native — 90s is generous.
+            ok=0
+            for i in $(seq 1 90); do
+              if curl -sf http://localhost:18080/health >/dev/null; then
+                echo "${platform}: /health OK after ${i}s"
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+
+            if [ "${ok}" -ne 1 ]; then
+              echo "::error::${platform}: /health did not respond within 90s"
+              docker logs "${cid}" || true
+              docker rm -f "${cid}" >/dev/null 2>&1 || true
+              exit 1
+            fi
+
+            # A shipped sample DSL — proves the router loaded and
+            # not just that the process bound its port. `-fsS` fails
+            # on non-2xx so we get a proper exit code.
+            body="$(curl -fsS http://localhost:18080/samples/ping)"
+            expected='"pong"'
+            if [ "${body}" != "${expected}" ]; then
+              echo "::error::${platform}: /samples/ping returned ${body}, expected ${expected}"
+              docker logs "${cid}" || true
+              docker rm -f "${cid}" >/dev/null 2>&1 || true
+              exit 1
+            fi
+
+            docker rm -f "${cid}" >/dev/null
+            echo "::endgroup::"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing via GitHub Actions OIDC — no long-lived key to
+      # rotate; the signing identity is the GHA workflow itself.
+      # Verifying party pins the expected identity (see docs). Runs
+      # only after the smoke test above passed on both platforms, so a
+      # signed image is a working image.
+      - name: Sign published images (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for registry_image in \
+              ghcr.io/turnerrainer/ruuter \
+              docker.io/turnerrainer/ruuter-on-rust
+          do
+            echo "Signing ${registry_image}@${DIGEST}"
+            cosign sign --yes "${registry_image}@${DIGEST}"
+          done

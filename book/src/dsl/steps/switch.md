@@ -17,14 +17,16 @@ route:
 - Falsy conditions include `false`, `0`, `""`, `null`, `undefined`.
 - The trailing `next:` is the fallthrough. Omitting it and having no match falls through to the next step in source order.
 
-## Verified example
+## Runnable example
+
+`DSL/samples/GET/conditionals/simple-switch.yml` (elided for the doc):
 
 ```yaml
-# GET /samples/conditionals/simple-switch?age=15 → teenager
-# GET /samples/conditionals/simple-switch?age=30 → adult
 check_age:
-  assign: { age: "${parseFloat(incoming.params.age)}" }
+  assign:
+    age: "${parseFloat(incoming.params.age)}"
   next: validate
+
 validate:
   switch:
     - condition: "${age >= 18}"
@@ -32,7 +34,46 @@ validate:
     - condition: "${age >= 13}"
       next: teen
   next: child
-adult: { return: { category: "adult" }, next: end }
-teen:  { return: { category: "teenager" }, next: end }
-child: { return: { category: "child" }, next: end }
+
+adult:
+  return:
+    category: "adult"
+  next: end
+
+teen:
+  return:
+    category: "teenager"
+  next: end
+
+child:
+  return:
+    category: "child"
+  next: end
 ```
+
+Request — teenage branch:
+
+```bash
+curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=15'
+```
+
+Response:
+
+```json
+{"age":15,"category":"teenager","message":"You are a teenager"}
+```
+
+Request — adult branch:
+
+```bash
+curl -s 'http://localhost:8080/samples/conditionals/simple-switch?age=25'
+```
+
+Response:
+
+```json
+{"age":25,"category":"adult","message":"You are an adult"}
+```
+
+(The `message` field comes from a follow-up `assign` step in the real
+DSL; the switch itself produces the branch, not the message.)

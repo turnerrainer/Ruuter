@@ -28,8 +28,15 @@ cors:
   allowed_origins: ["https://ui.example.com"]
 ```
 
+Request:
+
+```bash
+curl -sSD - -H 'Origin: https://ui.example.com' http://localhost:8080/svc/data | grep -i access-control
 ```
-$ curl -sSD - -H 'Origin: https://ui.example.com' http://localhost:8080/svc/data | grep -i access-control
+
+Response header line:
+
+```http
 access-control-allow-origin: https://ui.example.com
 ```
 

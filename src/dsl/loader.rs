@@ -1,9 +1,11 @@
 use crate::config::AppConfig;
 use crate::dsl::{parser::DslParser, Dsl};
 use crate::{Result, RuuterError};
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Project-name → method → DSL-key → Dsl (HTTP routes).
 pub type HttpDsls = HashMap<String, HashMap<String, HashMap<String, Dsl>>>;
@@ -13,6 +15,15 @@ pub type TriggerDsls = HashMap<(String, String), HashMap<String, Dsl>>;
 /// A guard at key `<METHOD>/<stem>` protects every DSL whose key
 /// starts with `<METHOD>/<stem>/`. Multiple ancestor guards stack.
 pub type GuardDsls = HashMap<String, HashMap<String, Dsl>>;
+
+/// Atomically-swappable handle to the loaded HTTP DSL tree. Held by
+/// `DslRouter` and `StepEngine` so the hot-reload watcher can swap the
+/// tree without stopping in-flight requests. Reads (`.load()`) are
+/// lock-free.
+pub type SharedHttpDsls = Arc<ArcSwap<HttpDsls>>;
+/// Atomically-swappable handle to the loaded guard tree. Same
+/// motivation as `SharedHttpDsls`.
+pub type SharedGuards = Arc<ArcSwap<GuardDsls>>;
 
 /// Per-project load result: HTTP method → key → Dsl, triggers, and guards.
 type ProjectLoad = (

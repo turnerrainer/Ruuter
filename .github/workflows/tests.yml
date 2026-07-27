@@ -9,10 +9,19 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Free `ubuntu-24.04-arm` runners are available on public repos since
+# 2025-04, so we run every job on both amd64 and arm64 natively. This
+# catches arch-specific bugs (endianness, alignment in the wire-level
+# security fixtures) BEFORE we publish an arm64 container image via
+# publish.yml — Part B of task 066.
 jobs:
   # Default feature build — scripting-boa.
   boa:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo registry
@@ -22,9 +31,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-boa-${{ hashFiles('Cargo.lock') }}
+          # Cache key namespaced by arch so amd64 and arm64 targets
+          # don't stomp each other's `target/` (different object
+          # code, different linkage).
+          key: cargo-boa-${{ matrix.runner }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-boa-
+            cargo-boa-${{ matrix.runner }}-
       - name: Build (Boa default)
         run: cargo build --release --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint (errors fail the build)
@@ -39,7 +51,11 @@ jobs:
   # registry) only run under this flavour, so regressions on the
   # QuickJS path would silently ship without this job.
   quickjs:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo registry
@@ -49,9 +65,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-quickjs-${{ hashFiles('Cargo.lock') }}
+          key: cargo-quickjs-${{ matrix.runner }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-quickjs-
+            cargo-quickjs-${{ matrix.runner }}-
       - name: Build (QuickJS backend)
         run: cargo build --release --no-default-features --features scripting-quickjs --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint

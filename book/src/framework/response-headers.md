@@ -13,9 +13,16 @@ Every response carries the following, in addition to anything the DSL set explic
 
 ## Verification
 
+Request:
+
+```bash
+curl -sSD - -H 'Traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+     http://localhost:8080/samples/basic/hello -o /dev/null | grep -iE 'traceparent|x-trace-id|content-type'
 ```
-$ curl -sSD - -H 'Traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
-    http://localhost:8080/samples/basic/hello -o /dev/null | grep -iE 'traceparent|x-trace-id|content-type'
+
+Response header lines:
+
+```http
 content-type: application/json
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736

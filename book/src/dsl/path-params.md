@@ -33,19 +33,63 @@ route:
     - condition: "${incoming.params.pathParams.length === 1}"
       next: detail
   next: sub
-list:   { return: { mode: "list", items: ["a","b","c"] }, next: end }
-detail: { return: { mode: "detail", id: "${incoming.params.pathParams[0]}" }, next: end }
-sub:    { return: { mode: "sub", id: "${incoming.params.pathParams[0]}", subresource: "${incoming.params.pathParams[1]}" }, next: end }
+
+list:
+  return:
+    mode: "list"
+    items:
+      - "a"
+      - "b"
+      - "c"
+  next: end
+
+detail:
+  return:
+    mode: "detail"
+    id: "${incoming.params.pathParams[0]}"
+  next: end
+
+sub:
+  return:
+    mode: "sub"
+    id: "${incoming.params.pathParams[0]}"
+    subresource: "${incoming.params.pathParams[1]}"
+  next: end
 ```
 
+Request — bare collection:
+
+```bash
+curl http://localhost:8080/samples/things
 ```
-$ curl http://localhost:8080/samples/things
+
+Response:
+
+```json
 {"items":["a","b","c"],"mode":"list"}
+```
 
-$ curl http://localhost:8080/samples/things/abc-123
+Request — one path segment:
+
+```bash
+curl http://localhost:8080/samples/things/abc-123
+```
+
+Response:
+
+```json
 {"id":"abc-123","mode":"detail"}
+```
 
-$ curl http://localhost:8080/samples/things/abc-123/legs
+Request — two path segments:
+
+```bash
+curl http://localhost:8080/samples/things/abc-123/legs
+```
+
+Response:
+
+```json
 {"id":"abc-123","mode":"sub","subresource":"legs"}
 ```
 

@@ -28,8 +28,15 @@ incoming_requests:
   allowed_method_types: [GET]
 ```
 
+Request:
+
+```bash
+curl -sSD - -X POST http://localhost:8080/svc/anything | head -3
 ```
-$ curl -sSD - -X POST http://localhost:8080/svc/anything | head -3
+
+Response:
+
+```http
 HTTP/1.1 405 Method Not Allowed
 content-type: application/json
 ```

@@ -1,12 +1,13 @@
 use crate::config::AppConfig;
 use crate::context::ExecutionContext;
-use crate::dsl::loader::GuardDsls;
+use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::{HttpResponse, SelfCallHandler};
 use crate::state::StateStore;
 use crate::steps::engine::{DslExecutionResult, StepEngine};
 use crate::ws::{random_client_id, Outbound, WsRegistry};
 use crate::{Result, RuuterError};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::{
     extract::{
@@ -26,16 +27,16 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 pub struct DslRouter {
-    dsls: Arc<crate::dsl::loader::HttpDsls>,
-    guards: GuardDsls,
+    dsls: SharedHttpDsls,
+    guards: SharedGuards,
     config: AppConfig,
     engine: StepEngine,
     state: StateStore,
     ws_registry: WsRegistry,
-    openapi_spec: Arc<Value>,
+    openapi_spec: Arc<ArcSwap<Value>>,
 }
 
 impl DslRouter {
@@ -47,13 +48,20 @@ impl DslRouter {
         ws_registry: WsRegistry,
         engine: StepEngine,
     ) -> Self {
-        Self::from_arc(Arc::new(dsls), guards, config, state, ws_registry, engine)
+        Self::from_shared(
+            Arc::new(ArcSwap::from_pointee(dsls)),
+            Arc::new(ArcSwap::from_pointee(guards)),
+            config,
+            state,
+            ws_registry,
+            engine,
+        )
     }
 
-    /// Construct from a shared `Arc<HttpDsls>`. Preferred when the same
-    /// tree is also handed to the StepEngine (`with_dsls`) so that
-    /// template steps and HTTP routing operate on the same in-memory
-    /// view without duplicating the tree.
+    /// Back-compat shim for the pre-hot-reload signature. Wraps the
+    /// input `Arc<HttpDsls>` and `GuardDsls` in fresh `ArcSwap`s.
+    /// Callers that need hot-reload — i.e. a shared `ArcSwap` used by
+    /// both the engine and the router — should use `from_shared`.
     pub fn from_arc(
         dsls: Arc<crate::dsl::loader::HttpDsls>,
         guards: GuardDsls,
@@ -62,10 +70,34 @@ impl DslRouter {
         ws_registry: WsRegistry,
         engine: StepEngine,
     ) -> Self {
-        let openapi_spec = Arc::new(crate::openapi::build_spec_from_http(
-            &dsls,
+        Self::from_shared(
+            Arc::new(ArcSwap::from(dsls)),
+            Arc::new(ArcSwap::from_pointee(guards)),
+            config,
+            state,
+            ws_registry,
+            engine,
+        )
+    }
+
+    /// Construct from shared, atomically-swappable handles to the HTTP
+    /// DSL tree and guard tree. Preferred when the same handles are
+    /// also handed to the StepEngine (`with_dsls_shared`) so template
+    /// steps and HTTP routing operate on the same in-memory view
+    /// without duplicating the tree — and so the hot-reload watcher
+    /// can swap both at once by storing into the shared `ArcSwap`s.
+    pub fn from_shared(
+        dsls: SharedHttpDsls,
+        guards: SharedGuards,
+        config: AppConfig,
+        state: StateStore,
+        ws_registry: WsRegistry,
+        engine: StepEngine,
+    ) -> Self {
+        let openapi_spec = Arc::new(ArcSwap::from_pointee(crate::openapi::build_spec_from_http(
+            &dsls.load(),
             env!("CARGO_PKG_VERSION"),
-        ));
+        )));
         Self {
             dsls,
             guards,
@@ -75,6 +107,30 @@ impl DslRouter {
             ws_registry,
             openapi_spec,
         }
+    }
+
+    /// Hot-reload entry point. Publishes a freshly-loaded DSL tree +
+    /// guard tree, atomically. Also rebuilds the OpenAPI cache. Called
+    /// from the file-watcher task when `dsl.allow_dsl_reloading` is on.
+    ///
+    /// The `StepEngine`'s handles point at the same `ArcSwap`s, so a
+    /// single swap here is visible to both HTTP routing and any
+    /// in-flight `template:` step lookups.
+    pub fn publish_dsls(&self, new_dsls: crate::dsl::loader::HttpDsls, new_guards: GuardDsls) {
+        let new_spec = crate::openapi::build_spec_from_http(&new_dsls, env!("CARGO_PKG_VERSION"));
+        self.dsls.store(Arc::new(new_dsls));
+        self.guards.store(Arc::new(new_guards));
+        self.openapi_spec.store(Arc::new(new_spec));
+        info!("DSL tree hot-reloaded (HTTP + guards + OpenAPI cache)");
+    }
+
+    /// Shared-handle accessor for the hot-reload watcher.
+    pub fn dsls_handle(&self) -> SharedHttpDsls {
+        self.dsls.clone()
+    }
+    /// Shared-handle accessor for the hot-reload watcher.
+    pub fn guards_handle(&self) -> SharedGuards {
+        self.guards.clone()
     }
 
     /// Java-parity DSL lookup: try the exact key, then progressively
@@ -88,8 +144,9 @@ impl DslRouter {
         project: &str,
         method: &str,
         path: &str,
-    ) -> Option<(&Dsl, String, Vec<String>)> {
-        let by_method = self.dsls.get(project)?.get(method)?;
+    ) -> Option<(Dsl, String, Vec<String>)> {
+        let snapshot = self.dsls.load();
+        let by_method = snapshot.get(project)?.get(method)?;
         let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let mut stripped: Vec<String> = Vec::new();
 
@@ -99,7 +156,12 @@ impl DslRouter {
             }
             let candidate = format!("{}/{}", method, segments.join("/"));
             if let Some(dsl) = by_method.get(&candidate) {
-                return Some((dsl, candidate, stripped));
+                // Clone the Dsl out — the snapshot's arc guard would
+                // otherwise need to outlive this borrow, which the
+                // hot-reload path (swap out from under us) makes
+                // awkward. Dsl clones are cheap enough for this hot
+                // path.
+                return Some((dsl.clone(), candidate, stripped));
             }
             // Strip the trailing segment; prepend to keep URL order.
             if let Some(last) = segments.pop() {
@@ -120,7 +182,8 @@ impl DslRouter {
     /// runs. Non-override guards stack normally when no override is
     /// present anywhere on the path.
     fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<Dsl> {
-        let project_guards = match self.guards.get(project) {
+        let snapshot = self.guards.load();
+        let project_guards = match snapshot.get(project) {
             Some(g) => g,
             None => return Vec::new(),
         };
@@ -201,7 +264,6 @@ impl DslRouter {
             .ok_or_else(|| {
                 RuuterError::FileNotFound(format!("DSL not found: {}/{}", uppercase_method, path))
             })?;
-        let dsl = dsl.clone();
 
         // Expose the stripped segments to the DSL under
         // `incoming.params.pathParams`. Empty array when the exact key
@@ -303,7 +365,7 @@ async fn health_check() -> impl IntoResponse {
 /// boot. Cheap — served straight from the `Arc<Value>` cache; no
 /// per-request work.
 async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
-    Json((*router.openapi_spec).clone())
+    Json((**router.openapi_spec.load()).clone())
 }
 
 async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) -> Response {
@@ -603,16 +665,18 @@ impl DslRouter {
         let endpoint_path = path_parts[1..].join("/");
         let dsl_key = format!("WS/{}", endpoint_path);
 
-        let dsl = match self
-            .dsls
-            .get(&project)
-            .and_then(|methods| methods.get("WS"))
-            .and_then(|dsls| dsls.get(&dsl_key))
-        {
-            Some(d) => d.clone(),
-            None => {
-                return (StatusCode::NOT_FOUND, Json(json!({"error": "Not Found"})))
-                    .into_response();
+        let dsl = {
+            let snapshot = self.dsls.load();
+            match snapshot
+                .get(&project)
+                .and_then(|methods| methods.get("WS"))
+                .and_then(|dsls| dsls.get(&dsl_key))
+            {
+                Some(d) => d.clone(),
+                None => {
+                    return (StatusCode::NOT_FOUND, Json(json!({"error": "Not Found"})))
+                        .into_response();
+                }
             }
         };
 

@@ -24,9 +24,77 @@ compute:
 
 # RIGHT
 compute_x:
-  assign: { x: "${incoming.body.a + 1}" }
+  assign:
+    x: "${incoming.body.a + 1}"
   next: compute_y
+
 compute_y:
-  assign: { y: "${x * 2}" }
+  assign:
+    y: "${x * 2}"
   next: reply
+```
+
+## Runnable example
+
+`DSL/samples/GET/variables/assign-simple.yml`:
+
+```yaml
+assign_vars:
+  assign:
+    name: "John Doe"
+    age: 30
+    city: "Tallinn"
+  next: return_result
+
+return_result:
+  return:
+    user:
+      name: ${name}
+      age: ${age}
+      city: ${city}
+  next: end
+```
+
+Request:
+
+```bash
+curl -s http://localhost:8080/samples/variables/assign-simple
+```
+
+Response:
+
+```json
+{"user":{"age":30,"city":"Tallinn","name":"John Doe"}}
+```
+
+## Runnable example — read query params
+
+`DSL/samples/GET/variables/incoming-params.yml`:
+
+```yaml
+extract_params:
+  assign:
+    user_id: ${incoming.params.id}
+    user_name: ${incoming.params.name}
+  next: respond
+
+respond:
+  return:
+    received:
+      id: ${user_id}
+      name: ${user_name}
+    message: "Received parameters successfully"
+  next: end
+```
+
+Request:
+
+```bash
+curl -s 'http://localhost:8080/samples/variables/incoming-params?id=42&name=Ada'
+```
+
+Response:
+
+```json
+{"message":"Received parameters successfully","received":{"id":"42","name":"Ada"}}
 ```

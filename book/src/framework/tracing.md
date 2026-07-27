@@ -11,9 +11,16 @@ No configuration required for either.
 
 ## Verification
 
+Request:
+
+```bash
+curl -sSD - -H 'Traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+     http://localhost:8080/samples/basic/hello -o /dev/null | grep -iE 'trace'
 ```
-$ curl -sSD - -H 'Traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
-    http://localhost:8080/samples/basic/hello -o /dev/null | grep -iE 'trace'
+
+Response header lines:
+
+```http
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736
 ```

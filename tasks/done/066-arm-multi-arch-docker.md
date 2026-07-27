@@ -6,6 +6,40 @@
 supports ARM. The Java Ruuter has always run on ARM (JVM handles
 it); the Rust reimplementation currently ships an amd64-only image.
 
+## Landed
+
+2026-07-27 — Part A shipped as part of the Docker Hub / GHCR publish
+workflow. `.github/workflows/publish.yml` uses `docker/setup-qemu-action`
++ `docker/setup-buildx-action` to build `linux/amd64,linux/arm64` in
+one job on release-tag push. Multi-arch manifest is pushed to both
+`ghcr.io/turnerrainer/ruuter` and `docker.io/turnerrainer/ruuter-on-rust`
+under the tags `<version>`, `<major>.<minor>`, and `latest`.
+
+Extras that came with the same workflow:
+- **Cosign keyless signing** — every published digest is signed via
+  Sigstore OIDC. Verify recipe in `book/src/ops/docker.md`.
+- **Provenance + SBOM** — `docker/build-push-action` attaches both
+  attestations to the manifest (`provenance: mode=max`, `sbom: true`).
+- **Cargo.lock is now tracked** — was previously gitignored; a CI
+  clone would have failed the Dockerfile's `COPY Cargo.lock` step.
+
+Follow-up landed same day:
+- **Part B (ARM in the test matrix)** — `.github/workflows/tests.yml`
+  now runs each of `boa` and `quickjs` jobs on both `ubuntu-latest`
+  (amd64) and `ubuntu-24.04-arm` (native arm64) via matrix. Cache
+  keys are namespaced by arch to avoid cross-arch target/ pollution.
+- **Smoke test in publish.yml** — after the multi-arch push, before
+  cosign signing, each per-arch image is run under `docker run
+  --platform ...` and probed with `/health` + `/samples/ping`. QEMU
+  handles arm64 on the amd64 runner. Failure blocks signing, so a
+  signed image is always a working image.
+
+Still deferred:
+- **Native arm64 runner for publish itself** — the publish workflow's
+  build step still uses QEMU on the amd64 runner. Fine while build
+  time stays under ~25 min; swap to a matrix step with a real arm64
+  runner if publish CI slows down.
+
 ## Severity
 
 **Low** — no security implication and no correctness bug. This is

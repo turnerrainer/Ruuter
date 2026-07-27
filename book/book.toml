@@ -6,11 +6,12 @@ language = "en"
 src = "src"
 
 [output.html]
-default-theme = "navy"
-preferred-dark-theme = "navy"
+default-theme = "light"
+preferred-dark-theme = "light"
 git-repository-url = "https://github.com/turnerrainer/Ruuter"
 edit-url-template = "https://github.com/turnerrainer/Ruuter/edit/dev/book/{path}"
 site-url = "/Ruuter/"
+additional-css = ["theme/custom.css"]
 
 [output.html.search]
 enable = true

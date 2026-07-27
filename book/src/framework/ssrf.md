@@ -54,8 +54,15 @@ internal_requests:
   disabled: true
 ```
 
+Request:
+
+```bash
+curl -sS -X GET http://localhost:8080/svc/that-calls-outbound
 ```
-$ curl -sS -X GET http://localhost:8080/svc/that-calls-outbound
+
+Response:
+
+```json
 {"error":"HTTP request rejected: outbound HTTP is disabled by internal_requests.disabled"}
 ```
 

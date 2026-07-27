@@ -10,7 +10,8 @@ lookup:
     do:
       - http:
           call: http.get
-          args: { url: "https://slow-upstream/$_{'${incoming.body.uil}'}" }
+          args:
+            url: "https://slow-upstream/${incoming.body.uil}"
           result: upstream
       - assign:
           answer: "${upstream.body}"
@@ -67,3 +68,86 @@ lookup:
 - **Key includes runtime timestamps.** `${Date.now()}` in the key produces a fresh string every request → nothing coalesces. Use inputs that are stable across the coalesce window.
 - **Body has side effects on `incoming.*`.** The leader's `do:` mutates the leader's context; followers get only the `result:` variable snapshot, not the full context. If your DSL reads other leader-side variables downstream, they won't be there on followers.
 - **`ttl_ms` too tight for the DSL's real latency.** Followers time out before the leader is done → the DSL fails under exactly the load it was supposed to help with. Set `ttl_ms` to a safe upper bound on your `do:` body's realistic p99 latency, plus headroom.
+
+## Runnable example
+
+`DSL/samples/POST/advanced/single-flight-lookup.yml` (elided):
+
+```yaml
+coalesce:
+  single_flight:
+    key: "sf-demo:${incoming.body.id}"
+    ttl_ms: 3000
+    do:
+      # Simulate an expensive lookup — ~120 ms of busy work.
+      - iterate:
+          over: "${Array.from({length: 300}, (_, i) => i)}"
+          as: n
+          do:
+            - assign:
+                sink: "${n * n}"
+      # Bump the shared execution counter so we can prove coalescing.
+      - state:
+          get:
+            key: "sf_demo_count"
+            into: prior
+      - assign:
+          exec_count: "${(prior == null ? 0 : prior) + 1}"
+      - state:
+          set:
+            key: "sf_demo_count"
+            value: "${exec_count}"
+      - assign:
+          shared_result:
+            id: "${incoming.body.id}"
+            execution_count: "${exec_count}"
+            computed_at: "${Date.now()}"
+    result: shared_result
+  next: respond
+
+respond:
+  return: "${shared_result}"
+  next: end
+```
+
+Single request — one execution, `execution_count = 1`.
+
+Request:
+
+```bash
+curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
+     -H 'Content-Type: application/json' -d '{"id":"item-42"}'
+```
+
+Response:
+
+```json
+{"computed_at":1785079302100.0,"execution_count":1,"id":"item-42"}
+```
+
+Five concurrent requests on the **same id** — all five see the same
+`computed_at` and `execution_count`, proving only one real execution
+ran.
+
+Request:
+
+```bash
+for i in 1 2 3 4 5; do
+  curl -sX POST http://localhost:8080/samples/advanced/single-flight-lookup \
+       -H 'Content-Type: application/json' -d '{"id":"burst-1"}' &
+done; wait
+```
+
+Response:
+
+```json
+{"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
+{"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
+{"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
+{"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
+{"computed_at":1785079305810.0,"execution_count":2,"id":"burst-1"}
+```
+
+(Timestamps and counter value differ per invocation; the important
+thing is that all five parallel responses share the same
+`computed_at` and `execution_count`.)

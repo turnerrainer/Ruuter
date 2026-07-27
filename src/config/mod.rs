@@ -233,6 +233,13 @@ pub struct DslConfig {
     #[serde(default = "default_processed_filetypes")]
     pub processed_filetypes: Vec<String>,
 
+    /// Dev-only opt-in for the DSL hot-reload filesystem watcher.
+    /// When `true`, a `notify`-backed watcher on `config_path`
+    /// republishes the HTTP + guard trees on change without a server
+    /// restart. Default `false`. Do NOT enable in production —
+    /// combined with a writable DSL mount it is RCE via `${JS}`
+    /// expressions. See `book/src/ops/hot-reload.md` for the full
+    /// list of what does / does not reload.
     #[serde(default)]
     pub allow_dsl_reloading: bool,
 }

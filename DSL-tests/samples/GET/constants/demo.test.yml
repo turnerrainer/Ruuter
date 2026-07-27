@@ -1,0 +1,20 @@
+# DSL under test: DSL/samples/GET/constants/demo.yml
+# Proves [#KEY] and #{KEY} constant substitution both fire at parse
+# time and land as literal text in the response body.
+mode: inprocess
+
+constants:
+  DOMAIN_URL: https://example.com
+  PORT: "8080"
+
+tests:
+  - name: bracket and brace constants both resolve
+    request:
+      method: GET
+      path: /samples/constants/demo
+    expect:
+      status: 200
+      body_matches:
+        domain: "https://example.com"
+        also_domain: "https://example.com"
+        port: "8080"

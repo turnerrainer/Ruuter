@@ -6,7 +6,7 @@
 - **Framework-level `Idempotency-Key` dedup.** Removed in v0.7.0 (h2ck.me findings S1 + S5). The framework never keys, caches, or replays by `Idempotency-Key`; DSL authors implement the pattern themselves via `state.get`/`state.set` — see [Idempotency pattern](../dsl/idempotency-pattern.md). Cross-replica dedup then follows whichever state backend the operator configures.
 - **ETag value validation.** Framework enforces presence of `If-Match` (opt-in); comparing to actual state is the DSL's job via Resql or equivalent.
 - **Scheduled work.** CronManager fires HTTP at Ruuter endpoints on schedule; Ruuter itself has no timer facility.
-- **Hot DSL reload.** DSLs are read at boot. Restart the container after edits.
+- **Production hot DSL reload.** DSLs are read at boot. A dev-only opt-in file-watcher (`dsl.allow_dsl_reloading: true`) hot-swaps HTTP + guard trees on file change — see [Hot reload](../ops/hot-reload.md). Not for production: combined with a writable DSL mount it is remote code execution via `${JS}`.
 - **Rate limiting.** Nothing built-in. Terminate at a reverse proxy (nginx, Envoy) or add per-DSL rate logic via `state`.
 - **Body streaming.** Requests + upstream responses are read into memory (with the caps documented in [Response size cap](../framework/size-cap.md) and the 16 MiB inbound cap). No streaming multipart upload path.
 - **GraphQL.** Ruuter is REST + WS only.

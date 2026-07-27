@@ -26,9 +26,13 @@ Add a `declaration:` step to any route DSL to enrich its OpenAPI entry:
 ```yaml
 declaration:
   description: "Cancel an order and archive its audit trail."
-  allowed_body:   [order_id, reason]
-  allowed_header: [Authorization]
-  allowed_params: [correlation_id]
+  allowed_body:
+    - order_id
+    - reason
+  allowed_header:
+    - Authorization
+  allowed_params:
+    - correlation_id
 
 cancel:
   # ... steps ...
@@ -47,9 +51,55 @@ The generated spec passes `redocly lint` cleanly (0 errors, 0 warnings on the sa
 
 ## Consumption
 
-```
-$ curl http://localhost:8080/_/openapi.json > openapi.json
-$ redocly lint openapi.json         # or swagger-cli validate openapi.json
+Fetch the spec:
+
+```bash
+curl http://localhost:8080/_/openapi.json > openapi.json
 ```
 
-Point Swagger UI, Redoc, Stoplight, or any OpenAPI-consuming tool at `/_/openapi.json`.
+Validate it (swagger-cli works equivalently):
+
+```bash
+redocly lint openapi.json
+```
+
+Point Swagger UI, Redoc, Stoplight, or any OpenAPI-consuming tool at
+`/_/openapi.json`.
+
+## Runnable example — what a generated operation looks like
+
+Request:
+
+```bash
+curl -s http://localhost:8080/_/openapi.json | jq '.paths["/samples/ping"]'
+```
+
+Response (elided to the operation level):
+
+```json
+{
+  "get": {
+    "description": "Auto-generated from DSL `GET/ping` in project `samples`. Add a `declaration.description` to override.",
+    "operationId": "get_samples_ping",
+    "summary": "ping",
+    "tags": ["samples"],
+    "responses": {
+      "202": {
+        "description": "Accepted",
+        "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } },
+        "headers": {
+          "X-Trace-Id":   { "$ref": "#/components/headers/X-Trace-Id" },
+          "traceparent":  { "$ref": "#/components/headers/traceparent" }
+        }
+      },
+      "400": { "description": "Bad Request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "500": { "description": "Internal Server Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    }
+  }
+}
+```
+
+The `202` response comes from the DSL's `response.status: 202`; the
+`400` and `500` entries are the framework baselines added to every
+route. Add a `declaration:` block to the DSL to override the
+description or introduce request-body / parameter shapes.
