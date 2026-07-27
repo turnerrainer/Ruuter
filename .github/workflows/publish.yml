@@ -53,7 +53,7 @@ jobs:
             PRERELEASE=true
             TAG_LINES=$(cat <<END
           ghcr.io/turnerrainer/ruuter:$VERSION
-          docker.io/turnerrainer/ruuter-on-rust:$VERSION
+          docker.io/turnerrainer/ruuter:$VERSION
           END
           )
           else
@@ -63,9 +63,9 @@ jobs:
           ghcr.io/turnerrainer/ruuter:$VERSION
           ghcr.io/turnerrainer/ruuter:$MAJOR_MINOR
           ghcr.io/turnerrainer/ruuter:latest
-          docker.io/turnerrainer/ruuter-on-rust:$VERSION
-          docker.io/turnerrainer/ruuter-on-rust:$MAJOR_MINOR
-          docker.io/turnerrainer/ruuter-on-rust:latest
+          docker.io/turnerrainer/ruuter:$VERSION
+          docker.io/turnerrainer/ruuter:$MAJOR_MINOR
+          docker.io/turnerrainer/ruuter:latest
           END
           )
           fi
@@ -162,7 +162,7 @@ jobs:
       - name: Trivy vulnerability scan (linux/amd64 layer)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+          image-ref: docker.io/turnerrainer/ruuter@${{ steps.build.outputs.digest }}
           format: table
           exit-code: '1'
           severity: HIGH,CRITICAL
@@ -180,7 +180,7 @@ jobs:
       # both platforms run in this same job.
       - name: Smoke test — /health and /samples/ping on both arches
         env:
-          IMAGE: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+          IMAGE: docker.io/turnerrainer/ruuter@${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           for platform in linux/amd64 linux/arm64; do
@@ -238,7 +238,7 @@ jobs:
           set -euo pipefail
           for registry_image in \
               ghcr.io/turnerrainer/ruuter \
-              docker.io/turnerrainer/ruuter-on-rust
+              docker.io/turnerrainer/ruuter
           do
             echo "Signing ${registry_image}@${DIGEST}"
             cosign sign --yes "${registry_image}@${DIGEST}"

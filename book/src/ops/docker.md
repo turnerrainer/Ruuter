@@ -8,16 +8,22 @@ by the [publish workflow](https://github.com/turnerrainer/Ruuter/blob/dev/.githu
 
 | Registry | Repository | Recommended for |
 |---|---|---|
-| **Docker Hub** | `turnerrainer/ruuter-on-rust` | Discoverability, casual pulls |
+| **Docker Hub** | `turnerrainer/ruuter` | Discoverability, casual pulls |
 | **GHCR** | `ghcr.io/turnerrainer/ruuter` | High-volume / anonymous pulls (no rate limit) |
 
 Both registries carry the same digests. Pick either. Tag conventions:
 
-| Tag         | Meaning                                              |
-|-------------|------------------------------------------------------|
-| `0.7.0`     | Immutable version. Pin this in production.           |
-| `0.7`       | Latest patch on the 0.7 line. Auto-updates on 0.7.x. |
-| `latest`    | Whatever the most recent release tag pointed at. Fine for dev; footgun in prod. |
+| Tag              | Meaning                                                                                    |
+|------------------|--------------------------------------------------------------------------------------------|
+| `0.8.0-rc.1`     | Immutable pre-release. Never moves. Never promoted to `:latest` or `:0.8` automatically.   |
+| `1.0.0` *(future)* | Immutable stable version. Pin this in production once cut.                              |
+| `1.0` *(future)*   | Latest patch on the 1.0 line. Auto-updates on 1.0.x.                                    |
+| `latest` *(future)*| Whatever the most recent **stable** release tag pointed at. Never a pre-release.        |
+
+Pre-release tags (`-rc.N`, `-beta.N`, `-alpha.N`) publish **only** the
+specific version tag — they never move `:latest` or the moving
+`:major.minor` tag. Casual pullers on `:latest` are unaffected by a
+pre-release publish.
 
 ## Verify the image (cosign)
 
@@ -26,7 +32,7 @@ workflow that produced it. Sigstore holds the transparency log entry;
 `cosign` verifies the manifest against the exact workflow identity.
 
 ```bash
-cosign verify turnerrainer/ruuter-on-rust:0.7.0 \
+cosign verify turnerrainer/ruuter:0.8.0-rc.1 \
     --certificate-identity-regexp \
       "^https://github.com/turnerrainer/Ruuter/\.github/workflows/publish\.yml@refs/tags/v.*$" \
     --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
@@ -44,9 +50,9 @@ multi-arch manifest. Inspect with:
 
 ```bash
 docker buildx imagetools inspect --format '{{ json .Provenance }}' \
-    turnerrainer/ruuter-on-rust:0.7.0 | jq .
+    turnerrainer/ruuter:0.8.0-rc.1 | jq .
 docker buildx imagetools inspect --format '{{ json .SBOM }}' \
-    turnerrainer/ruuter-on-rust:0.7.0 | jq '.SPDX.packages | length'
+    turnerrainer/ruuter:0.8.0-rc.1 | jq '.SPDX.packages | length'
 ```
 
 ## Run directly
@@ -55,7 +61,7 @@ The fastest way — no clone, no build:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter-on-rust:0.7.0
+    turnerrainer/ruuter:0.8.0-rc.1
 ```
 
 The image bakes in `DSL/samples/` so `/samples/*` endpoints work out
@@ -65,7 +71,7 @@ of the box. Mount your own tree to replace them:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter-on-rust:0.7.0
+    turnerrainer/ruuter:0.8.0-rc.1
 ```
 
 ## Compose (production-hardened)
@@ -77,7 +83,7 @@ same securityposture works with the published image — swap the
 ```yaml
 services:
   ruuter-on-rust:
-    image: turnerrainer/ruuter-on-rust:0.7.0
+    image: turnerrainer/ruuter:0.8.0-rc.1
     container_name: ruuter-on-rust
     ports:
       - "8080:8080"

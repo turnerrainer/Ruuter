@@ -24,10 +24,10 @@ supervisor restart, traceparent, ...):
 cargo test --no-fail-fast
 ```
 
-Expected on the 0.7.0 baseline:
+Expected on the 0.8.0-rc.1 baseline:
 
 ```
-test result: ok. 205 passed; 0 failed; 3 ignored
+test result: ok. 222 passed; 0 failed; 3 ignored
 ```
 
 The 3 ignored tests are timing-sensitive scenarios kept out of the
@@ -40,12 +40,12 @@ references, checks template targets. Does not execute anything:
 
 ```bash
 ./target/debug/dsl-lint --dsl DSL --constants constants.ini
-# dsl-lint: 61 file(s) scanned, 61 ok, 0 error(s), 3 warning(s)
+# dsl-lint: 62 file(s) scanned, 62 ok, 0 error(s), 3 warning(s)
 ```
 
-The 3 warnings are `[#constant]` references pointing to operator-provided
+The 3 warnings are constant references pointing to operator-provided
 values (`API_KEY`, `aapl_alert_webhook`, `stock_alert_webhook`); they're
-expected, not defects.
+expected, not defects. Both `[#KEY]` and `#{KEY}` forms are recognised.
 
 ## 3. DSL scenario runner — end-to-end DSL tests
 
@@ -56,7 +56,7 @@ mock upstream calls:
 
 ```bash
 ./target/debug/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
-# dsl-test: 99 scenario(s) — 99 passed, 0 failed
+# dsl-test: 100 scenario(s) — 100 passed, 0 failed
 ```
 
 ## Why three separate suites

@@ -12,7 +12,7 @@ it); the Rust reimplementation currently ships an amd64-only image.
 workflow. `.github/workflows/publish.yml` uses `docker/setup-qemu-action`
 + `docker/setup-buildx-action` to build `linux/amd64,linux/arm64` in
 one job on release-tag push. Multi-arch manifest is pushed to both
-`ghcr.io/turnerrainer/ruuter` and `docker.io/turnerrainer/ruuter-on-rust`
+`ghcr.io/turnerrainer/ruuter` and `docker.io/turnerrainer/ruuter`
 under the tags `<version>`, `<major>.<minor>`, and `latest`.
 
 Extras that came with the same workflow:
@@ -110,8 +110,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/turnerrainer/ruuter-on-rust:${{ github.ref_name }}
-            ghcr.io/turnerrainer/ruuter-on-rust:latest
+            ghcr.io/turnerrainer/ruuter:${{ github.ref_name }}
+            ghcr.io/turnerrainer/ruuter:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 ```
@@ -142,9 +142,9 @@ cross-arch pollution.
 
 ## Acceptance
 
-- `docker manifest inspect ghcr.io/turnerrainer/ruuter-on-rust:latest`
+- `docker manifest inspect ghcr.io/turnerrainer/ruuter:latest`
   reports both `linux/amd64` and `linux/arm64` entries.
-- `docker run --platform linux/arm64 ghcr.io/turnerrainer/ruuter-on-rust:latest --help`
+- `docker run --platform linux/arm64 ghcr.io/turnerrainer/ruuter:latest --help`
   works on an ARM host (or on amd64 with `docker run --platform`).
 - If Part B lands: `cargo test --release --no-fail-fast` passes on
   `ubuntu-24.04-arm`.
