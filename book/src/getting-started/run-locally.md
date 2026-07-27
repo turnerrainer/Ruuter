@@ -11,7 +11,7 @@ or GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter-on-rust:latest
+    turnerrainer/ruuter:latest
 ```
 
 The published image bakes in `DSL/samples/` so every endpoint under
@@ -24,7 +24,7 @@ The published image bakes in `DSL/samples/` so every endpoint under
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter-on-rust:latest
+    turnerrainer/ruuter:latest
 ```
 
 **Verify the image** (optional, supply-chain hygiene). Images are
@@ -32,7 +32,7 @@ signed keyless via cosign; verify against the exact publisher
 workflow:
 
 ```bash
-cosign verify turnerrainer/ruuter-on-rust:latest \
+cosign verify turnerrainer/ruuter:latest \
     --certificate-identity-regexp \
       "^https://github.com/turnerrainer/Ruuter/\.github/workflows/publish\.yml@refs/tags/v.*$" \
     --certificate-oidc-issuer "https://token.actions.githubusercontent.com"

@@ -11,7 +11,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter-on-rust:0.8.0-rc.1
+    turnerrainer/ruuter:0.8.0-rc.1
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -25,7 +25,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter-on-rust:0.8.0-rc.1
+    turnerrainer/ruuter:0.8.0-rc.1
 ```
 
 Every published digest is signed keyless via cosign — verify with the

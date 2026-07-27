@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0-rc.1] - 2026-07-27
 
 First **pre-release** cut for partner testing. Not GA. Publishes as
-`turnerrainer/ruuter-on-rust:0.8.0-rc.1` on Docker Hub and
+`turnerrainer/ruuter:0.8.0-rc.1` on Docker Hub and
 `ghcr.io/turnerrainer/ruuter:0.8.0-rc.1` on GHCR. Pre-release tags do
 NOT move `:latest` or `:major.minor` — casual pullers on `:latest`
 are unaffected until a stable release ships.
