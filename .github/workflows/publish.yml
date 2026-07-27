@@ -1,0 +1,117 @@
+name: Publish container image
+
+# Trigger only on release tags — never on merges or manual pushes.
+# Tag shape v<major>.<minor>.<patch> mirrors the Cargo.toml version.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+# One publish job per tag; never run two publish jobs against the
+# same tag concurrently. If a second push somehow arrives for the
+# same ref, queue it rather than racing.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for pushing to GHCR under the repo's namespace.
+  packages: write
+  # Required for cosign keyless signing (Sigstore OIDC token).
+  id-token: write
+  # Required so build-push-action can attach provenance attestations.
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Derive the tags the image will be pushed with. Emitting
+      # `major_minor` lets someone pin to `:0.7` and pick up patch
+      # updates while staying on the same minor line.
+      - name: Derive version tags
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"        # v0.7.0 -> 0.7.0
+          MAJOR_MINOR="${VERSION%.*}"           # 0.7.0  -> 0.7
+          echo "version=$VERSION"          >> "$GITHUB_OUTPUT"
+          echo "major_minor=$MAJOR_MINOR"  >> "$GITHUB_OUTPUT"
+
+      # QEMU emulates linux/arm64 on the amd64 runner. Slower than
+      # native arm64 hardware but keeps the whole publish in one job.
+      # Swap to matrix + real arm64 runners if build time becomes
+      # painful (>25 min).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub secrets are configured under repo settings →
+      # secrets and variables → actions.
+      # DOCKERHUB_USERNAME = the Docker Hub account name.
+      # DOCKERHUB_TOKEN    = an access token with "Read, Write, Delete"
+      #                      scope on the repository.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Single build, six tags, two platforms, two registries. Layers
+      # are cached in GHA cache so the second platform's Rust compile
+      # can reuse the first's when the sources match.
+      - name: Build and push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/turnerrainer/ruuter:${{ steps.meta.outputs.version }}
+            ghcr.io/turnerrainer/ruuter:${{ steps.meta.outputs.major_minor }}
+            ghcr.io/turnerrainer/ruuter:latest
+            docker.io/turnerrainer/ruuter-on-rust:${{ steps.meta.outputs.version }}
+            docker.io/turnerrainer/ruuter-on-rust:${{ steps.meta.outputs.major_minor }}
+            docker.io/turnerrainer/ruuter-on-rust:latest
+          # Supply-chain metadata:
+          # - `provenance: true` records the source ref + build steps
+          #   as an in-toto attestation attached to the manifest.
+          # - `sbom: true` generates a SPDX SBOM and attaches it the
+          #   same way. Downstream users can inspect both with
+          #   `docker buildx imagetools inspect --format '{{ json .Provenance }}' <image>`.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing via GitHub Actions OIDC — no long-lived key to
+      # rotate; the signing identity is the GHA workflow itself.
+      # Verifying party pins the expected identity (see docs).
+      - name: Sign published images (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for registry_image in \
+              ghcr.io/turnerrainer/ruuter \
+              docker.io/turnerrainer/ruuter-on-rust
+          do
+            echo "Signing ${registry_image}@${DIGEST}"
+            cosign sign --yes "${registry_image}@${DIGEST}"
+          done

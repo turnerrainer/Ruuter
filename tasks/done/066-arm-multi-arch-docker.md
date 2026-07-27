@@ -6,6 +6,32 @@
 supports ARM. The Java Ruuter has always run on ARM (JVM handles
 it); the Rust reimplementation currently ships an amd64-only image.
 
+## Landed
+
+2026-07-27 — Part A shipped as part of the Docker Hub / GHCR publish
+workflow. `.github/workflows/publish.yml` uses `docker/setup-qemu-action`
++ `docker/setup-buildx-action` to build `linux/amd64,linux/arm64` in
+one job on release-tag push. Multi-arch manifest is pushed to both
+`ghcr.io/turnerrainer/ruuter` and `docker.io/turnerrainer/ruuter-on-rust`
+under the tags `<version>`, `<major>.<minor>`, and `latest`.
+
+Extras that came with the same workflow:
+- **Cosign keyless signing** — every published digest is signed via
+  Sigstore OIDC. Verify recipe in `book/src/ops/docker.md`.
+- **Provenance + SBOM** — `docker/build-push-action` attaches both
+  attestations to the manifest (`provenance: mode=max`, `sbom: true`).
+- **Cargo.lock is now tracked** — was previously gitignored; a CI
+  clone would have failed the Dockerfile's `COPY Cargo.lock` step.
+
+Deferred to a follow-up:
+- **Part B (ARM in the test matrix)** — the Rust test suite still
+  runs on `ubuntu-latest` (amd64) only. File as its own task if wire-
+  level tests need arch-cross validation.
+- **Native arm64 runner** — currently the arm64 layer builds under
+  QEMU emulation on the amd64 runner. Fine for now; swap to
+  `ubuntu-24.04-arm` in a matrix step if publish CI time crosses
+  ~25 min.
+
 ## Severity
 
 **Low** — no security implication and no correctness bug. This is

@@ -3,22 +3,43 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.4.0 · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.7.0 · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-## Set up from scratch
+## Try it in one command
 
-Prerequisites: Docker + Docker Compose.
+Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
+
+```bash
+docker run -d --name ruuter -p 8080:8080 \
+    turnerrainer/ruuter-on-rust:0.7.0
+```
+
+- Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
+- Sample route: `curl http://localhost:8080/samples/ping` → `"pong"`.
+- OpenAPI spec (auto-generated from every DSL): `curl http://localhost:8080/_/openapi.json`.
+
+The image bakes in `DSL/samples/` so every endpoint under `/samples/*`
+works out of the box. Mount your own tree to override:
+
+```bash
+docker run -d --name ruuter -p 8080:8080 \
+    -v $(pwd)/DSL:/app/DSL:ro \
+    -v $(pwd)/constants.ini:/app/constants.ini:ro \
+    turnerrainer/ruuter-on-rust:0.7.0
+```
+
+Every published digest is signed keyless via cosign — verify with the
+recipe in [book/src/ops/docker.md](book/src/ops/docker.md#verify-the-image-cosign).
+
+## Build from source
+
+For hacking on Ruuter itself:
 
 ```bash
 git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-on-rust
 cd ruuter-on-rust
 docker compose up -d --build
 ```
-
-- Serves on `http://localhost:8080`.
-- Health check: `curl http://localhost:8080/health` → `{"status":"ok",...}`.
-- Sample route: `curl http://localhost:8080/samples/ping` → `"pong"`.
-- OpenAPI spec (auto-generated from every DSL): `curl http://localhost:8080/_/openapi.json`.
 
 To wipe and rebuild after code changes:
 

@@ -1,17 +1,51 @@
 # Run it locally
 
-Five commands. Two minutes. Proof it works before you learn anything else.
+Two minutes. Proof it works before you learn anything else. Pick one
+of the two paths below.
 
-## 1. Clone
+## Path A — pull the pre-built image (fastest)
+
+If you just want to try Ruuter, don't clone anything. Pull the
+official multi-arch image (linux/amd64 + linux/arm64) from Docker Hub
+or GHCR:
+
+```bash
+docker run -d --name ruuter -p 8080:8080 \
+    turnerrainer/ruuter-on-rust:latest
+```
+
+The published image bakes in `DSL/samples/` so every endpoint under
+`/samples/*` works out of the box. Skip to
+[step 3](#3-health-check) to verify.
+
+**Bring your own DSL** — mount your tree over the sample one:
+
+```bash
+docker run -d --name ruuter -p 8080:8080 \
+    -v $(pwd)/DSL:/app/DSL:ro \
+    -v $(pwd)/constants.ini:/app/constants.ini:ro \
+    turnerrainer/ruuter-on-rust:latest
+```
+
+**Verify the image** (optional, supply-chain hygiene). Images are
+signed keyless via cosign; verify against the exact publisher
+workflow:
+
+```bash
+cosign verify turnerrainer/ruuter-on-rust:latest \
+    --certificate-identity-regexp \
+      "^https://github.com/turnerrainer/Ruuter/\.github/workflows/publish\.yml@refs/tags/v.*$" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+## Path B — build from source
+
+For hacking on Ruuter itself, or when you want to modify the shipped
+Dockerfile:
 
 ```bash
 git clone -b dev https://github.com/turnerrainer/Ruuter.git ruuter-on-rust
 cd ruuter-on-rust
-```
-
-## 2. Start
-
-```bash
 docker compose up -d --build
 ```
 
@@ -46,6 +80,14 @@ curl -s http://localhost:8080/_/openapi.json | head -c 120
 The OpenAPI document is regenerated at every boot from the DSL tree on disk — no annotations, no code-gen step.
 
 ## 5. Stop when you're done
+
+Path A:
+
+```bash
+docker rm -f ruuter
+```
+
+Path B:
 
 ```bash
 docker compose down
