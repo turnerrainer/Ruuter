@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0-rc.1] - 2026-07-27
+
+See the [root `CHANGELOG.md`](https://github.com/turnerrainer/Ruuter/blob/dev/CHANGELOG.md#080-rc1---2026-07-27)
+for the full entry. Summary: first pre-release cut for partner
+testing. Multi-arch container publish + cosign + Trivy + SBOM +
+smoke test in CI. DSL hot-reload (opt-in). `#{KEY}` alternate
+constant syntax. Getting-started rewrite. Not GA — `main` is
+reserved for `v1.0.0`.
+
 ## [0.7.0] - 2026-07-24
 
 Security-hardening release. Closes 15 findings from the h2ck.me

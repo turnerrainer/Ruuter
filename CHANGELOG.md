@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0-rc.1] - 2026-07-27
+
+First **pre-release** cut for partner testing. Not GA. Publishes as
+`turnerrainer/ruuter-on-rust:0.8.0-rc.1` on Docker Hub and
+`ghcr.io/turnerrainer/ruuter:0.8.0-rc.1` on GHCR. Pre-release tags do
+NOT move `:latest` or `:major.minor` — casual pullers on `:latest`
+are unaffected until a stable release ships.
+
+### Added
+
+- **Multi-arch container publish workflow** — `.github/workflows/publish.yml`.
+  Builds `linux/amd64` + `linux/arm64` via `docker/setup-qemu-action` +
+  `docker/setup-buildx-action`. Publishes to Docker Hub and GHCR.
+  Supports stable (`vX.Y.Z`) and pre-release (`vX.Y.Z-suffix`) tag
+  shapes; pre-releases publish only the specific version tag.
+- **Cosign keyless image signing** (Sigstore OIDC), **SPDX SBOM**, and
+  **in-toto provenance** attached to every multi-arch manifest. Verify
+  recipe in `book/src/ops/docker.md`.
+- **Trivy vulnerability scan** in the publish workflow, gated on
+  HIGH/CRITICAL fixed CVEs. Blocks signing.
+- **Smoke test in publish workflow** — every per-arch image is booted
+  under QEMU on the runner and probed for `/health` + `/samples/ping`
+  before cosign runs. A signed image is a working image.
+- **Reproducible image layer timestamps** via `SOURCE_DATE_EPOCH` +
+  `outputs: type=image,rewrite-timestamp=true`.
+- **Native arm64 in the test matrix** — `ubuntu-24.04-arm` runners
+  added to `tests.yml` for both `boa` and `quickjs` feature sets.
+- **`cargo-deny` in the security workflow** alongside `cargo-audit`.
+  Config: `deny.toml`. License allow-list (Apache-2.0-compatible
+  only, no GPL/AGPL/SSPL), ban on wildcards, refuse git-URL deps.
+  Advisory exceptions mirrored between `deny.toml` and
+  `.cargo/audit.toml`.
+- **`SECURITY.md`** — private disclosure recipe, response SLA,
+  supply-chain posture inventory.
+- **DSL hot-reload** (opt-in via `dsl.allow_dsl_reloading`, default
+  `false`). `notify`-backed filesystem watcher + `ArcSwap` atomic
+  publish; HTTP DSL tree, guards, and OpenAPI cache reload without
+  a server restart. Source configs, trigger DSLs, `constants.ini`
+  and `ruuter.yaml` explicitly do **not** reload. Dev-only —
+  combined with a writable DSL mount it is RCE via `${JS}`.
+- **`#{KEY}` alternate constant-interpolation syntax** (task 067) —
+  visually pairs with `${runtime}`. Both syntaxes tokenise
+  identically and produce the same substituted DSL. `[#KEY]` retained
+  for backward compat with a soft-deprecation stance (may be
+  deprecated in a future major release; new DSLs should prefer
+  `#{KEY}`).
+- **`DSL/samples/GET/constants/demo.yml`** and matching test —
+  runnable proof that both constant syntaxes resolve at parse time.
+- **First-time-user "Getting started" chapters** in the book:
+  Prerequisites → Run it locally → Watch the automated tests pass
+  → Try the Postman collection → What to read next.
+- **Postman assets** committed under `postman/` — collection +
+  environment + regeneration recipe.
+- **Book-wide runnable examples** — every DSL step page and every
+  applicable framework/dsl page now carries at least one
+  copy-clean `curl` request block + labelled response block, with
+  responses captured against a live server.
+- **Light-on-white book theme** modelled on Apache Arrow docs.
+
+### Changed
+
+- **`Cargo.lock` is now tracked** (was gitignored). The Dockerfile
+  `COPY`s it; a fresh CI clone would have failed the build.
+- **Every DSL sample in the book converted to pure block-style YAML**
+  — no flow-style `{ … }` maps or inline `[ … ]` arrays. Copy-paste
+  any snippet straight into a `.yml` file.
+- **Book curl examples split** into separate `bash` request blocks
+  and labelled response blocks, so the copy button on the command
+  block yields a runnable shell line (no `$` prompt to strip, no
+  response body to remove).
+- **`/health` doc** refreshed to the v0.7.0 slim shape
+  (`{"status":"ok"}` — no framework name, no version).
+
+### Notes for partners pulling this pre-release
+
+- The image bakes in `DSL/samples/` so `/samples/*` endpoints work
+  out of the box. Mount your own `DSL/` tree to override.
+- Every published digest is cosign-signed. Verify with the recipe in
+  `book/src/ops/docker.md#verify-the-image-cosign`.
+- `main` is reserved for the future `v1.0.0` stable release. This
+  RC is cut from `dev`.
+
 ## [0.7.0] - 2026-07-24
 
 Security-hardening release. Closes 15 findings from the h2ck.me
