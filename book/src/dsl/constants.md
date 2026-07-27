@@ -30,14 +30,18 @@ call:
 
 ## Which syntax to pick
 
-- `[#KEY]` — original Java-Ruuter form. Kept indefinitely; every
-  existing DSL still parses.
-- `#{KEY}` — alternate form added by task 067. Visual pairing with
-  `${runtime}` makes it obvious at a glance which interpolations are
+- **`#{KEY}`** — preferred for new DSLs. Visually pairs with
+  `${runtime}` so at a glance you can tell which interpolations are
   compile-time (`#{}`) and which are per-request (`${}`).
+- `[#KEY]` — original Java-Ruuter form. Retained for backward
+  compatibility so existing DSLs keep parsing, but **may be
+  deprecated in a future major release**. New DSLs should prefer
+  `#{KEY}`.
 
 Both resolve against the same `constants.ini`. Mixing forms in one
-file is fine. There is no plan to deprecate `[#KEY]`.
+file works today; if you're touching an existing DSL, migrating its
+`[#KEY]` references to `#{KEY}` is a low-risk change (identical
+substitution, same tests pass).
 
 ## Substitution rules
 

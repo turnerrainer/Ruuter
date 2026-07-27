@@ -4,11 +4,12 @@
 //! Two surface syntaxes are accepted, both resolving to the same
 //! `constants.ini` key and producing identical output:
 //!
-//! - `[#NAME]` — original Java-Ruuter syntax. Retained indefinitely
-//!   for backward compatibility.
-//! - `#{NAME}` — alternate syntax added by task 067. Visually
-//!   mirrors `${...}` (runtime variable) so the two interpolation
-//!   forms read as a symmetric pair.
+//! - `#{NAME}` — preferred for new DSLs. Visually mirrors `${...}`
+//!   (runtime variable) so the two interpolation forms read as a
+//!   symmetric pair.
+//! - `[#NAME]` — original Java-Ruuter syntax. Retained for
+//!   backward compatibility; may be deprecated in a future major
+//!   release. New DSLs should prefer `#{NAME}`.
 //!
 //! Both forms accept the same character class inside their
 //! delimiters (any character except the matching close delimiter).

@@ -26,7 +26,11 @@ notes:
   (parser round-trip, mixed usage, WS source config, and error
   parity for missing keys).
 - Docs: `book/src/dsl/constants.md` now documents both syntaxes and
-  explains when to pick which. `[#KEY]` is not deprecated.
+  explains when to pick which. `[#KEY]` is retained for backward
+  compatibility with a soft-deprecation stance — may be deprecated
+  in a future major release; new DSLs should prefer `#{KEY}`. The
+  original proposal body above (which said "keep indefinitely") is
+  the historical record at filing time and predates this decision.
 
 ## Severity
 
