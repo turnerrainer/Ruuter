@@ -173,7 +173,13 @@ jobs:
           provenance: mode=max
           sbom: true
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # `ignore-error=true` — cache-export failures (common on
+          # re-runs / workflow_dispatch where the GHA cache scope
+          # key doesn't match the original event) should not fail
+          # the publish. The push already happened by the time this
+          # runs; losing the cache export just means the next build
+          # rebuilds from scratch, not that the release is broken.
+          cache-to: type=gha,mode=max,ignore-error=true
 
       # Vulnerability scan of the built image. Trivy checks the OS
       # layer (Debian slim) plus every language-level dependency
