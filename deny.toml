@@ -24,13 +24,30 @@ all-features = false
 no-default-features = false
 
 # -----------------------------------------------------------------
-# Advisories (parallel of cargo-audit; kept minimal here so
-# audit.toml stays the single source of truth for advisory exceptions)
+# Advisories — cargo-deny has its OWN advisory reader; it does not
+# consult .cargo/audit.toml. Any exception documented for cargo-audit
+# must be mirrored here (same IDs, same rationale, same review date)
+# or cargo-deny will fail the check while cargo-audit passes.
+# Keep this list synchronised with .cargo/audit.toml.
 # -----------------------------------------------------------------
 [advisories]
 version = 2
 yanked = "deny"          # never accept a yanked release
-ignore = []              # advisory exceptions live in .cargo/audit.toml
+ignore = [
+    # `instant` — unmaintained. Transitive via parking_lot (boa_engine
+    # → hashbrown) and hyper-util's tokio internals. No known vuln;
+    # the advisory is "no upstream maintainer." Track upstream
+    # migrations (parking_lot → std::sync, boa → later hashbrown)
+    # and re-audit. Mirrors .cargo/audit.toml entry.
+    # Review: 2026-10-01
+    "RUSTSEC-2024-0384",
+
+    # `paste` — unmaintained. Transitive via boa_engine's derive
+    # macros. Same posture as `instant`. Bumping boa_engine past
+    # 0.20 is the likely fix. Mirrors .cargo/audit.toml entry.
+    # Review: 2026-10-01
+    "RUSTSEC-2024-0436",
+]
 
 # -----------------------------------------------------------------
 # Licenses — allow-list. Anything not listed here fails the build.
