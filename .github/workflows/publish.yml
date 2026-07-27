@@ -41,6 +41,18 @@ jobs:
           echo "version=$VERSION"          >> "$GITHUB_OUTPUT"
           echo "major_minor=$MAJOR_MINOR"  >> "$GITHUB_OUTPUT"
 
+      # SOURCE_DATE_EPOCH pins every layer timestamp to the git-tag
+      # commit time. Buildx honours it since v0.14 (image output +
+      # rewrite-timestamp=true, set on the build step below). Result:
+      # rebuilding this same commit produces an image with the same
+      # digest — the manifest is a function of source, not clock.
+      # Full Rust binary determinism is a separate concern (needs
+      # --remap-path-prefix, CARGO_INCREMENTAL=0, codegen-units=1)
+      # and is not enforced here.
+      - name: Compute SOURCE_DATE_EPOCH from commit time
+        id: sde
+        run: echo "epoch=$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
+
       # QEMU emulates linux/arm64 on the amd64 runner. Slower than
       # native arm64 hardware but keeps the whole publish in one job.
       # Swap to matrix + real arm64 runners if build time becomes
@@ -75,10 +87,16 @@ jobs:
       - name: Build and push (multi-arch)
         id: build
         uses: docker/build-push-action@v6
+        env:
+          # Buildx honours SOURCE_DATE_EPOCH when the image output has
+          # rewrite-timestamp=true (set on the `outputs:` line below).
+          SOURCE_DATE_EPOCH: ${{ steps.sde.outputs.epoch }}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          # We use `outputs:` instead of `push: true` so we can also
+          # pass `rewrite-timestamp=true` for reproducible layer times.
+          outputs: type=image,push=true,rewrite-timestamp=true
           tags: |
             ghcr.io/turnerrainer/ruuter:${{ steps.meta.outputs.version }}
             ghcr.io/turnerrainer/ruuter:${{ steps.meta.outputs.major_minor }}
@@ -96,6 +114,27 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Vulnerability scan of the built image. Trivy checks the OS
+      # layer (Debian slim) plus every language-level dependency
+      # (Rust deps via the Cargo.lock in the layer). `--exit-code 1`
+      # on HIGH or CRITICAL findings turns the workflow red BEFORE
+      # sign — a broken supply-chain never gets a cosign signature.
+      #
+      # `ignore-unfixed: true` — we can't ship a patch for a Debian
+      # base-image CVE that upstream hasn't fixed yet. Rebuilding
+      # daily via a scheduled workflow (out of scope here) is the
+      # long-term answer for those.
+      - name: Trivy vulnerability scan (linux/amd64 layer)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          scanners: vuln
 
       # Smoke test each per-arch image before we sign anything. The
       # image is already pushed at this point, so a failure here

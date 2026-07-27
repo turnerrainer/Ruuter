@@ -33,3 +33,19 @@ jobs:
         # hard fails alongside `vulnerability` errors. Documented
         # exceptions live in `.cargo/audit.toml` with a review date.
         run: cargo audit --deny warnings
+
+  # cargo-deny covers what cargo-audit does not: license allow-list
+  # (refuse GPL/AGPL/SSPL — incompatible with the Apache-2.0 binary),
+  # ban rules (no duplicate versions of security-critical crates),
+  # source rules (crates.io only — no unvetted git deps).
+  # Config: deny.toml.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # `check all` = advisories + bans + licenses + sources.
+          # The advisories subset overlaps with cargo-audit above,
+          # which is fine — one channel per tool.
+          command: check all
