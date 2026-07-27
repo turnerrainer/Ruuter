@@ -160,7 +160,7 @@ jobs:
       # daily via a scheduled workflow (out of scope here) is the
       # long-term answer for those.
       - name: Trivy vulnerability scan (linux/amd64 layer)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: docker.io/turnerrainer/ruuter@${{ steps.build.outputs.digest }}
           format: table
