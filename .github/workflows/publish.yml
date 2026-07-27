@@ -59,10 +59,13 @@ jobs:
       #   * Stable release (`v0.7.1`):
       #       → push :0.7.1, :0.7, :latest
       #   * Pre-release  (`v0.7.1-rc.1`, `v0.8.0-beta.2`, ...):
-      #       → push :0.7.1-rc.1 ONLY. Never move :latest or :0.7
-      #         from a pre-release — those are the implicit-trust
-      #         tags and casual pullers get bit when they point at
-      #         something unfinished.
+      #       → push :0.7.1-rc.1 AND :<suffix-type> (e.g. :rc, :beta,
+      #         :alpha). Never move :latest or :0.7 from a pre-
+      #         release — those are the implicit-trust tags and
+      #         casual pullers get bit when they point at something
+      #         unfinished. The :<suffix-type> moving tag gives
+      #         partners a short pull recipe scoped to the pre-
+      #         release maturity level they want.
       - name: Compose image tags
         id: meta
         env:
@@ -77,9 +80,17 @@ jobs:
                                                 # v0.7.1-rc.1 -> 0.7.1-rc.1
           if [[ "$VERSION" == *-* ]]; then
             PRERELEASE=true
+            # Extract the pre-release maturity marker for the moving
+            # tag: 0.8.0-rc.1 -> rc, 0.9.0-beta.2 -> beta.
+            # Extraction: strip everything through the first '-',
+            # then keep only up to the first '.'.
+            SUFFIX="${VERSION#*-}"              # rc.1
+            SUFFIX_TYPE="${SUFFIX%%.*}"         # rc
             TAG_LINES=$(cat <<END
           ghcr.io/turnerrainer/ruuter:$VERSION
+          ghcr.io/turnerrainer/ruuter:$SUFFIX_TYPE
           docker.io/turnerrainer/ruuter:$VERSION
+          docker.io/turnerrainer/ruuter:$SUFFIX_TYPE
           END
           )
           else
