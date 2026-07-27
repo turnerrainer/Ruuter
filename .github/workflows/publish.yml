@@ -1,16 +1,30 @@
 name: Publish container image
 
-# Trigger only on release tags — never on merges or manual pushes.
-# Two accepted shapes:
+# Trigger on release tag push OR manual dispatch.
+#
+# Tag-push (the normal path):
 #   v0.7.1         → stable release
 #   v0.7.1-rc.1    → pre-release (rc / beta / alpha / preview / any suffix)
 # The `derive version tags` step below reads which shape was pushed
 # and chooses whether to move :latest and :major.minor accordingly.
+#
+# workflow_dispatch (the escape hatch):
+#   Lets an operator re-run the publish workflow against an existing
+#   tag from the Actions UI without cutting a new tag. Useful when
+#   the workflow itself has a config bug — instead of the
+#   delete-tag / hotfix-PR / retag round-trip, just fix the bug on
+#   dev and click "Run workflow" against the tag ref.
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v0.8.0-rc.1). Must already exist on the repo."
+        required: true
+        type: string
 
 # One publish job per tag; never run two publish jobs against the
 # same tag concurrently. If a second push somehow arrives for the
@@ -32,8 +46,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # On a tag push, github.ref_name is the tag itself. On a
+      # workflow_dispatch, the operator supplies the tag as an input
+      # and we check out that tag explicitly.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
       # Derive the tag list. Two paths:
       #   * Stable release (`v0.7.1`):
@@ -45,9 +65,15 @@ jobs:
       #         something unfinished.
       - name: Compose image tags
         id: meta
+        env:
+          # On tag-push, github.ref_name = the tag. On dispatch, we
+          # pass the input tag through. Either way, the leading `v`
+          # is stripped to produce the SemVer string we tag the
+          # image with.
+          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"        # v0.7.1     -> 0.7.1
+          VERSION="${TAG_REF#v}"                # v0.7.1     -> 0.7.1
                                                 # v0.7.1-rc.1 -> 0.7.1-rc.1
           if [[ "$VERSION" == *-* ]]; then
             PRERELEASE=true
@@ -160,7 +186,7 @@ jobs:
       # daily via a scheduled workflow (out of scope here) is the
       # long-term answer for those.
       - name: Trivy vulnerability scan (linux/amd64 layer)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: docker.io/turnerrainer/ruuter@${{ steps.build.outputs.digest }}
           format: table
