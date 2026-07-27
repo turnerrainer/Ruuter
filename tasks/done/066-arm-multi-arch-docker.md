@@ -23,14 +23,22 @@ Extras that came with the same workflow:
 - **Cargo.lock is now tracked** — was previously gitignored; a CI
   clone would have failed the Dockerfile's `COPY Cargo.lock` step.
 
-Deferred to a follow-up:
-- **Part B (ARM in the test matrix)** — the Rust test suite still
-  runs on `ubuntu-latest` (amd64) only. File as its own task if wire-
-  level tests need arch-cross validation.
-- **Native arm64 runner** — currently the arm64 layer builds under
-  QEMU emulation on the amd64 runner. Fine for now; swap to
-  `ubuntu-24.04-arm` in a matrix step if publish CI time crosses
-  ~25 min.
+Follow-up landed same day:
+- **Part B (ARM in the test matrix)** — `.github/workflows/tests.yml`
+  now runs each of `boa` and `quickjs` jobs on both `ubuntu-latest`
+  (amd64) and `ubuntu-24.04-arm` (native arm64) via matrix. Cache
+  keys are namespaced by arch to avoid cross-arch target/ pollution.
+- **Smoke test in publish.yml** — after the multi-arch push, before
+  cosign signing, each per-arch image is run under `docker run
+  --platform ...` and probed with `/health` + `/samples/ping`. QEMU
+  handles arm64 on the amd64 runner. Failure blocks signing, so a
+  signed image is always a working image.
+
+Still deferred:
+- **Native arm64 runner for publish itself** — the publish workflow's
+  build step still uses QEMU on the amd64 runner. Fine while build
+  time stays under ~25 min; swap to a matrix step with a real arm64
+  runner if publish CI slows down.
 
 ## Severity
 

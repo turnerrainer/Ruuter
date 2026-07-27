@@ -97,12 +97,67 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Smoke test each per-arch image before we sign anything. The
+      # image is already pushed at this point, so a failure here
+      # leaves the tags pointing at an UNSIGNED digest — downstream
+      # `cosign verify` will refuse it, which is the correct behaviour
+      # for a broken release. We prefer that over hiding the failure.
+      #
+      # QEMU (installed above) emulates arm64 on the amd64 runner so
+      # both platforms run in this same job.
+      - name: Smoke test — /health and /samples/ping on both arches
+        env:
+          IMAGE: docker.io/turnerrainer/ruuter-on-rust@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            echo "::group::smoke test on ${platform}"
+            cid="$(docker run -d --rm --platform "${platform}" \
+                   -p 18080:8080 "${IMAGE}")"
+
+            # Wait for /health. arm64-via-QEMU cold boot can take
+            # noticeably longer than amd64 native — 90s is generous.
+            ok=0
+            for i in $(seq 1 90); do
+              if curl -sf http://localhost:18080/health >/dev/null; then
+                echo "${platform}: /health OK after ${i}s"
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+
+            if [ "${ok}" -ne 1 ]; then
+              echo "::error::${platform}: /health did not respond within 90s"
+              docker logs "${cid}" || true
+              docker rm -f "${cid}" >/dev/null 2>&1 || true
+              exit 1
+            fi
+
+            # A shipped sample DSL — proves the router loaded and
+            # not just that the process bound its port. `-fsS` fails
+            # on non-2xx so we get a proper exit code.
+            body="$(curl -fsS http://localhost:18080/samples/ping)"
+            expected='"pong"'
+            if [ "${body}" != "${expected}" ]; then
+              echo "::error::${platform}: /samples/ping returned ${body}, expected ${expected}"
+              docker logs "${cid}" || true
+              docker rm -f "${cid}" >/dev/null 2>&1 || true
+              exit 1
+            fi
+
+            docker rm -f "${cid}" >/dev/null
+            echo "::endgroup::"
+          done
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
       # Keyless signing via GitHub Actions OIDC — no long-lived key to
       # rotate; the signing identity is the GHA workflow itself.
-      # Verifying party pins the expected identity (see docs).
+      # Verifying party pins the expected identity (see docs). Runs
+      # only after the smoke test above passed on both platforms, so a
+      # signed image is a working image.
       - name: Sign published images (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
