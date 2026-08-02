@@ -50,7 +50,7 @@ jobs:
       # workflow_dispatch, the operator supplies the tag as an input
       # and we check out that tag explicitly.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
