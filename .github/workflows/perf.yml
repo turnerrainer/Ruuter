@@ -20,7 +20,7 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install wrk + jq
         run: |
@@ -28,7 +28,7 @@ jobs:
           sudo apt-get install -y wrk jq python3-yaml
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
