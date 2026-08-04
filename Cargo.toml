@@ -44,6 +44,9 @@ url = "2.5"
 rand = "0.8"
 rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures", "chrono"] }
 sha2 = "0.10"
+# Audit finding 11 — inbound multipart/form-data parser (Java parity).
+multer = "3"
+bytes = "1"
 
 [dev-dependencies]
 mockito = "1.5"

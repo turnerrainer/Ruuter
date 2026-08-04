@@ -77,15 +77,19 @@ impl StepExecutor for HttpStepExecutor {
 
         let timeout = self.step.timeout.map(Duration::from_millis);
 
+        // Audit finding 11 — thread the DSL's `content_type:` into the
+        // transport so it can pick JSON / plaintext / formdata /
+        // multipart / dynamicBody / json_override behaviour.
         let response = self
             .http_client
-            .request(
+            .request_with_ct(
                 method,
                 url.as_str().unwrap_or(""),
                 body.as_ref(),
                 query.as_ref(),
                 headers.as_ref(),
                 timeout,
+                self.step.args.content_type.as_deref(),
             )
             .await?;
 

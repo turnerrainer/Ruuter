@@ -1996,20 +1996,19 @@ fn cve_floor_cargo_lock_contains_known_bad_versions() {
 
 // ── Miscellaneous hardening pins ───────────────────────────────────
 
-/// Verifies that a POST with `Content-Type: text/plain` reaches the
-/// DSL with an empty `incoming.body`. The parser only interprets JSON
-/// bodies (see `looks_json` in router.rs). A plain-text body is
-/// dropped on the floor — this is documented behaviour but the
-/// silent-drop is footgun-y, so pin it.
+/// Audit finding 11 fix (post-2026-08-04): text/<subtype> bodies
+/// are now parsed as `{ <subtype>: <body> }` (Java parity via
+/// DslController.queryDslText). Verify the plain-text case reaches
+/// the DSL as `incoming.body.plain = "hello world"`.
 #[tokio::test]
-async fn non_json_body_is_dropped_silently_documented_behaviour() {
+async fn text_plain_body_is_wrapped_under_subtype_key() {
     let router = build_router(
         AppConfig::default(),
         &[(
             "svc/POST/echo.yml",
             r#"
 reply:
-  return: { body_has_keys: "${Object.keys(incoming.body).length}" }
+  return: { plain: "${incoming.body.plain}" }
   next: end
 "#,
         )],
@@ -2025,10 +2024,7 @@ reply:
         .json()
         .await
         .unwrap();
-    assert_eq!(
-        body["body_has_keys"], 0,
-        "non-JSON body reached DSL with keys — spec change?"
-    );
+    assert_eq!(body["plain"], "hello world");
 }
 
 /// The router allows `Content-Type: application/json; charset=utf-8`

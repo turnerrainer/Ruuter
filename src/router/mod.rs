@@ -580,14 +580,26 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .map(|mime| mime.eq_ignore_ascii_case("application/json") || mime.ends_with("+json"))
         .unwrap_or(false);
 
+    let mime = content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or("");
+
+    // Audit finding 11 — Java-parity inbound content-type dispatch.
+    // Pre-fix, only application/json was parsed; everything else
+    // dropped the body silently. Now:
+    //   application/json (+ *+json)                  → parsed map (existing)
+    //   application/x-www-form-urlencoded            → key/value map (new)
+    //   multipart/form-data                          → filename→string map (new)
+    //   text/<subtype>                               → { <subtype>: <body> } (new)
+    //   anything else                                → empty (unchanged)
     let body_map: HashMap<String, Value> = if body_bytes.is_empty() {
         HashMap::new()
     } else if looks_json {
         match serde_json::from_slice::<Value>(&body_bytes) {
             Ok(Value::Object(map)) => map.into_iter().collect(),
             Ok(other) => {
-                // Non-object JSON — wrap under `value` so a DSL can still
-                // reach it via `incoming.body.value`, matching the WS shape.
                 let mut wrapper = HashMap::new();
                 wrapper.insert("value".to_string(), other);
                 wrapper
@@ -600,6 +612,47 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
                     .into_response();
             }
         }
+    } else if mime.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+        url::form_urlencoded::parse(&body_bytes)
+            .into_owned()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect()
+    } else if mime.eq_ignore_ascii_case("multipart/form-data") {
+        // Extract boundary from full content-type header (may include ;charset=…)
+        let boundary = match content_type
+            .split(';')
+            .map(str::trim)
+            .find_map(|s| s.strip_prefix("boundary="))
+        {
+            Some(b) => b.trim_matches('"').to_string(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "multipart/form-data missing boundary" })),
+                )
+                    .into_response();
+            }
+        };
+        match parse_multipart_body(&body_bytes, &boundary).await {
+            Ok(m) => m,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("multipart parse: {}", e) })),
+                )
+                    .into_response();
+            }
+        }
+    } else if let Some(subtype) = mime.strip_prefix("text/") {
+        // Java: `Map.of(subType, requestBody)` — the whole body under
+        // its text/<subtype> key. UTF-8 lossy so binary-in-text (rare
+        // but possible) doesn't 500 the request.
+        let mut wrapper = HashMap::new();
+        wrapper.insert(
+            subtype.to_string(),
+            Value::String(String::from_utf8_lossy(&body_bytes).into_owned()),
+        );
+        wrapper
     } else {
         HashMap::new()
     };
@@ -933,6 +986,46 @@ impl DslRouter {
             warn!(project, connection_id, error = %e, "WS DSL failed");
         }
     }
+}
+
+/// Audit finding 11 — parse a `multipart/form-data` body into a
+/// `HashMap<String, Value>`. Each part with `filename="…"` becomes
+/// `<filename> → <utf-8 lossy contents>` (matches Java's
+/// `Arrays.stream(file).collect(toMap(f -> f.getOriginalFilename(),
+/// f -> new String(f.getBytes(), UTF_8)))` in DslController). Non-
+/// file parts (`name="…"` without a filename) become `<name> →
+/// <utf-8 lossy contents>`.
+///
+/// Deliberately minimal parser — depends on `multer` (a lightweight
+/// multipart crate). We only need the "extract every part into the
+/// map" contract; boundary detection is delegated.
+async fn parse_multipart_body(
+    body_bytes: &[u8],
+    boundary: &str,
+) -> std::result::Result<HashMap<String, Value>, String> {
+    use futures::stream;
+    let stream_body: bytes::Bytes = body_bytes.to_vec().into();
+    let stream = stream::iter(vec![Ok::<_, std::io::Error>(stream_body)]);
+    let mut multipart = multer::Multipart::new(stream, boundary.to_string());
+    let mut out = HashMap::new();
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let filename = field.file_name().map(|s| s.to_string());
+        let name = field.name().map(|s| s.to_string());
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
+            bytes.extend_from_slice(&chunk);
+        }
+        let content = String::from_utf8_lossy(&bytes).into_owned();
+        // Prefer filename as key (Java behaviour for `file[]`
+        // uploads); fall back to field name.
+        let key = filename.or(name).unwrap_or_else(|| "part".to_string());
+        out.insert(key, Value::String(content));
+    }
+    Ok(out)
 }
 
 fn is_override_guard(dsl: &Dsl) -> bool {

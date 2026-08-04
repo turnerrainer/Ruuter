@@ -385,6 +385,39 @@ impl HttpClient {
         headers: Option<&HashMap<String, Value>>,
         timeout: Option<Duration>,
     ) -> Result<HttpResponse> {
+        self.request_with_ct(method, url, body, query, headers, timeout, None)
+            .await
+    }
+
+    /// Audit finding 11 (outbound half) — request variant that
+    /// honours a DSL-supplied `content_type:` on the HttpStep.
+    /// `None` = JSON (current default). Recognised values (Java-parity):
+    ///   `plaintext`  → text/plain body: `body["text"]` or first
+    ///                  string value in the map, else the whole map
+    ///                  stringified.
+    ///   `formdata`   → application/x-www-form-urlencoded when no
+    ///                  key starts with `file:`; otherwise
+    ///                  multipart/form-data with the `file:<field>:<name>`
+    ///                  entries turned into file parts (matches
+    ///                  Java's HttpHelper).
+    ///   `json_override` → JSON body, but the response
+    ///                     `Content-Type` is forced to
+    ///                     `application/json` (matches Java's
+    ///                     filter chain).
+    ///   `dynamicBody` → send `body["dynamicBody"]` verbatim as
+    ///                   JSON (raw value, not wrapped in an object).
+    ///   anything else → JSON (default).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn request_with_ct(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&Value>,
+        query: Option<&HashMap<String, Value>>,
+        headers: Option<&HashMap<String, Value>>,
+        timeout: Option<Duration>,
+        content_type: Option<&str>,
+    ) -> Result<HttpResponse> {
         // Test-only URL rewriting (see `rewrite_url_for_tests`). Applied
         // BEFORE SSRF checks so tests can point at a local mock without
         // punching a hole in the allowlist.
@@ -463,8 +496,96 @@ impl HttpClient {
             }
         }
 
+        // Audit finding 11 — outbound content_type dispatch.
+        let force_json_response = matches!(content_type, Some("json_override"));
         if let Some(b) = body {
-            request = request.json(b);
+            match content_type {
+                Some("plaintext") => {
+                    // Serialize body to a plain string. If the body is
+                    // an object with a `text` key or a `plaintext` key
+                    // (Java convention), send that string; else
+                    // stringify the whole value.
+                    let text = if let Value::Object(map) = b {
+                        map.get("text")
+                            .or_else(|| map.get("plaintext"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                            .unwrap_or_else(|| serde_json::to_string(b).unwrap_or_default())
+                    } else if let Value::String(s) = b {
+                        s.clone()
+                    } else {
+                        serde_json::to_string(b).unwrap_or_default()
+                    };
+                    request = request
+                        .header("content-type", "text/plain")
+                        .body(text);
+                }
+                Some("formdata") => {
+                    let map = match b {
+                        Value::Object(m) => m,
+                        _ => {
+                            return Err(RuuterError::HttpRequest(
+                                "content_type: formdata requires body to be an object".into(),
+                            ));
+                        }
+                    };
+                    let has_file = map.keys().any(|k| k.starts_with("file:"));
+                    if has_file {
+                        // multipart/form-data with file: prefix parts.
+                        let mut form = reqwest::multipart::Form::new();
+                        for (k, v) in map {
+                            if let Some(rest) = k.strip_prefix("file:") {
+                                // Java shape: file:<fieldname>:<filename>
+                                let (fieldname, filename) =
+                                    match rest.split_once(':') {
+                                        Some((f, n)) => (f.to_string(), n.to_string()),
+                                        None => (rest.to_string(), rest.to_string()),
+                                    };
+                                let bytes = v
+                                    .as_str()
+                                    .map(|s| s.as_bytes().to_vec())
+                                    .unwrap_or_default();
+                                let part = reqwest::multipart::Part::bytes(bytes)
+                                    .file_name(filename);
+                                form = form.part(fieldname, part);
+                            } else {
+                                let s = v
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| v.to_string());
+                                form = form.text(k.clone(), s);
+                            }
+                        }
+                        request = request.multipart(form);
+                    } else {
+                        // application/x-www-form-urlencoded
+                        let form: Vec<(String, String)> = map
+                            .iter()
+                            .map(|(k, v)| {
+                                let s = v
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| v.to_string());
+                                (k.clone(), s)
+                            })
+                            .collect();
+                        request = request.form(&form);
+                    }
+                }
+                Some("dynamicBody") => {
+                    // Java: bypass the body wrapper — send body["dynamicBody"] raw.
+                    let payload = if let Value::Object(map) = b {
+                        map.get("dynamicBody").cloned().unwrap_or(Value::Null)
+                    } else {
+                        b.clone()
+                    };
+                    request = request.json(&payload);
+                }
+                _ => {
+                    // JSON (default and json_override paths)
+                    request = request.json(b);
+                }
+            }
         }
 
         let response = request.send().await?;
@@ -477,11 +598,18 @@ impl HttpClient {
         // Callers that don't want to distinguish just call
         // `is_status_allowed` themselves and error out.
 
-        let response_headers: HashMap<String, String> = response
+        let mut response_headers: HashMap<String, String> = response
             .headers()
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
+
+        // Audit finding 11 — json_override forces the response
+        // content-type header to application/json regardless of what
+        // the upstream sent (matches Java's WebClient filter chain).
+        if force_json_response {
+            response_headers.insert("content-type".to_string(), "application/json".to_string());
+        }
 
         // Enforce response-body cap by streaming and tallying rather than
         // reading the whole body into memory. `Content-Length` is honored
