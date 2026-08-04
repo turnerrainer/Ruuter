@@ -100,9 +100,10 @@ impl StepExecutor for HttpStepExecutor {
             context.set_variable(result_name.clone(), result_value);
         }
 
-        Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
-        ))
+        Ok(StepResult {
+            next_step: self.step.next.clone(),
+            ..StepResult::new()
+        })
     }
 }
 

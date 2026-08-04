@@ -10,15 +10,27 @@ use crate::http_client::HttpClient;
 use crate::scripting::ExpressionRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
-    assign, http, iterate, log, return_step, single_flight, state, switch, template, ws_send,
-    DslStep, StepExecutor,
+    assign, http, http_mock, iterate, log, return_step, single_flight, state, switch, template,
+    ws_send, DslStep, StepExecutor,
 };
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{error, warn};
+
+/// Wired by the framework (usually the router) so the engine can
+/// honour Java-parity `reloadDsl: true` step field (audit finding 01).
+/// A step-triggered reload calls this on the engine's handle; the
+/// handle re-runs the DSL loader and republishes the tree — same
+/// mechanism the filesystem watcher uses.
+#[async_trait]
+pub trait ReloadHandler: Send + Sync {
+    async fn trigger_reload(&self);
+}
 
 #[derive(Clone)]
 pub struct StepEngine {
@@ -45,6 +57,13 @@ pub struct StepEngine {
     /// every `ExecutionContext` this engine constructs during
     /// step dispatch.
     expr_registry: ExpressionRegistry,
+    /// Audit finding 01 — reloadDsl step handler. `None` = requests
+    /// to reload are logged and no-op'd (matches "not enabled in
+    /// configuration" branch in Java). `Some(h)` = trigger_reload
+    /// is called after every step that carries `reload_dsl: true`.
+    /// Gate is applied by the handler itself: the router-side
+    /// implementation checks `dsl.allow_dsl_reloading` before firing.
+    reload_handler: Option<Arc<dyn ReloadHandler>>,
 }
 
 #[derive(Debug)]
@@ -67,7 +86,17 @@ impl StepEngine {
             dsls: None,
             single_flight: SingleFlightRegistry::new(),
             expr_registry: ExpressionRegistry::default(),
+            reload_handler: None,
         }
+    }
+
+    /// Audit finding 01 — install the reload handler used by
+    /// `reload_dsl: true` step field. Optional: without one, a
+    /// step-authored reload logs at ERROR and is otherwise a no-op
+    /// (matching Java when `allow_dsl_reloading` is off).
+    pub fn with_reload_handler(mut self, handler: Arc<dyn ReloadHandler>) -> Self {
+        self.reload_handler = Some(handler);
+        self
     }
 
     /// Task 045 — attach the pre-parsed expression registry the
@@ -135,6 +164,13 @@ impl StepEngine {
         let mut current_step_idx = 0;
         let mut budget = self.max_iterations;
 
+        // Audit finding 08: per-step recursion counter (Java-parity).
+        // Cap = min(step.max_recursions, self.max_iterations). When
+        // exhausted for a specific step, we ADVANCE past it (matches
+        // Java's `executeNextStepOutsideRecursion`) rather than
+        // terminating the run.
+        let mut recursions: HashMap<String, u32> = HashMap::with_capacity(step_names.len());
+
         while current_step_idx < step_names.len() && budget > 0 {
             budget -= 1;
 
@@ -143,7 +179,37 @@ impl StepEngine {
                 RuuterError::InvalidStep(format!("Step not found: {}", step_name))
             })?;
 
-            let result = self.execute_single_step(step, context).await?;
+            // Per-step recursion cap check BEFORE dispatch. On hit,
+            // advance to the next step in source order (bumping past
+            // the loop) — same behaviour as Java's
+            // executeNextStepOutsideRecursion.
+            let step_cap = per_step_cap(step, self.max_iterations);
+            let current_count = *recursions.get(step_name).unwrap_or(&0);
+            if current_count >= step_cap {
+                current_step_idx += 1;
+                continue;
+            }
+            recursions.insert(step_name.clone(), current_count + 1);
+
+            // Audit finding 03: skip/sleep are inherited base fields
+            // now enforced by the engine, not per-executor. `skip:
+            // true` bypasses the action and falls through in source
+            // order; `sleep: <ms>` is honoured before dispatch.
+            let base = step.base();
+            let skipped = base.and_then(|b| b.skip).unwrap_or(false);
+            if let Some(sleep_ms) = base.and_then(|b| b.sleep) {
+                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+            }
+
+            let result = if skipped {
+                // Skipped step still counts as a transition (budget
+                // decrement above) but produces no state change and
+                // no `next:` directive, so the engine falls through
+                // to source-order next.
+                crate::steps::StepResult::new()
+            } else {
+                self.execute_single_step(step, context).await?
+            };
 
             if result.should_return {
                 return Ok(DslExecutionResult {
@@ -151,6 +217,27 @@ impl StepEngine {
                     status: result.return_status.unwrap_or(200),
                     headers: result.return_headers.unwrap_or_default(),
                 });
+            }
+
+            // Audit finding 01: after the step's action, if the step
+            // requested `reload_dsl: true`, ask the handler to
+            // republish. Handler is Some when the framework wired
+            // one AND (in the router's implementation) config gate
+            // allow_dsl_reloading is true. When wired but gated off
+            // the handler itself no-ops and logs.
+            if !skipped && base.and_then(|b| b.reload_dsl).unwrap_or(false) {
+                match &self.reload_handler {
+                    Some(handler) => {
+                        handler.trigger_reload().await;
+                    }
+                    None => {
+                        error!(
+                            "step {:?} requested reload_dsl but no reload handler is wired \
+                             (dsl.allow_dsl_reloading may be off)",
+                            step_name
+                        );
+                    }
+                }
             }
 
             if let Some(next) = result.next_step {
@@ -165,6 +252,10 @@ impl StepEngine {
             } else {
                 current_step_idx += 1;
             }
+        }
+
+        if budget == 0 {
+            warn!("DSL run exceeded global max_iterations cap ({}); returning empty response", self.max_iterations);
         }
 
         Ok(DslExecutionResult {
@@ -212,6 +303,11 @@ impl StepEngine {
                     .execute(context)
                     .await
             }
+            DslStep::HttpMock(s) => {
+                http_mock::HttpMockStepExecutor::new(s.clone())
+                    .execute(context)
+                    .await
+            }
             DslStep::Switch(s) => {
                 switch::SwitchStepExecutor::new(s.clone())
                     .execute(context)
@@ -256,4 +352,14 @@ impl StepEngine {
             }
         }
     }
+}
+
+/// Effective per-step recursion cap: `min(step.max_recursions, global)`.
+/// Matches Java's `getStepMaxRecursions`. `Declaration` has no base
+/// fields, so returns the global cap.
+fn per_step_cap(step: &DslStep, global: u32) -> u32 {
+    step.base()
+        .and_then(|b| b.max_recursions)
+        .map(|per_step| per_step.min(global))
+        .unwrap_or(global)
 }

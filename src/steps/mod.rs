@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub mod assign;
 pub mod engine;
 pub mod http;
+pub mod http_mock;
 pub mod iterate;
 pub mod log;
 pub mod return_step;
@@ -17,12 +18,58 @@ pub mod switch;
 pub mod template;
 pub mod ws_send;
 
+/// Java-Ruuter base step fields shared by every non-Declaration
+/// step. Every executor consults these via [`DslStep::base()`] and
+/// the engine wraps step dispatch with the corresponding behaviour:
+///
+/// - `skip: true` — engine skips the step's action, still counts as
+///   a transition, falls through to the next step in source order.
+/// - `sleep: <ms>` — engine sleeps that many milliseconds BEFORE
+///   dispatching the step's action.
+/// - `max_recursions` — per-step cap; the engine takes the min of
+///   this and the global `max_step_recursions`. On exhaustion the
+///   engine advances PAST the looping step rather than terminating.
+/// - `reload_dsl: true` (alias `reload_dsls`, `reloadDsl`,
+///   `reloadDsls`) — after the step's action runs, the engine
+///   triggers a fresh DSL tree load (only if
+///   `dsl.allow_dsl_reloading` is on).
+///
+/// All fields serde-default so a step without any of them parses
+/// as `BaseStepFields::default()`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct BaseStepFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<bool>,
+    /// Milliseconds to sleep before executing the step's action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<u64>,
+    /// Per-step recursion cap. Engine enforces min(step, global).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "maxRecursions"
+    )]
+    pub max_recursions: Option<u32>,
+    /// Trigger a DSL tree reload after this step's action. Gated on
+    /// `dsl.allow_dsl_reloading`; a step-authored request when the
+    /// gate is off logs at ERROR and is otherwise a no-op.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "reload_dsls",
+        alias = "reloadDsl",
+        alias = "reloadDsls"
+    )]
+    pub reload_dsl: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum DslStep {
     Assign(AssignStep),
     Return(ReturnStep),
     Http(HttpStep),
+    HttpMock(HttpMockStep),
     Switch(SwitchStep),
     Log(LogStep),
     Template(TemplateStep),
@@ -31,6 +78,48 @@ pub enum DslStep {
     WsSend(WsSendStep),
     SingleFlight(SingleFlightStep),
     Declaration(DeclarationStep),
+}
+
+impl DslStep {
+    /// Access the shared base fields. Returns `None` only for
+    /// `Declaration`, which is DSL metadata rather than an action
+    /// step and has no `skip:` / `sleep:` etc. semantics.
+    pub fn base(&self) -> Option<&BaseStepFields> {
+        match self {
+            DslStep::Assign(s) => Some(&s.base),
+            DslStep::Return(s) => Some(&s.base),
+            DslStep::Http(s) => Some(&s.base),
+            DslStep::HttpMock(s) => Some(&s.base),
+            DslStep::Switch(s) => Some(&s.base),
+            DslStep::Log(s) => Some(&s.base),
+            DslStep::Template(s) => Some(&s.base),
+            DslStep::State(s) => Some(&s.base),
+            DslStep::Iterate(s) => Some(&s.base),
+            DslStep::WsSend(s) => Some(&s.base),
+            DslStep::SingleFlight(s) => Some(&s.base),
+            DslStep::Declaration(_) => None,
+        }
+    }
+
+    /// The step's explicit `next:` value, or `None` if unset.
+    /// Engine treats `None` as "fall through to source-order next"
+    /// (Java-parity, audit finding 03).
+    pub fn explicit_next(&self) -> Option<&str> {
+        match self {
+            DslStep::Assign(s) => s.next.as_deref(),
+            DslStep::Return(s) => s.next.as_deref(),
+            DslStep::Http(s) => s.next.as_deref(),
+            DslStep::HttpMock(s) => s.next.as_deref(),
+            DslStep::Switch(s) => s.next.as_deref(),
+            DslStep::Log(s) => s.next.as_deref(),
+            DslStep::Template(s) => s.next.as_deref(),
+            DslStep::State(s) => s.next.as_deref(),
+            DslStep::Iterate(s) => s.next.as_deref(),
+            DslStep::WsSend(s) => s.next.as_deref(),
+            DslStep::SingleFlight(s) => s.next.as_deref(),
+            DslStep::Declaration(_) => None,
+        }
+    }
 }
 
 /// Task 042 — collapse concurrent duplicate requests keyed on a
@@ -42,6 +131,8 @@ pub struct SingleFlightStep {
     pub single_flight: SingleFlightBody,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -78,6 +169,8 @@ pub struct IterateStep {
     pub iterate: IterateBody,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -105,6 +198,8 @@ pub struct StateStep {
     pub state: StateOp,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -127,8 +222,8 @@ pub struct AssignStep {
     pub assign: HashMap<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skip: Option<bool>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -141,10 +236,15 @@ pub struct ReturnStep {
     pub status: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, Value>>,
+    /// Java-parity: default true — wrap response in `{"response": ...}`
+    /// envelope unless explicitly `wrapper: false`. Handled by the
+    /// router at response-serialisation time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrapper: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -155,10 +255,15 @@ pub struct HttpStep {
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// Java-parity `error:` step name. On upstream non-allowed
+    /// status the executor jumps to this step instead of propagating
+    /// the error (audit finding 04).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -182,6 +287,8 @@ pub struct SwitchStep {
     pub switch: Vec<Condition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -195,6 +302,8 @@ pub struct LogStep {
     pub log: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -202,6 +311,8 @@ pub struct WsSendStep {
     pub ws_send: WsSendArgs,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -234,10 +345,45 @@ pub struct TemplateStep {
     pub body: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<HashMap<String, Value>>,
+    /// Java-parity: header values are `Value` (any JSON, incl. maps
+    /// with `${…}` expressions) and are evaluated at call time
+    /// (audit finding 06). String is coerced from evaluated value.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+/// Java-parity `call: reflect.mock` step. Runs no HTTP request; binds a
+/// synthetic HttpStepResult under `result:` so downstream steps see
+/// the same shape as an `http.<verb>` call (audit finding 09).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpMockStep {
+    pub call: String,
+    pub args: HttpMockArgs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpMockArgs {
+    /// Optional request-shape echo. When present, is bound under
+    /// `.request` on the synthetic HttpStepResult so DSLs can assert
+    /// on what they "would have sent." Not evaluated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Value>,
+    /// The mocked response. Bound under `.response.body` on the
+    /// synthetic HttpStepResult; `.response.status` defaults to 200.
+    pub response: Value,
+    /// Optional response status. Defaults to 200 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
 }
 
 pub trait StepExecutor {

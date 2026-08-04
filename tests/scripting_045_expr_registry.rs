@@ -52,7 +52,7 @@ fn tiny_dsl_with_exprs(exprs: &[&str]) -> Dsl {
             DslStep::Assign(AssignStep {
                 assign: assign_map,
                 next: None,
-                skip: None,
+                base: Default::default(),
             }),
         );
     }
@@ -64,6 +64,7 @@ fn tiny_dsl_with_exprs(exprs: &[&str]) -> Dsl {
             headers: None,
             wrapper: None,
             next: None,
+            base: Default::default(),
         }),
     );
     Dsl::new(steps)
