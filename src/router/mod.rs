@@ -475,10 +475,29 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
 
-    let headers_map: HashMap<String, String> = headers
+    let mut headers_map: HashMap<String, String> = headers
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
+
+    // Audit finding 07 (Java parity):
+    // ApplicationProperties.incomingRequests.headers is injected into
+    // every request's header map. Java has script-eval on the values
+    // (`Map<String, Object>`); Rust's config is `HashMap<String,
+    // String>` which is a strict subset — no eval needed. Later
+    // wins: the config-declared headers OVERWRITE any client-sent
+    // header of the same name (matches Java's `.putAll`).
+    //
+    // axum lower-cases HTTP header names when it exposes them; the
+    // context ships headers verbatim into `${incoming.headers.*}`
+    // as a JS object, and JS object keys are case-sensitive. We
+    // lower-case config keys here so operators can write
+    // `X-Canary` in ruuter.yaml but DSLs still read via
+    // `incoming.headers['x-canary']` (consistent with client-sent
+    // headers).
+    for (k, v) in &router.config.incoming_requests.headers {
+        headers_map.insert(k.to_ascii_lowercase(), v.clone());
+    }
 
     // Read body bytes (up to 16 MiB) then parse as JSON object.
     let body_bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await {
