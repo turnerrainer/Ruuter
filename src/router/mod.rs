@@ -283,6 +283,60 @@ impl DslRouter {
         let mut new_headers = headers;
         new_headers.insert("traceparent".to_string(), traceparent.clone());
 
+        // Audit finding 10: enforce declare-block allowlists (Java's
+        // DslService `filterFields` + `checkFields`). Body / query /
+        // header maps are filtered down to the declared allowlist;
+        // POST body additionally must CONTAIN every declared field
+        // (`checkFields`). GET runs the check against the query.
+        // Missing declaration = permissive (matches Java).
+        let mut body = body;
+        let mut query = query;
+        let mut new_headers = new_headers;
+        if let Some(decl) = &dsl.declaration {
+            if let Some(allow) = decl.effective_allowed_body() {
+                filter_str_keyed(&mut body, &allow);
+                if uppercase_method == "POST" {
+                    for field in &allow {
+                        if !body.contains_key(field) {
+                            return Err(RuuterError::DslExecution {
+                                step: "declare".into(),
+                                message: format!("Field missing: {}", field),
+                            });
+                        }
+                    }
+                }
+            }
+            if let Some(allow) = decl.effective_allowed_params() {
+                // Preserve the framework-injected `pathParams` key so
+                // path-param DSLs keep working regardless of the
+                // declared allowlist.
+                let path_params_saved = query.remove("pathParams");
+                filter_str_keyed(&mut query, &allow);
+                if let Some(pp) = path_params_saved {
+                    query.insert("pathParams".to_string(), pp);
+                }
+                if uppercase_method == "GET" {
+                    if let Some(allow_body) = decl.effective_allowed_body() {
+                        for field in &allow_body {
+                            if !query.contains_key(field) {
+                                return Err(RuuterError::DslExecution {
+                                    step: "declare".into(),
+                                    message: format!("Field missing: {}", field),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(allow) = decl.effective_allowed_header() {
+                filter_str_keyed(&mut new_headers, &allow);
+                // Keep traceparent regardless — framework-injected.
+                new_headers
+                    .entry("traceparent".to_string())
+                    .or_insert(traceparent.clone());
+            }
+        }
+
         let context = ExecutionContext::with_state(
             body,
             query,
@@ -886,6 +940,15 @@ fn is_override_guard(dsl: &Dsl) -> bool {
         .as_ref()
         .and_then(|d| d.override_ancestors)
         .unwrap_or(false)
+}
+
+/// Audit finding 10 helper — restrict `map` to keys in `allowed`.
+/// Generic over the value type so we can filter body/query/headers
+/// with one implementation. Java's `DslService.filterFields`.
+fn filter_str_keyed<V>(map: &mut HashMap<String, V>, allowed: &[String]) {
+    let allowed_set: std::collections::HashSet<&str> =
+        allowed.iter().map(String::as_str).collect();
+    map.retain(|k, _| allowed_set.contains(k.as_str()));
 }
 
 fn parse_payload(text: &str) -> Value {
