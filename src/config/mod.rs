@@ -54,6 +54,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub response: ResponseConfig,
 
+    /// Audit finding 13 — Java `defaultDslInCaseOfException` parity.
+    /// When set, an HTTP step whose status falls outside
+    /// `http_codes_allow_list` AND has no local `error:` step will
+    /// invoke this fallback DSL. The fallback receives an enriched
+    /// body containing `statusCode`, `responseBody`, and
+    /// `failedRequestId` (traceparent trace id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_dsl_in_case_of_exception: Option<DefaultHttpDslConfig>,
+
     #[serde(default)]
     pub internal_requests: InternalRequestsConfig,
 
@@ -145,6 +154,44 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// Audit finding 13 — Java `DefaultHttpDsl` shape. Names an HTTP DSL
+/// (routed as `<request_type> /<project>/<dsl>`) to invoke when an
+/// upstream call errors out and no local `error:` step is set.
+///
+/// `body`, `query`, and `headers` are supplied verbatim to the
+/// fallback DSL. The framework enriches `body` with `statusCode`,
+/// `responseBody`, and `failedRequestId` (traceparent trace id)
+/// keys before dispatch (Java's `DefaultHttpDsl.executeHttpDefaultDsl`).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct DefaultHttpDslConfig {
+    /// DSL name relative to the project. Java: `dsl:` field.
+    pub dsl: String,
+    /// HTTP method used to look up the fallback DSL. Defaults to
+    /// POST (matches Java's `requestType` default in samples).
+    #[serde(default = "default_exception_request_type", alias = "requestType")]
+    pub request_type: String,
+    /// Project the fallback DSL lives under. Rust has a project
+    /// layer that Java doesn't — operators explicitly name it here.
+    /// Defaults to "framework" so operators can drop a
+    /// `DSL/framework/POST/default-dsl.yml` and reference it by
+    /// bare `dsl: default-dsl`.
+    #[serde(default = "default_exception_project")]
+    pub project: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub body: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub query: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+}
+
+fn default_exception_request_type() -> String {
+    "POST".to_string()
+}
+fn default_exception_project() -> String {
+    "framework".to_string()
 }
 
 /// Audit finding 12 — response-shape defaults. See `AppConfig::response`
@@ -439,6 +486,7 @@ impl Default for AppConfig {
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
             response: ResponseConfig::default(),
+            default_dsl_in_case_of_exception: None,
         }
     }
 }

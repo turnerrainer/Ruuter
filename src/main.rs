@@ -140,6 +140,12 @@ async fn main() {
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
     }
+    // Audit finding 13 — install the default exception DSL config
+    // if the operator set one. HttpStepExecutor invokes it on
+    // upstream error when no local `error:` handler is set.
+    if let Some(cfg) = config.default_dsl_in_case_of_exception.clone() {
+        engine = engine.with_default_exception_dsl(cfg);
+    }
 
     let trigger_dispatcher = Arc::new(TriggerDispatcher::new(
         loaded.triggers,

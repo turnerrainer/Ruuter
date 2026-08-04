@@ -1,6 +1,7 @@
 use crate::context::ExecutionContext;
 use crate::http_client::HttpClient;
 use crate::scripting::ScriptEngine;
+use crate::steps::engine::StepEngine;
 use crate::steps::{HttpStep, StepExecutor, StepResult};
 use crate::{Result, RuuterError};
 use reqwest::Method;
@@ -12,6 +13,11 @@ pub struct HttpStepExecutor {
     step: HttpStep,
     script_engine: ScriptEngine,
     http_client: HttpClient,
+    /// Audit finding 13 — carries the StepEngine so, on an upstream
+    /// error without a local `error:` step, we can invoke the
+    /// configured default_dsl_in_case_of_exception. Optional so the
+    /// pre-existing single-arg constructor still works.
+    engine: Option<StepEngine>,
 }
 
 impl HttpStepExecutor {
@@ -20,6 +26,18 @@ impl HttpStepExecutor {
             step,
             script_engine: ScriptEngine::new(),
             http_client,
+            engine: None,
+        }
+    }
+
+    /// Constructor variant that gives the step access to the engine
+    /// so it can invoke the default exception DSL on failure.
+    pub fn with_engine(step: HttpStep, http_client: HttpClient, engine: StepEngine) -> Self {
+        Self {
+            step,
+            script_engine: ScriptEngine::new(),
+            http_client,
+            engine: Some(engine),
         }
     }
 }
@@ -124,6 +142,36 @@ impl StepExecutor for HttpStepExecutor {
                     next_step: Some(err_step.clone()),
                     ..StepResult::new()
                 });
+            }
+            // Audit finding 13: fallback DSL. Java's
+            // `defaultDslInCaseOfException` runs the configured
+            // recovery DSL before the throw. We invoke it here
+            // (fire-and-await) so the fallback can log / notify /
+            // enqueue-for-retry / return-through-the-parent. The
+            // fallback's return value is DISCARDED — we still
+            // propagate the upstream error to the caller (matches
+            // Java which throws IllegalArgumentException after
+            // executing the default DSL). If the fallback itself
+            // errors, log it and continue with the original error.
+            if let Some(engine) = &self.engine {
+                if let Some(cfg) = engine.default_exception_dsl().cloned() {
+                    let failed_id = context.trace_id();
+                    if let Err(e) = engine
+                        .invoke_default_exception_dsl(
+                            &cfg,
+                            response.status,
+                            response.body.as_ref(),
+                            failed_id.as_deref(),
+                            context,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "default exception DSL '{}' failed: {} (original upstream status was {})",
+                            cfg.dsl, e, response.status
+                        );
+                    }
+                }
             }
             return Err(RuuterError::HttpRequest(format!(
                 "upstream status {} not in http_codes_allow_list",

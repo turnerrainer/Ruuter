@@ -64,6 +64,11 @@ pub struct StepEngine {
     /// Gate is applied by the handler itself: the router-side
     /// implementation checks `dsl.allow_dsl_reloading` before firing.
     reload_handler: Option<Arc<dyn ReloadHandler>>,
+    /// Audit finding 13 — default exception DSL. When set and an
+    /// HTTP step's status is outside `http_codes_allow_list` AND
+    /// the step has no local `error:`, HttpStepExecutor asks the
+    /// engine to invoke this DSL with an enriched body.
+    default_exception_dsl: Option<crate::config::DefaultHttpDslConfig>,
 }
 
 #[derive(Debug)]
@@ -95,7 +100,92 @@ impl StepEngine {
             single_flight: SingleFlightRegistry::new(),
             expr_registry: ExpressionRegistry::default(),
             reload_handler: None,
+            default_exception_dsl: None,
         }
+    }
+
+    /// Audit finding 13 — attach the default exception DSL config.
+    /// HttpStepExecutor invokes it when an upstream call errors and
+    /// the step has no local error: handler.
+    pub fn with_default_exception_dsl(
+        mut self,
+        cfg: crate::config::DefaultHttpDslConfig,
+    ) -> Self {
+        self.default_exception_dsl = Some(cfg);
+        self
+    }
+
+    pub fn default_exception_dsl(&self) -> Option<&crate::config::DefaultHttpDslConfig> {
+        self.default_exception_dsl.as_ref()
+    }
+
+    /// Audit finding 13 — invoke the default exception DSL with an
+    /// enriched body. Returns the fallback's `DslExecutionResult`
+    /// (or an error if the fallback DSL doesn't exist). Body is
+    /// merged: framework-provided (statusCode, responseBody,
+    /// failedRequestId) then config-declared body fields (config
+    /// values win).
+    pub async fn invoke_default_exception_dsl(
+        &self,
+        cfg: &crate::config::DefaultHttpDslConfig,
+        upstream_status: u16,
+        upstream_body: Option<&serde_json::Value>,
+        failed_request_id: Option<&str>,
+        parent_ctx: &ExecutionContext,
+    ) -> Result<DslExecutionResult> {
+        let dsls_handle = self.dsls.as_ref().ok_or_else(|| {
+            RuuterError::InvalidStep(
+                "default_dsl_in_case_of_exception invoked but engine has no DSL tree".into(),
+            )
+        })?;
+        let dsls = dsls_handle.load();
+        let method = cfg.request_type.to_uppercase();
+        let dsl_key = format!("{}/{}", method, cfg.dsl.trim_matches('/'));
+        let dsl = dsls
+            .get(&cfg.project)
+            .and_then(|by_method| by_method.get(&method))
+            .and_then(|by_key| by_key.get(&dsl_key))
+            .ok_or_else(|| {
+                RuuterError::FileNotFound(format!(
+                    "default exception DSL not found: {}/{} (project={})",
+                    method, dsl_key, cfg.project
+                ))
+            })?
+            .clone();
+
+        // Framework-provided enrichment first, then config body over
+        // top (config wins per Java's `body.put(...)` before evaluate).
+        let mut body: HashMap<String, Value> = HashMap::new();
+        body.insert(
+            "statusCode".to_string(),
+            Value::Number(upstream_status.into()),
+        );
+        body.insert(
+            "responseBody".to_string(),
+            upstream_body.cloned().unwrap_or(Value::Null),
+        );
+        body.insert(
+            "failedRequestId".to_string(),
+            Value::String(failed_request_id.unwrap_or("").to_string()),
+        );
+        for (k, v) in &cfg.body {
+            body.insert(k.clone(), v.clone());
+        }
+
+        let query: HashMap<String, Value> = cfg.query.clone();
+        let headers: HashMap<String, String> = cfg.headers.clone();
+
+        let child_ctx = ExecutionContext::with_state(
+            body,
+            query,
+            headers,
+            parent_ctx.request_origin().to_string(),
+            cfg.project.clone(),
+            parent_ctx.state().clone(),
+        )
+        .with_expr_registry(self.expr_registry.clone());
+
+        self.run(&dsl, &child_ctx).await
     }
 
     /// Audit finding 01 — install the reload handler used by
@@ -309,9 +399,16 @@ impl StepEngine {
                     .await
             }
             DslStep::Http(s) => {
-                http::HttpStepExecutor::new(s.clone(), self.http_client.clone())
-                    .execute(context)
-                    .await
+                // Give the executor the engine handle so it can
+                // invoke the default exception DSL on upstream error
+                // (audit finding 13).
+                http::HttpStepExecutor::with_engine(
+                    s.clone(),
+                    self.http_client.clone(),
+                    self.clone(),
+                )
+                .execute(context)
+                .await
             }
             DslStep::HttpMock(s) => {
                 http_mock::HttpMockStepExecutor::new(s.clone())
