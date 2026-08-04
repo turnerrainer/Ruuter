@@ -39,6 +39,12 @@ async fn main() {
         None => info!("Using built-in default config (no ruuter.yaml found)"),
     }
 
+    // Audit finding 15 — warn at boot when a config field parses but
+    // isn't fully honoured. Prevents the silent-drop pattern that let
+    // Java operators port `application.yml` verbatim and get a
+    // no-op at runtime for fields the framework doesn't wire yet.
+    ruuter_on_rust::config::warn_on_stale_config_fields(&config);
+
     // Install script-engine limits before any ScriptEngine::new() runs.
     scripting::install_default_limits(ScriptLimits {
         max_loop_iterations: config.scripting.max_loop_iterations,

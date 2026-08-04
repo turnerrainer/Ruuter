@@ -583,6 +583,71 @@ impl AppConfig {
     }
 }
 
+/// Audit finding 15 — startup warning for config fields that the
+/// framework accepts (so operators can port a Java `application.yml`
+/// as-is) but doesn't yet wire end-to-end. Each warn line names the
+/// affected field AND the intended contract so an operator can tell
+/// "not implemented" from "wrong value."
+///
+/// Runs once at boot from main.rs, AFTER config load and BEFORE
+/// listener startup, so the signal is visible in the same log
+/// stream as the "Loaded config from …" line.
+pub fn warn_on_stale_config_fields(config: &AppConfig) {
+    // stop_in_case_of_exception=false is un-honoured (the engine
+    // propagates every step error via `?`, so it always stops).
+    if !config.stop_in_case_of_exception {
+        tracing::warn!(
+            "config: stop_in_case_of_exception=false is not honoured — the engine \
+             always halts a run on step error (Java's continue-on-error semantics \
+             are not implemented). Remove the setting or leave the default (true)."
+        );
+    }
+
+    // The four logging.* flags are documented but currently no
+    // consumer reads them. Warn per-flag so operators can see which
+    // knob is inert.
+    if config.logging.display_request_content {
+        tracing::warn!(
+            "config: logging.display_request_content=true has no effect yet — \
+             http-step body/query/header logging is not implemented."
+        );
+    }
+    if config.logging.display_response_content {
+        tracing::warn!(
+            "config: logging.display_response_content=true has no effect yet — \
+             http-step response-body logging is not implemented."
+        );
+    }
+    if config.logging.print_stack_trace {
+        tracing::warn!(
+            "config: logging.print_stack_trace=true has no effect yet — \
+             engine errors always render via Display."
+        );
+    }
+    if config.logging.meaningful_errors {
+        tracing::warn!(
+            "config: logging.meaningful_errors=true has no effect yet — \
+             engine does not distinguish meaningful vs. raw error paths."
+        );
+    }
+
+    // allowed_filetypes vs processed_filetypes — pre-fix Rust only
+    // reads processed_filetypes. Warn when they differ so operators
+    // know allowed_filetypes was silently the same list.
+    let allowed: std::collections::HashSet<_> =
+        config.dsl.allowed_filetypes.iter().collect();
+    let processed: std::collections::HashSet<_> =
+        config.dsl.processed_filetypes.iter().collect();
+    if allowed != processed {
+        tracing::warn!(
+            "config: dsl.allowed_filetypes differs from dsl.processed_filetypes — \
+             the loader only consults processed_filetypes. allowed_filetypes is a \
+             Java-parity noun that has no gating effect. Fold the two into \
+             processed_filetypes or accept that allowed_filetypes is inert."
+        );
+    }
+}
+
 pub fn load_constants(path: &str) -> crate::Result<HashMap<String, String>> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
