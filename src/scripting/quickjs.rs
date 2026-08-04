@@ -174,13 +174,16 @@ fn evaluate_string<'js>(
     if segs.len() == 1 {
         let (start, end, ref inner) = segs[0];
         if start == 0 && end == s.len() {
-            return execute_js(inner, ctx, registry, session);
+            let v = execute_js(inner, ctx, registry, session)?;
+            return maybe_suppress_optional_null(v, inner);
         }
     }
     // Whole-string `$=...=` line pattern
     if let Some(caps) = LINE_PATTERN.captures(s) {
         if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], ctx, registry, session);
+            let inner = &caps[1];
+            let v = execute_js(inner, ctx, registry, session)?;
+            return maybe_suppress_optional_null(v, inner);
         }
     }
 
@@ -191,8 +194,15 @@ fn evaluate_string<'js>(
     for (start, end, inner) in &segs {
         out.push_str(&s[cursor..*start]);
         match execute_js(inner, ctx, registry, session) {
-            Ok(Value::String(s2)) => out.push_str(&s2),
-            Ok(other) => out.push_str(&other.to_string()),
+            Ok(v) => {
+                // Audit finding 17: .optional. null suppression on
+                // each segment of a mixed string.
+                let coerced = maybe_suppress_optional_null(v, inner)?;
+                match coerced {
+                    Value::String(s2) => out.push_str(&s2),
+                    other => out.push_str(&other.to_string()),
+                }
+            }
             Err(e) => {
                 if last_err.is_none() {
                     last_err = Some(e);
@@ -207,6 +217,17 @@ fn evaluate_string<'js>(
         return Err(e);
     }
     Ok(Value::String(out))
+}
+
+/// Audit finding 17 — Java's `filterEmptyOptional`. See the
+/// matching helper in `boa.rs` for the full docstring; QuickJS and
+/// Boa share semantics so a DSL author writes the same YAML on
+/// either backend.
+fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
+    if matches!(v, Value::Null) && (expr.contains(".optional.") || expr.contains(".optional_")) {
+        return Ok(Value::String(String::new()));
+    }
+    Ok(v)
 }
 
 fn execute_js<'js>(

@@ -98,12 +98,13 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
     if segs.len() == 1 {
         let (start, end, ref inner) = segs[0];
         if start == 0 && end == s.len() {
-            return execute_js(inner, boa);
+            return maybe_suppress_optional_null(execute_js(inner, boa)?, inner);
         }
     }
     if let Some(caps) = LINE_PATTERN.captures(s) {
         if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], boa);
+            let inner = &caps[1];
+            return maybe_suppress_optional_null(execute_js(inner, boa)?, inner);
         }
     }
 
@@ -114,8 +115,17 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
     for (start, end, inner) in &segs {
         out.push_str(&s[cursor..*start]);
         match execute_js(inner, boa) {
-            Ok(Value::String(s2)) => out.push_str(&s2),
-            Ok(other) => out.push_str(&other.to_string()),
+            Ok(v) => {
+                // Audit finding 17: `.optional.` in the expression
+                // text suppresses null → "" (Java's
+                // filterEmptyOptional). Applied per-segment for
+                // mixed strings.
+                let coerced = maybe_suppress_optional_null(v, inner)?;
+                match coerced {
+                    Value::String(s2) => out.push_str(&s2),
+                    other => out.push_str(&other.to_string()),
+                }
+            }
             Err(e) => {
                 if last_err.is_none() {
                     last_err = Some(e);
@@ -131,6 +141,26 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
         return Err(e);
     }
     Ok(Value::String(out))
+}
+
+/// Audit finding 17 — Java's `filterEmptyOptional`. When a script
+/// expression's text contains `.optional.` or `.optional_`, a null
+/// / undefined result is coerced to `""` (empty string). This lets
+/// DSL authors reach optional response fields without wrapping each
+/// access in a `switch:` guard:
+///
+/// ```yaml
+/// assign:
+///   tag: "${incoming.body.optional.tag}"   # missing → "", not null
+/// ```
+///
+/// Rust exposes evaluated null as `Value::Null` — coerce to empty
+/// string when the expression text opts in.
+fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
+    if matches!(v, Value::Null) && (expr.contains(".optional.") || expr.contains(".optional_")) {
+        return Ok(Value::String(String::new()));
+    }
+    Ok(v)
 }
 
 fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
