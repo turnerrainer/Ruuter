@@ -76,6 +76,7 @@
 use crate::config::AppConfig;
 use crate::dsl::loader::DslLoader;
 use crate::router::DslRouter;
+use async_trait::async_trait;
 use notify::event::{EventKind, ModifyKind};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
@@ -86,6 +87,61 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+
+/// Audit finding 01 — implements `steps::engine::ReloadHandler` on
+/// the same call chain the filesystem watcher uses. When a DSL step
+/// with `reload_dsl: true` runs, the engine invokes
+/// `StepReloadHandler::trigger_reload`; that dispatches into
+/// [`reload_once`] on a blocking task, gated on
+/// `config.dsl.allow_dsl_reloading`.
+///
+/// Constructing one requires the same triple as the watcher: the
+/// current config, the boot-time constants snapshot, and the router
+/// handle to publish onto. Main wires it before building the engine.
+pub struct StepReloadHandler {
+    config: AppConfig,
+    constants: HashMap<String, String>,
+    router: Arc<DslRouter>,
+}
+
+impl StepReloadHandler {
+    pub fn new(
+        config: AppConfig,
+        constants: HashMap<String, String>,
+        router: Arc<DslRouter>,
+    ) -> Self {
+        Self {
+            config,
+            constants,
+            router,
+        }
+    }
+}
+
+#[async_trait]
+impl crate::steps::engine::ReloadHandler for StepReloadHandler {
+    async fn trigger_reload(&self) {
+        // Java: "Only allow reloading if it's enabled in
+        // configuration." Log at ERROR (matches Java's log-and-drop
+        // when the gate is off) so operators can see when a DSL
+        // step is asking for a reload it can't get.
+        if !self.config.dsl.allow_dsl_reloading {
+            tracing::error!(
+                "reloadDsl step ran but dsl.allow_dsl_reloading is off — reload NOT performed"
+            );
+            return;
+        }
+        let config = self.config.clone();
+        let constants = self.constants.clone();
+        let router = self.router.clone();
+        let join = tokio::task::spawn_blocking(move || {
+            reload_once(&config, &constants, &router);
+        });
+        if let Err(e) = join.await {
+            tracing::error!("reloadDsl step: reload task panicked: {}", e);
+        }
+    }
+}
 
 /// Debounce window. A single "Save All" in an editor can produce ~10
 /// per-file events within a few ms; a git checkout of a feature
@@ -264,7 +320,7 @@ fn is_under_reserved_subdir(path: &Path, dsl_root: &Path) -> bool {
     RESERVED_SUBDIRS.contains(&second)
 }
 
-fn reload_once(config: &AppConfig, constants: &HashMap<String, String>, router: &DslRouter) {
+pub(crate) fn reload_once(config: &AppConfig, constants: &HashMap<String, String>, router: &DslRouter) {
     debug!("hot-reload: re-scanning DSL tree");
     let loader = DslLoader::new(config.clone(), constants.clone());
     match loader.load_everything() {

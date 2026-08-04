@@ -40,6 +40,11 @@ pub struct DeclarationStep {
     /// stricter admin gate that shouldn't be additive to a folder-wide
     /// "authenticated" check.
     pub override_ancestors: Option<bool>,
+    /// Audit finding 01 — Declaration steps also carry the base
+    /// fields so a bare `{ reload_dsl: true, next: end }` step can
+    /// trigger a reload (see parser's control-flow-only fallback).
+    #[serde(flatten)]
+    pub base: crate::steps::BaseStepFields,
 }
 
 /// Audit finding 10 — Java's structured `allowlist:` block. Each

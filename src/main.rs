@@ -215,6 +215,19 @@ async fn main() {
         http_client_for_handle.set_self_call_handler(router.clone());
     }
 
+    // Audit finding 01: install the step-driven reload handler.
+    // Every clone of the engine sees the same OnceCell slot, so
+    // one set() is enough. Handler itself gates on
+    // `dsl.allow_dsl_reloading` when the step fires — matches
+    // Java's "not enabled in configuration" log-and-drop.
+    engine.set_reload_handler(std::sync::Arc::new(
+        ruuter_on_rust::dsl::hot_reload::StepReloadHandler::new(
+            config.clone(),
+            constants.clone(),
+            router.clone(),
+        ),
+    ));
+
     // DSL hot-reload watcher (dev-only). Off by default. See the
     // module docstring for security posture and the exhaustive list
     // of what does / does not reload.

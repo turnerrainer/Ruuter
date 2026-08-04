@@ -57,13 +57,16 @@ pub struct StepEngine {
     /// every `ExecutionContext` this engine constructs during
     /// step dispatch.
     expr_registry: ExpressionRegistry,
-    /// Audit finding 01 — reloadDsl step handler. `None` = requests
-    /// to reload are logged and no-op'd (matches "not enabled in
-    /// configuration" branch in Java). `Some(h)` = trigger_reload
-    /// is called after every step that carries `reload_dsl: true`.
-    /// Gate is applied by the handler itself: the router-side
-    /// implementation checks `dsl.allow_dsl_reloading` before firing.
-    reload_handler: Option<Arc<dyn ReloadHandler>>,
+    /// Audit finding 01 — reloadDsl step handler. Empty OnceCell
+    /// = requests to reload are logged and no-op'd (matches "not
+    /// enabled in configuration" branch in Java). Populated =
+    /// trigger_reload is called after every step that carries
+    /// `reload_dsl: true`. Wrapped in Arc<OnceCell> because the
+    /// engine is built BEFORE the router (which the handler needs
+    /// to publish onto); main.rs sets the handler post-hoc via
+    /// `set_reload_handler`. Every clone of the engine sees the
+    /// same shared slot.
+    reload_handler: Arc<once_cell::sync::OnceCell<Arc<dyn ReloadHandler>>>,
     /// Audit finding 13 — default exception DSL. When set and an
     /// HTTP step's status is outside `http_codes_allow_list` AND
     /// the step has no local `error:`, HttpStepExecutor asks the
@@ -99,7 +102,7 @@ impl StepEngine {
             dsls: None,
             single_flight: SingleFlightRegistry::new(),
             expr_registry: ExpressionRegistry::default(),
-            reload_handler: None,
+            reload_handler: Arc::new(once_cell::sync::OnceCell::new()),
             default_exception_dsl: None,
         }
     }
@@ -189,12 +192,16 @@ impl StepEngine {
     }
 
     /// Audit finding 01 — install the reload handler used by
-    /// `reload_dsl: true` step field. Optional: without one, a
-    /// step-authored reload logs at ERROR and is otherwise a no-op
-    /// (matching Java when `allow_dsl_reloading` is off).
-    pub fn with_reload_handler(mut self, handler: Arc<dyn ReloadHandler>) -> Self {
-        self.reload_handler = Some(handler);
-        self
+    /// `reload_dsl: true` step field. First-write-wins via OnceCell
+    /// so main.rs can wire the router-side handler AFTER building
+    /// the router (which internally requires the engine). Without a
+    /// handler installed, a step-authored reload logs at ERROR and
+    /// is otherwise a no-op (matching Java when
+    /// `allow_dsl_reloading` is off).
+    pub fn set_reload_handler(&self, handler: Arc<dyn ReloadHandler>) {
+        if self.reload_handler.set(handler).is_err() {
+            tracing::warn!("StepEngine::set_reload_handler called twice — ignoring second");
+        }
     }
 
     /// Task 045 — attach the pre-parsed expression registry the
@@ -325,7 +332,7 @@ impl StepEngine {
             // allow_dsl_reloading is true. When wired but gated off
             // the handler itself no-ops and logs.
             if !skipped && base.and_then(|b| b.reload_dsl).unwrap_or(false) {
-                match &self.reload_handler {
+                match self.reload_handler.get() {
                     Some(handler) => {
                         handler.trigger_reload().await;
                     }

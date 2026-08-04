@@ -97,7 +97,7 @@ impl DslStep {
             DslStep::Iterate(s) => Some(&s.base),
             DslStep::WsSend(s) => Some(&s.base),
             DslStep::SingleFlight(s) => Some(&s.base),
-            DslStep::Declaration(_) => None,
+            DslStep::Declaration(d) => Some(&d.base),
         }
     }
 
