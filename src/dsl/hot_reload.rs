@@ -438,7 +438,6 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    #[allow(non_snake_case)]
     fn access_open_does_NOT_trigger() {
         let ev = debounced(
             EventKind::Access(AccessKind::Open(notify::event::AccessMode::Read)),

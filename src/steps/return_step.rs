@@ -123,7 +123,7 @@ fn render_set_cookie(value: &Value) -> String {
             let mut parts: Vec<String> = Vec::with_capacity(out.len());
             for (k, v) in &out {
                 match v {
-                    Value::Bool(true) => parts.push(format!("{}", k)),
+                    Value::Bool(true) => parts.push(k.to_string()),
                     Value::Bool(false) => {
                         // false means "don't set" — drop the flag
                     }

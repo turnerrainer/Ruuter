@@ -304,8 +304,6 @@ impl DslRouter {
         // (`checkFields`). GET runs the check against the query.
         // Missing declaration = permissive (matches Java).
         let mut body = body;
-        let mut query = query;
-        let mut new_headers = new_headers;
         if let Some(decl) = &dsl.declaration {
             if let Some(allow) = decl.effective_allowed_body() {
                 filter_str_keyed(&mut body, &allow);
