@@ -210,7 +210,21 @@ impl DslRouter {
             return longest_override.into_iter().collect();
         }
 
-        matches.into_iter().map(|(_, d)| d).collect()
+        // Audit finding 14: guard mode. Default `Stack` returns
+        // every ancestor guard (outer-first, already sorted).
+        // `ClosestOnly` keeps only the LAST entry (longest key,
+        // innermost ancestor) — matches Java's DslService.getGuard
+        // recursive strip-and-lookup.
+        match self.config.guards.mode {
+            crate::config::GuardMode::Stack => {
+                matches.into_iter().map(|(_, d)| d).collect()
+            }
+            crate::config::GuardMode::ClosestOnly => matches
+                .into_iter()
+                .last()
+                .map(|(_, d)| vec![d])
+                .unwrap_or_default(),
+        }
     }
 
     pub fn build_axum_router(self) -> Router {

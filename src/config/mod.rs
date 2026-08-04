@@ -63,6 +63,14 @@ pub struct AppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_dsl_in_case_of_exception: Option<DefaultHttpDslConfig>,
 
+    /// Audit finding 14 — guard evaluation mode. Default `Stack`
+    /// (current Rust behaviour: every ancestor guard runs
+    /// outer-first). `ClosestOnly` matches Java's `DslService.getGuard`
+    /// which runs ONLY the innermost ancestor guard. Guards with
+    /// `override_ancestors: true` still override in either mode.
+    #[serde(default)]
+    pub guards: GuardsConfig,
+
     #[serde(default)]
     pub internal_requests: InternalRequestsConfig,
 
@@ -154,6 +162,26 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// Audit finding 14 — guard evaluation mode.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct GuardsConfig {
+    #[serde(default)]
+    pub mode: GuardMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardMode {
+    /// Current Rust behaviour: every matching ancestor guard runs
+    /// outer-first. Safer default (more checks). Preserved for
+    /// operators who rely on stacked guards.
+    #[default]
+    Stack,
+    /// Java parity: only the closest (longest-key) ancestor guard
+    /// runs. Ancestor guards are silently skipped.
+    ClosestOnly,
 }
 
 /// Audit finding 13 — Java `DefaultHttpDsl` shape. Names an HTTP DSL
@@ -487,6 +515,7 @@ impl Default for AppConfig {
             listeners: Vec::new(),
             response: ResponseConfig::default(),
             default_dsl_in_case_of_exception: None,
+            guards: GuardsConfig::default(),
         }
     }
 }
