@@ -401,6 +401,11 @@ pub struct StepResult {
     pub return_value: Option<Value>,
     pub return_status: Option<u16>,
     pub return_headers: Option<HashMap<String, String>>,
+    /// Audit finding 05/12 — carries the ReturnStep's `wrapper:`
+    /// value (default `true` per Java parity). Router uses this at
+    /// response serialisation to decide whether to wrap in
+    /// `{"response": <value>}`.
+    pub return_wrapper: Option<bool>,
 }
 
 impl StepResult {

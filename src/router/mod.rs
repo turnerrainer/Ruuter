@@ -563,11 +563,52 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .await;
 
     let (status_code, body_value, extra_headers) = match &dsl_outcome {
-        Ok(result) => (
-            StatusCode::from_u16(result.status).unwrap_or(StatusCode::OK),
-            result.value.clone().unwrap_or(json!({})),
-            result.headers.clone(),
-        ),
+        Ok(result) => {
+            // Audit finding 13 — finalResponse status defaults. When
+            // the DSL didn't set an explicit `status:` on its
+            // return step, the engine reports `status = 200`. If
+            // the operator configured `response.dsl_with_response_status`
+            // (value emitted) or `response.dsl_without_response_status`
+            // (no value emitted), that overrides — matches Java's
+            // `finalResponse.dslWithResponseHttpStatusCode`.
+            let status = if result.status == 200 {
+                if result.value.is_some() {
+                    router
+                        .config
+                        .response
+                        .dsl_with_response_status
+                        .unwrap_or(result.status)
+                } else {
+                    router
+                        .config
+                        .response
+                        .dsl_without_response_status
+                        .unwrap_or(result.status)
+                }
+            } else {
+                result.status
+            };
+
+            // Audit finding 12 — apply wrapper. Order of precedence:
+            //   1. ReturnStep's explicit `wrapper: X` (Some(true|false))
+            //   2. AppConfig `response.default_wrapper` when the step
+            //      didn't specify
+            //   3. Bare raw body (current default, no wrapper)
+            let wrap = result
+                .wrapper
+                .unwrap_or(router.config.response.default_wrapper);
+            let raw = result.value.clone().unwrap_or(json!({}));
+            let body = if wrap {
+                json!({ "response": raw })
+            } else {
+                raw
+            };
+            (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+                body,
+                result.headers.clone(),
+            )
+        }
         Err(RuuterError::FileNotFound(_)) => (
             StatusCode::NOT_FOUND,
             json!({"error": "Not Found"}),

@@ -2,7 +2,17 @@ use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
 use crate::steps::{ReturnStep, StepExecutor, StepResult};
 use crate::Result;
+use serde_json::Value;
 use std::collections::HashMap;
+
+/// Java-parity `Set-Cookie` defaults. When the DSL emits a
+/// `Set-Cookie` header as a JSON object (`{ name: "session", value:
+/// "abc" }`) — or any object shape — these attributes are added if
+/// not already present. Matches
+/// `ReturnStep.addDefaultCookies` in the Java Ruuter.
+///
+/// See audit finding 05.
+const SET_COOKIE_HEADER: &str = "Set-Cookie";
 
 pub struct ReturnStepExecutor {
     step: ReturnStep,
@@ -28,30 +38,150 @@ impl StepExecutor for ReturnStepExecutor {
         let status = if let Some(s) = &self.step.status {
             let evaluated = self.script_engine.evaluate(s, context)?;
             match evaluated {
-                serde_json::Value::Number(n) => n.as_u64().map(|u| u as u16),
+                Value::Number(n) => n.as_u64().map(|u| u as u16),
                 _ => None,
             }
         } else {
             None
         };
 
+        // Audit finding 05: header values are evaluated RECURSIVELY
+        // via the script engine (matches Java's `evaluateScripts` on
+        // Map<String, Object>). Cookie-as-map values then get
+        // Java-parity defaults added (HttpOnly, Secure, Path=/,
+        // Max-Age=28800) before being serialised.
         let headers = if let Some(h) = &self.step.headers {
-            let mut evaluated = HashMap::new();
+            let mut out = HashMap::with_capacity(h.len());
             for (k, v) in h {
-                let val = self.script_engine.evaluate(v, context)?;
-                evaluated.insert(
-                    k.clone(),
-                    match val {
-                        serde_json::Value::String(s) => s,
+                // Recursive script eval — nested `${…}` inside map /
+                // array values resolves against context.
+                let evaluated = self.script_engine.evaluate(v, context)?;
+
+                let header_value = if k.eq_ignore_ascii_case(SET_COOKIE_HEADER) {
+                    render_set_cookie(&evaluated)
+                } else {
+                    match evaluated {
+                        Value::String(s) => s,
                         other => other.to_string(),
-                    },
-                );
+                    }
+                };
+                out.insert(k.clone(), header_value);
             }
-            Some(evaluated)
+            Some(out)
         } else {
             None
         };
 
-        Ok(StepResult::with_return(return_value, status, headers))
+        // Audit finding 05/12: Java default is wrapper = true. We
+        // stash the DSL's wrapper preference into StepResult so the
+        // router (which is the response-serialisation layer) can
+        // honour it. Unset in DSL = None here = router treats as
+        // default-true (Java parity).
+        Ok(StepResult {
+            should_return: true,
+            return_value: Some(return_value),
+            return_status: status,
+            return_headers: headers,
+            return_wrapper: self.step.wrapper,
+            ..StepResult::new()
+        })
+    }
+}
+
+/// Render a `Set-Cookie` header value. When `value` is a string,
+/// pass through as-is. When it's a JSON object, serialise as
+/// `key=value; key=value; …` with Java-parity defaults filled in
+/// (Path=/, HttpOnly, Secure, Max-Age=28800) unless the DSL already
+/// specified them.
+///
+/// The map shape mirrors Java's cookie-as-Object payload: any key
+/// whose value is `true` renders as a bare flag (`HttpOnly;`); any
+/// key whose value is a string renders as `key=value; `; other
+/// types are stringified.
+fn render_set_cookie(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Object(map) => {
+            // Preserve insertion order (serde_json::Map is an
+            // IndexMap when the `preserve_order` feature is on — we
+            // haven't enabled it explicitly, so keys are sorted
+            // alphabetically. That's fine for cookies because
+            // `Set-Cookie` attribute order doesn't affect semantics.
+            let mut out = serde_json::Map::with_capacity(map.len() + 4);
+            for (k, v) in map {
+                out.insert(k.clone(), v.clone());
+            }
+            add_default(&mut out, "Path", Value::String("/".into()));
+            add_default(&mut out, "HttpOnly", Value::Bool(true));
+            add_default(&mut out, "Secure", Value::Bool(true));
+            add_default(
+                &mut out,
+                "Max-Age",
+                Value::Number(serde_json::Number::from(28_800u64)),
+            );
+
+            let mut parts: Vec<String> = Vec::with_capacity(out.len());
+            for (k, v) in &out {
+                match v {
+                    Value::Bool(true) => parts.push(format!("{}", k)),
+                    Value::Bool(false) => {
+                        // false means "don't set" — drop the flag
+                    }
+                    Value::String(s) => parts.push(format!("{}={}", k, s)),
+                    other => parts.push(format!("{}={}", k, other)),
+                }
+            }
+            parts.join("; ")
+        }
+        other => other.to_string(),
+    }
+}
+
+fn add_default(map: &mut serde_json::Map<String, Value>, key: &str, default: Value) {
+    if !map.contains_key(key) {
+        map.insert(key.to_string(), default);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn string_set_cookie_passes_through_verbatim() {
+        assert_eq!(
+            render_set_cookie(&Value::String("session=abc".into())),
+            "session=abc"
+        );
+    }
+
+    #[test]
+    fn object_set_cookie_adds_java_parity_defaults() {
+        let out = render_set_cookie(&json!({ "session": "abc" }));
+        assert!(
+            out.contains("session=abc"),
+            "kept the DSL-authored pair: {out}"
+        );
+        assert!(out.contains("HttpOnly"), "added HttpOnly: {out}");
+        assert!(out.contains("Secure"), "added Secure: {out}");
+        assert!(out.contains("Path=/"), "added Path=/: {out}");
+        assert!(out.contains("Max-Age=28800"), "added Max-Age=28800: {out}");
+    }
+
+    #[test]
+    fn object_set_cookie_does_not_override_dsl_authored_max_age() {
+        let out = render_set_cookie(&json!({ "session": "abc", "Max-Age": 60 }));
+        assert!(out.contains("Max-Age=60"), "kept DSL Max-Age: {out}");
+        assert!(!out.contains("Max-Age=28800"));
+    }
+
+    #[test]
+    fn object_set_cookie_drops_explicit_false_flags() {
+        // If the DSL explicitly sets HttpOnly: false, the flag is
+        // omitted (Java: entry produces empty string for false).
+        let out = render_set_cookie(&json!({ "session": "abc", "HttpOnly": false }));
+        assert!(!out.contains("HttpOnly"), "dropped HttpOnly: false: {out}");
+        assert!(out.contains("session=abc"));
     }
 }

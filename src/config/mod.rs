@@ -44,6 +44,16 @@ pub struct AppConfig {
     #[serde(default)]
     pub response_default_headers: HashMap<String, String>,
 
+    /// Audit finding 12 — response wrapper opt-in. When true and
+    /// the DSL's terminating `return:` step didn't set `wrapper:
+    /// false`, the response body is wrapped in
+    /// `{"response": <value>}` (Java-parity `RuuterResponse` shape).
+    /// Default `false` preserves the current Rust behaviour
+    /// (unwrapped raw body). A ReturnStep's explicit `wrapper:
+    /// true|false` always wins over this config.
+    #[serde(default)]
+    pub response: ResponseConfig,
+
     #[serde(default)]
     pub internal_requests: InternalRequestsConfig,
 
@@ -135,6 +145,34 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// Audit finding 12 — response-shape defaults. See `AppConfig::response`
+/// for the wrapper opt-in semantics; other fields (dsl-with-response
+/// / -without-response status codes) mirror Java's `finalResponse`
+/// block from `application.yml` (finding 13).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ResponseConfig {
+    /// Default wrapper mode when the ReturnStep doesn't specify.
+    /// `false` = raw body (current Rust behaviour). `true` = wrap
+    /// in `{"response": <value>}` (Java parity).
+    #[serde(default)]
+    pub default_wrapper: bool,
+
+    /// Audit finding 13 — Java `finalResponse.dslWithResponseHttpStatusCode`:
+    /// status returned when the DSL's `return:` step emitted a value
+    /// and didn't set an explicit `status:`. `None` = 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsl_with_response_status: Option<u16>,
+
+    /// Audit finding 13 — Java `finalResponse.dslWithoutResponseHttpStatusCode`:
+    /// status returned when the DSL never reached a `return:` step
+    /// (loop-cap exhaustion, empty pipeline, all steps skipped).
+    /// `None` = 200. Java's sample sets 300; operators picking that
+    /// pattern get an explicit "no body" signal separate from a
+    /// happy-path 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsl_without_response_status: Option<u16>,
 }
 
 /// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag
@@ -400,6 +438,7 @@ impl Default for AppConfig {
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
+            response: ResponseConfig::default(),
         }
     }
 }

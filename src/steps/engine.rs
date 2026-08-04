@@ -71,6 +71,14 @@ pub struct DslExecutionResult {
     pub value: Option<Value>,
     pub status: u16,
     pub headers: HashMap<String, String>,
+    /// Audit finding 05/12 — Java-parity: default `true`. When the
+    /// DSL's terminating `return:` step sets `wrapper: false`, the
+    /// router serialises the body raw; otherwise it wraps in
+    /// `{"response": <value>}`. `None` means the DSL never reached
+    /// a `return:` step (e.g. loop-cap exhaustion) — router treats
+    /// that as no wrapper (matches Java's default response shape
+    /// for empty return, which is bare null).
+    pub wrapper: Option<bool>,
 }
 
 impl StepEngine {
@@ -216,6 +224,7 @@ impl StepEngine {
                     value: result.return_value,
                     status: result.return_status.unwrap_or(200),
                     headers: result.return_headers.unwrap_or_default(),
+                    wrapper: result.return_wrapper,
                 });
             }
 
@@ -262,6 +271,7 @@ impl StepEngine {
             value: None,
             status: 200,
             headers: HashMap::new(),
+            wrapper: None,
         })
     }
 
