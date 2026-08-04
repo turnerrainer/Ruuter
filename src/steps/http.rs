@@ -89,6 +89,11 @@ impl StepExecutor for HttpStepExecutor {
             )
             .await?;
 
+        // Bind the result BEFORE the allow-list check so the
+        // `error:` step (and downstream steps in general) can read
+        // the upstream status / body via `${resultName.response.*}`.
+        // Matches Java: DefaultHttpDsl reads the failed response's
+        // status / body from the same context slot.
         if let Some(result_name) = &self.step.result {
             let result_value = json!({
                 "response": {
@@ -98,6 +103,28 @@ impl StepExecutor for HttpStepExecutor {
                 }
             });
             context.set_variable(result_name.clone(), result_value);
+        }
+
+        // Audit finding 04: honour the DSL's `error:` field on
+        // non-allowed status. Java's HttpStep:
+        //   if (!isAllowedHttpStatusCode(...)) {
+        //     if (getOnErrorStep() != null) { setNextStepName(onErrorStep); }
+        //     else { throw new IllegalArgumentException(); }
+        //   }
+        // We mirror that: on non-allowed status, route to `error:`
+        // if set; otherwise propagate. When the step has both an
+        // `error:` and a `next:`, `error:` wins on failure.
+        if !self.http_client.is_status_allowed(response.status) {
+            if let Some(err_step) = &self.step.error {
+                return Ok(StepResult {
+                    next_step: Some(err_step.clone()),
+                    ..StepResult::new()
+                });
+            }
+            return Err(RuuterError::HttpRequest(format!(
+                "upstream status {} not in http_codes_allow_list",
+                response.status
+            )));
         }
 
         Ok(StepResult {

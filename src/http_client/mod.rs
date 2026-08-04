@@ -470,12 +470,12 @@ impl HttpClient {
         let response = request.send().await?;
         let status = response.status().as_u16();
 
-        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&status) {
-            return Err(RuuterError::HttpRequest(format!(
-                "upstream status {} not in http_codes_allow_list",
-                status
-            )));
-        }
+        // Audit finding 04: the `http_codes_allow_list` check moved
+        // out of the transport into the caller (HttpStepExecutor).
+        // The transport returns the raw response — the step decides
+        // whether to route to its `error:` handler or propagate.
+        // Callers that don't want to distinguish just call
+        // `is_status_allowed` themselves and error out.
 
         let response_headers: HashMap<String, String> = response
             .headers()
@@ -619,12 +619,10 @@ impl HttpClient {
     }
 
     fn enforce_status_and_size(&self, resp: &HttpResponse) -> Result<()> {
-        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&resp.status) {
-            return Err(RuuterError::HttpRequest(format!(
-                "upstream status {} not in http_codes_allow_list",
-                resp.status
-            )));
-        }
+        // Audit finding 04: allow-list check moved to caller (see
+        // `is_status_allowed`). We only enforce the response-size
+        // cap here — that's a transport concern (OOM guard), not a
+        // DSL-flow concern.
         if let Some(cap) = self.response_size_limit {
             // UDS path reads the full body via `.collect()` — we can
             // only enforce the cap post-hoc. For streaming UDS with
@@ -642,6 +640,14 @@ impl HttpClient {
             }
         }
         Ok(())
+    }
+
+    /// Audit finding 04: expose the allow-list decision so callers
+    /// can decide whether to route to a step-local `error:` handler
+    /// or propagate the failure. Empty allow-list = accept
+    /// everything.
+    pub fn is_status_allowed(&self, status: u16) -> bool {
+        self.status_allow_list.is_empty() || self.status_allow_list.contains(&status)
     }
 }
 
@@ -935,14 +941,10 @@ impl HttpClient {
                 body_map,
             )
             .await?;
-        // Same status gate as the network path (size gate on self-
-        // calls is a follow-up — no wire transfer to cap).
-        if !self.status_allow_list.is_empty() && !self.status_allow_list.contains(&resp.status) {
-            return Err(RuuterError::HttpRequest(format!(
-                "self-call status {} not in http_codes_allow_list",
-                resp.status
-            )));
-        }
+        // Audit finding 04: allow-list check moved to caller (see
+        // `is_status_allowed`). Self-call path returns the raw
+        // response like the network path — HttpStepExecutor decides
+        // whether to route to `error:` or propagate.
         Ok(resp)
     }
 }
