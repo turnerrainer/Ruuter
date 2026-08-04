@@ -315,12 +315,16 @@ fn setup_bindings<'js>(ctx: &rquickjs::Ctx<'js>, context: &ExecutionContext) -> 
     )
     .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs bind incoming: {}", e)))?;
 
+    // Audit finding 16: bind via `globalThis[<js-string>]` rather
+    // than dot syntax on globalThis, so DSL variable names with
+    // non-identifier characters (dashes, dots) still bind cleanly
+    // instead of failing with a SyntaxError.
     for (key, value) in context.get_all_variables() {
         let value_json = serde_json::to_string(&value)?;
         ctx.eval::<(), _>(
             format!(
-                "globalThis.{} = JSON.parse({});",
-                key,
+                "globalThis[{}] = JSON.parse({});",
+                js_string_literal(&key),
                 js_string_literal(&value_json)
             )
             .as_bytes(),

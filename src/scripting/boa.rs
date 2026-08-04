@@ -196,16 +196,48 @@ fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()
     )))
     .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
 
+    // Audit finding 16: bind variables via `globalThis["<name>"] = …`
+    // rather than `var <name> = …`. Pre-fix, DSL variable names
+    // that aren't valid JS identifiers (dashes, dots, spaces) made
+    // the eval throw SyntaxError before the actual script even
+    // ran. Under this fix the binding always succeeds; identifier-
+    // valid names still resolve via bare `${foo}` (globalThis
+    // lookup) while non-identifier names remain reachable via
+    // `${this["foo-bar"]}` in the DSL.
     for (key, value) in context.get_all_variables() {
         let value_json = serde_json::to_string(&value)?;
         boa.eval(Source::from_bytes(&format!(
-            "var {} = {};",
-            key, value_json
+            "globalThis[{}] = {};",
+            js_string_literal(&key),
+            value_json
         )))
         .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
     }
 
     Ok(())
+}
+
+/// Audit finding 16 helper. Encode `s` as a JS string literal with
+/// proper escaping so untrusted variable names can't inject syntax
+/// into the eval string.
+fn js_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {
