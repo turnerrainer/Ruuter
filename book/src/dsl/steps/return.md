@@ -40,5 +40,5 @@ HTTP/1.1 202 Accepted
 content-type: application/json
 xpingstatusheader: pong delivered
 
-"pong"
+{"response":"pong"}
 ```

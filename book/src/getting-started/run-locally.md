@@ -68,10 +68,10 @@ The repo ships 60 sample DSLs under `DSL/samples/`. Try three:
 curl -i http://localhost:8080/samples/ping
 # HTTP/1.1 202 Accepted
 # xpingstatusheader: pong delivered
-# "pong"
+# {"response":"pong"}
 
 curl 'http://localhost:8080/samples/variables/incoming-params?id=42&name=Ada'
-# {"received":{"id":"42","name":"Ada"},"message":"Received parameters successfully"}
+# {"response":{"received":{"id":"42","name":"Ada"},"message":"Received parameters successfully"}}
 
 curl -s http://localhost:8080/_/openapi.json | head -c 120
 # {"openapi":"3.1.0","info":{"title":"Ruuter-on-Rust DSL API", ...
