@@ -1,8 +1,13 @@
 # WebSocket server DSLs
 
-`DSL/<project>/WS/<path>.yml` — clients connect at `ws://<host>/<project>/<path>`.
+`DSL/<project>/WS/inbound/<path>.yml` — clients connect at
+`ws://<host>/<project>/<path>`. The DSL runs **once per inbound
+frame** (text or binary).
 
-The DSL runs **once per inbound frame** (text or binary).
+Legacy layout — files placed directly under `DSL/<project>/WS/<path>.yml`
+— still loads with a WARN. Rename to `WS/inbound/…` for the canonical
+layout; see [Reserved subdirectories](../reference/reserved-subdirs.md)
+for the full transition table.
 
 ## Context inside a WS DSL
 
@@ -15,7 +20,7 @@ The DSL runs **once per inbound frame** (text or binary).
 
 ## Reply to originating client
 
-`DSL/samples/WS/echo.yml`:
+`DSL/samples/WS/inbound/echo.yml`:
 
 ```yaml
 reply:
@@ -41,7 +46,7 @@ Frame received back:
 
 ## Broadcast to every connected client
 
-`DSL/samples/WS/broadcast.yml`:
+`DSL/samples/WS/inbound/broadcast.yml`:
 
 ```yaml
 fanout:
@@ -70,7 +75,7 @@ including the sender):
 ## Target a specific connection
 
 ```yaml
-# DSL/svc/WS/dm.yml
+# DSL/svc/WS/inbound/dm.yml
 send:
   ws_send:
     to: "${incoming.body.to}"        # e.g. "client:abc..."
@@ -84,9 +89,9 @@ Unknown connection id → step error → connection stays open, error logged.
 ## Per-connection state
 
 Use the [`state` step](../dsl/steps/state.md) with
-`incoming.connection_id` as the key namespace. `DSL/samples/WS/chat.yml`
-is a worked example — each client's nickname is remembered until it
-disconnects:
+`incoming.connection_id` as the key namespace.
+`DSL/samples/WS/inbound/chat.yml` is a worked example — each client's
+nickname is remembered until it disconnects:
 
 ```yaml
 route:

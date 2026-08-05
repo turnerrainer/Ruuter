@@ -33,6 +33,19 @@
 - [Idempotency pattern](./dsl/idempotency-pattern.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
 
+# Configuration deep dive
+
+- [Overview](./config/index.md)
+- [Response wrapper](./config/response-wrapper.md)
+- [Guards mode](./config/guards-mode.md)
+- [Default exception DSL](./config/default-exception-dsl.md)
+- [Internal-requests (SSRF)](./config/internal-requests.md)
+- [Reverse-proxy trust](./config/proxy-trust.md)
+- [Listeners](./config/listeners.md)
+- [Unix-socket aliases](./config/unix-sockets.md)
+- [Scripting limits](./config/scripting-limits.md)
+- [Inert fields](./config/inert-fields.md)
+
 # WebSocket
 
 - [Server DSLs](./ws/server.md)

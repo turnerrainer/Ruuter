@@ -4,7 +4,11 @@ Consume upstream WebSocket feeds and dispatch each frame to a trigger DSL.
 
 ## Source config
 
-`DSL/<project>/sources/<name>.yml`:
+`DSL/<project>/WS/outbound/<name>.yml` (canonical) or
+`DSL/<project>/sources/<name>.yml` (legacy — still loads with a WARN;
+rename before v1). When both are present, `WS/outbound/` wins and the
+boot log names the collision. See
+[Reserved subdirectories](../reference/reserved-subdirs.md).
 
 ```yaml
 kind: websocket

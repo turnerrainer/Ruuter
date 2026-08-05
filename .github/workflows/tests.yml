@@ -45,6 +45,13 @@ jobs:
         run: cargo test --release --no-fail-fast
       - name: dsl-test — every .test.yml scenario on Boa
         run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+      # Java Ruuter source-of-truth DSL corpus. Any parse error here
+      # means the Rust parser lost coverage on files that Java accepts.
+      # Warnings are allowed (see compat/EXPECTED-BASELINE.md).
+      - name: compat parse gate — Java Ruuter DSL corpus
+        run: |
+          ./target/release/dsl-lint --dsl compat/java-ruuter/DSL --constants constants.ini
+          ./target/release/dsl-lint --dsl compat/java-ruuter/samples --constants constants.ini
 
   # QuickJS feature — task 051 pluggable backend. Task 036 (per-
   # request session pool) and task 045 (pre-parsed expression
@@ -76,3 +83,7 @@ jobs:
         run: cargo test --release --no-default-features --features scripting-quickjs --no-fail-fast
       - name: dsl-test — every .test.yml scenario on QuickJS
         run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+      - name: compat parse gate — Java Ruuter DSL corpus
+        run: |
+          ./target/release/dsl-lint --dsl compat/java-ruuter/DSL --constants constants.ini
+          ./target/release/dsl-lint --dsl compat/java-ruuter/samples --constants constants.ini
