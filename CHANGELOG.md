@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1-rc.2] - 2026-08-05
+
+Second **pre-release** cut. Java-parity audit sweep (17 findings)
+plus two behavioural changes on top and a source-of-truth parse
+gate. Not GA. Publishes as `turnerrainer/ruuter:0.8.1-rc.2` on
+Docker Hub and `ghcr.io/turnerrainer/ruuter:0.8.1-rc.2` on GHCR.
+
+### Audit sweep (commits `f6b62f4`..`8698345`, 2026-08-04)
+
+Seventeen Java-parity findings closed, each with a paired
+regression test under `tests/audit_*.rs` (285 tests total across
+the audit-regression + pre-existing suites).
+
+- **01** — Step-driven `reload_dsl:true` (Java parity) alongside the
+  filesystem watcher.
+- **02** — Hot-reload watcher filters events by kind + path (loop fix).
+- **03** — `BaseStepFields` (`skip`, `sleep`, `maxRecursions`,
+  `reloadDsl` with aliases) flattened onto every step; engine honours
+  each.
+- **04** — `HttpStep.error` routes on non-allowed status.
+- **05** — Set-Cookie hardening + nested header eval on `return:`.
+- **06** — TemplateStep binds raw return value (not fake HTTP envelope).
+- **07** — `incoming_requests.headers` injected on every request.
+- **08** — Per-step `maxRecursions` cap.
+- **09** — Explicit discriminator dispatch in `DslParser` (kills the
+  typo-swallowing untagged-serde fallthrough).
+- **10** — `declare:` allowlist enforced; structured `allowlist:` form.
+- **11** — Multipart / form-encoded / text inbound + outbound
+  content-type dispatch.
+- **12** — Response wrapper per-step opt-in and `response.default_wrapper`
+  config.
+- **13** — `default_dsl_in_case_of_exception` fallback DSL +
+  `finalResponse` status codes.
+- **14** — `guards.mode: stack | closest_only` knob.
+- **15** — Every accepted-but-inert config field WARNs at boot.
+- **16** — Both scripting backends bind context variables via
+  `globalThis["<key>"]`.
+- **17** — `.optional.` null suppression in script evaluation.
+
+### Behavioural changes on top of the audit sweep (2026-08-05)
+
+- **`response.default_wrapper` default flipped `false` → `true`** —
+  Java parity. Every ReturnStep without an explicit `wrapper:` now
+  wraps its value in `{"response": <value>}`. Per-step `wrapper: false`
+  still opts out; `response.default_wrapper: false` in config restores
+  the raw-body default. Sweep: 26 test assertions in 9 files + 33
+  `.test.yml` scenarios updated to match.
+- **WebSocket layout renamed to `WS/{inbound,outbound}/`** —
+  canonical shape. Inbound frame DSLs live under
+  `DSL/<project>/WS/inbound/<path>.yml`; outbound feed configs under
+  `DSL/<project>/WS/outbound/<name>.yml`. Legacy layouts
+  (`DSL/<project>/WS/*.yml` and `DSL/<project>/sources/*.yml`) still
+  work with a boot-time WARN pointing at the new location. URLs
+  unchanged.
+
+### Added
+
+- **Source-of-truth parse gate.** `compat/java-ruuter/` mirrors 42
+  Java Ruuter DSL files (pinned at `github.com/buerokratt/Ruuter@0454d08c`)
+  with MIT attribution preserved in `compat/README.md`. New CI step
+  in `tests.yml` on both Boa and QuickJS jobs runs `dsl-lint`
+  against the corpus; parse errors fail the build. Three warnings
+  are expected — all on Java demos of intentionally unreachable
+  steps; see `compat/EXPECTED-BASELINE.md`.
+
+### Book
+
+- New **"Configuration deep dive"** section (`book/src/config/`) —
+  10 tutorial pages covering the post-audit config surface:
+  `response-wrapper`, `guards-mode`, `default-exception-dsl`,
+  `internal-requests`, `proxy-trust`, `listeners`, `unix-sockets`,
+  `scripting-limits`, `inert-fields`, plus an overview.
+- `book/src/ops/configuration.md` — removed the dead `idempotency:`
+  block (feature was removed in v0.7.0; setting it now is inert);
+  added every post-audit config knob missing from the file.
+- `book/src/reference/reserved-subdirs.md` — new `WS/inbound/` +
+  `WS/outbound/` layout; legacy paths marked deprecated with WARN.
+- `book/src/ws/{server,sources}.md` — canonical layout updated.
+
+### Notes for partners pulling this pre-release
+
+- The 0.8.0-rc.1 (2026-07-27) publish infrastructure applies
+  verbatim — multi-arch, cosign, SBOM, Trivy, smoke test.
+- `main` is still reserved for the future `v1.0.0` stable release.
+  This RC is cut from `dev`.
+
 ## [0.8.0-rc.1] - 2026-07-27
 
 First **pre-release** cut for partner testing. Not GA. Publishes as
