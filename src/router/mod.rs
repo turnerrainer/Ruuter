@@ -730,8 +730,7 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
             // Audit finding 12 — apply wrapper. Order of precedence:
             //   1. ReturnStep's explicit `wrapper: X` (Some(true|false))
             //   2. AppConfig `response.default_wrapper` when the step
-            //      didn't specify
-            //   3. Bare raw body (current default, no wrapper)
+            //      didn't specify (default `true` — Java parity)
             let wrap = result
                 .wrapper
                 .unwrap_or(router.config.response.default_wrapper);

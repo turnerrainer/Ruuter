@@ -6,11 +6,12 @@ tests:
     expect:
       status: 200
       body_matches:
-        pagination: { page: 1, size: 20, offset: 0, limit: 20 }
-        links:
-          self: "$type:string"
-          next: "$type:string"
-          prev: null
+        response:
+          pagination: { page: 1, size: 20, offset: 0, limit: 20 }
+          links:
+            self: "$type:string"
+            next: "$type:string"
+            prev: null
 
   - name: honors explicit page/size
     request:
@@ -20,7 +21,8 @@ tests:
     expect:
       status: 200
       body_matches:
-        pagination: { page: 3, size: 50, offset: 100, limit: 50 }
+        response:
+          pagination: { page: 3, size: 50, offset: 100, limit: 50 }
 
   - name: clamps size to <=100
     request:
@@ -30,7 +32,8 @@ tests:
     expect:
       status: 200
       body_matches:
-        pagination: { size: 100 }
+        response:
+          pagination: { size: 100 }
 
   - name: clamps page to >=1 when zero or negative
     request:
@@ -40,4 +43,5 @@ tests:
     expect:
       status: 200
       body_matches:
-        pagination: { page: 1 }
+        response:
+          pagination: { page: 1 }

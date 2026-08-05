@@ -44,13 +44,12 @@ pub struct AppConfig {
     #[serde(default)]
     pub response_default_headers: HashMap<String, String>,
 
-    /// Audit finding 12 — response wrapper opt-in. When true and
-    /// the DSL's terminating `return:` step didn't set `wrapper:
+    /// Audit finding 12 — response wrapper. When true (the default)
+    /// and the DSL's terminating `return:` step didn't set `wrapper:
     /// false`, the response body is wrapped in
-    /// `{"response": <value>}` (Java-parity `RuuterResponse` shape).
-    /// Default `false` preserves the current Rust behaviour
-    /// (unwrapped raw body). A ReturnStep's explicit `wrapper:
-    /// true|false` always wins over this config.
+    /// `{"response": <value>}` — Java-parity `RuuterResponse` shape.
+    /// Set to `false` for raw unwrapped bodies. A ReturnStep's
+    /// explicit `wrapper: true|false` always wins over this config.
     #[serde(default)]
     pub response: ResponseConfig,
 
@@ -223,15 +222,16 @@ fn default_exception_project() -> String {
 }
 
 /// Audit finding 12 — response-shape defaults. See `AppConfig::response`
-/// for the wrapper opt-in semantics; other fields (dsl-with-response
+/// for the wrapper default semantics; other fields (dsl-with-response
 /// / -without-response status codes) mirror Java's `finalResponse`
 /// block from `application.yml` (finding 13).
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResponseConfig {
     /// Default wrapper mode when the ReturnStep doesn't specify.
-    /// `false` = raw body (current Rust behaviour). `true` = wrap
-    /// in `{"response": <value>}` (Java parity).
-    #[serde(default)]
+    /// `true` (default) wraps in `{"response": <value>}` — matches
+    /// Java Ruuter's `RuuterResponse` shape. `false` returns raw
+    /// body. A step-level `wrapper: X` always wins over this.
+    #[serde(default = "default_response_wrapper")]
     pub default_wrapper: bool,
 
     /// Audit finding 13 — Java `finalResponse.dslWithResponseHttpStatusCode`:
@@ -248,6 +248,20 @@ pub struct ResponseConfig {
     /// happy-path 200.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dsl_without_response_status: Option<u16>,
+}
+
+fn default_response_wrapper() -> bool {
+    true
+}
+
+impl Default for ResponseConfig {
+    fn default() -> Self {
+        Self {
+            default_wrapper: default_response_wrapper(),
+            dsl_with_response_status: None,
+            dsl_without_response_status: None,
+        }
+    }
 }
 
 /// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag

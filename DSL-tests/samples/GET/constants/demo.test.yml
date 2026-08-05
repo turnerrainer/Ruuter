@@ -15,6 +15,7 @@ tests:
     expect:
       status: 200
       body_matches:
-        domain: "https://example.com"
-        also_domain: "https://example.com"
-        port: "8080"
+        response:
+          domain: "https://example.com"
+          also_domain: "https://example.com"
+          port: "8080"

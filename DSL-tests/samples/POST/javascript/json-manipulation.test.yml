@@ -10,7 +10,8 @@ tests:
     expect:
       status: 200
       body_matches:
-        original: { name: "Rainer", age: 42 }
-        count: 2
-        has_name: true
-        json_string: "$type:string"
+        response:
+          original: { name: "Rainer", age: 42 }
+          count: 2
+          has_name: true
+          json_string: "$type:string"

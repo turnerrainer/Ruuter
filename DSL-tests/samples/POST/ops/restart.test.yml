@@ -8,7 +8,7 @@ tests:
     request: { method: POST, path: /samples/ops/restart }
     expect:
       status: 401
-      body: { error: "ops: bearer token required" }
+      body: { response: { error: "ops: bearer token required" } }
 
   - name: with auth reaches endpoint
     request:
@@ -17,4 +17,4 @@ tests:
       headers: { authorization: "Bearer secret" }
     expect:
       status: 200
-      body: { restarted: true }
+      body: { response: { restarted: true } }

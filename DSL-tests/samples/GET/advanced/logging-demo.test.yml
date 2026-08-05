@@ -9,6 +9,7 @@ tests:
     expect:
       status: 200
       body_matches:
-        userId: "u-42"
-        status: "completed"
-        processedAt: "$type:number"
+        response:
+          userId: "u-42"
+          status: "completed"
+          processedAt: "$type:number"

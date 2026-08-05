@@ -77,7 +77,7 @@ respond:
     );
     let (status, body, headers) = hit(build_router(tmp.path(), |_| {}), "/svc/plain").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"ok\"");
+    assert_eq!(body, "{\"response\":\"ok\"}");
     let cookie = headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
@@ -145,7 +145,7 @@ respond:
 // ── finding 12: response wrapper ─────────────────────────────────
 
 #[tokio::test]
-async fn wrapper_off_by_default_returns_raw_body() {
+async fn wrapper_on_by_default_wraps_body_java_parity() {
     let tmp = TempDir::new().unwrap();
     write_dsl(
         tmp.path(),
@@ -158,7 +158,31 @@ respond:
     );
     let (status, body, _) = hit(build_router(tmp.path(), |_| {}), "/svc/hi").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hi\"", "default is raw body (Rust legacy)");
+    assert_eq!(
+        body, "{\"response\":\"hi\"}",
+        "default wraps in RuuterResponse (Java parity)"
+    );
+}
+
+#[tokio::test]
+async fn config_default_wrapper_false_returns_raw_body() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/hi.yml",
+        r#"
+respond:
+  return: "hi"
+  status: 200
+"#,
+    );
+    let (status, body, _) = hit(
+        build_router(tmp.path(), |c| c.response.default_wrapper = false),
+        "/svc/hi",
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body, "\"hi\"", "explicit default_wrapper: false → raw");
 }
 
 #[tokio::test]
@@ -180,28 +204,7 @@ respond:
 }
 
 #[tokio::test]
-async fn config_default_wrapper_wraps_when_step_unset() {
-    let tmp = TempDir::new().unwrap();
-    write_dsl(
-        tmp.path(),
-        "svc/GET/hi.yml",
-        r#"
-respond:
-  return: "hi"
-  status: 200
-"#,
-    );
-    let (status, body, _) = hit(
-        build_router(tmp.path(), |c| c.response.default_wrapper = true),
-        "/svc/hi",
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert_eq!(body, "{\"response\":\"hi\"}");
-}
-
-#[tokio::test]
-async fn step_wrapper_false_overrides_config_true() {
+async fn step_wrapper_false_overrides_default_wrapper_on() {
     let tmp = TempDir::new().unwrap();
     write_dsl(
         tmp.path(),
@@ -213,13 +216,32 @@ respond:
   wrapper: false
 "#,
     );
+    // Default config: default_wrapper = true. Step override wins.
+    let (status, body, _) = hit(build_router(tmp.path(), |_| {}), "/svc/hi").await;
+    assert_eq!(status, 200);
+    assert_eq!(body, "\"hi\"", "step wrapper: false wins over default");
+}
+
+#[tokio::test]
+async fn step_wrapper_true_overrides_default_wrapper_off() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/hi.yml",
+        r#"
+respond:
+  return: "hi"
+  status: 200
+  wrapper: true
+"#,
+    );
     let (status, body, _) = hit(
-        build_router(tmp.path(), |c| c.response.default_wrapper = true),
+        build_router(tmp.path(), |c| c.response.default_wrapper = false),
         "/svc/hi",
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hi\"", "step wrapper: false wins over config");
+    assert_eq!(body, "{\"response\":\"hi\"}", "step wrapper: true overrides config false");
 }
 
 // ── finding 13: finalResponse status codes ───────────────────────

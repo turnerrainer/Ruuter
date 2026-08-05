@@ -73,7 +73,7 @@ respond:
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
-    assert_eq!(String::from_utf8_lossy(&bytes), "\"prod-eu-west\"");
+    assert_eq!(String::from_utf8_lossy(&bytes), "{\"response\":\"prod-eu-west\"}");
 }
 
 /// Java semantics: config header OVERRIDES a client-supplied header
@@ -108,5 +108,5 @@ respond:
         .await
         .unwrap();
     let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
-    assert_eq!(String::from_utf8_lossy(&bytes), "\"server-forced\"");
+    assert_eq!(String::from_utf8_lossy(&bytes), "{\"response\":\"server-forced\"}");
 }

@@ -16,11 +16,12 @@ tests:
     expect:
       status: 202
       body_matches:
-        accepted: true
-        from: "A"
-        to: "B"
-        amount: 100
-        ref: "$regex:^txn-\\d+$"
+        response:
+          accepted: true
+          from: "A"
+          to: "B"
+          amount: 100
+          ref: "$regex:^txn-\\d+$"
 
   - name: second call runs the DSL again (no framework replay)
     request:
@@ -32,8 +33,9 @@ tests:
     expect:
       status: 202
       body_matches:
-        accepted: true
-        from: "A"
+        response:
+          accepted: true
+          from: "A"
 
   - name: different body runs and records the new transfer
     request:
@@ -45,9 +47,10 @@ tests:
     expect:
       status: 202
       body_matches:
-        accepted: true
-        from: "X"
-        to: "Y"
+        response:
+          accepted: true
+          from: "X"
+          to: "Y"
 
   - name: minimal request without an Idempotency-Key header still runs
     request:
@@ -57,4 +60,4 @@ tests:
       body: { from: "P", to: "Q", amount: 1 }
     expect:
       status: 202
-      body_matches: { accepted: true }
+      body_matches: { response: { accepted: true } }

@@ -302,8 +302,9 @@ fn path_is_relevant(path: &Path, dsl_root: &Path) -> bool {
 }
 
 /// True when `path` lives (transitively) under `<dsl_root>/<project>/<reserved>/…`
-/// for any reserved subdir name. Guards against firing reloads for
-/// `sources/` and `triggers/` edits that don't affect the HTTP tree.
+/// for any reserved subdir name, OR under `<dsl_root>/<project>/WS/outbound/…`
+/// (the new-layout equivalent of legacy `sources/`). Guards against firing
+/// HTTP-tree reloads for edits that only affect outbound feeds or triggers.
 fn is_under_reserved_subdir(path: &Path, dsl_root: &Path) -> bool {
     let Ok(rel) = path.strip_prefix(dsl_root) else {
         return false;
@@ -314,10 +315,21 @@ fn is_under_reserved_subdir(path: &Path, dsl_root: &Path) -> bool {
     if comps.len() < 2 {
         return false;
     }
-    let Some(second) = comps.get(1).and_then(|c| c.as_os_str().to_str()) else {
-        return false;
-    };
-    RESERVED_SUBDIRS.contains(&second)
+    let second = comps.get(1).and_then(|c| c.as_os_str().to_str());
+    if let Some(name) = second {
+        if RESERVED_SUBDIRS.contains(&name) {
+            return true;
+        }
+        // WS/outbound/ — new-layout equivalent of legacy sources/.
+        // WS/inbound/ is NOT reserved (it drives the HTTP tree).
+        if name == "WS" {
+            let third = comps.get(2).and_then(|c| c.as_os_str().to_str());
+            if third == Some("outbound") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn reload_once(config: &AppConfig, constants: &HashMap<String, String>, router: &DslRouter) {
@@ -503,11 +515,43 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn modify_data_under_sources_subdir_does_NOT_trigger() {
+        // Legacy sources/ layout — still ignored by hot-reload.
         let ev = debounced(
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             vec![dsl_root().join("proj/sources/stock-feed.yml")],
         );
         assert!(!batch_warrants_reload(&[ev], &dsl_root()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn modify_data_under_ws_outbound_does_NOT_trigger() {
+        // New-layout equivalent of sources/. Same treatment.
+        let ev = debounced(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![dsl_root().join("proj/WS/outbound/stock-feed.yml")],
+        );
+        assert!(!batch_warrants_reload(&[ev], &dsl_root()));
+    }
+
+    #[test]
+    fn modify_data_under_ws_inbound_triggers() {
+        // WS/inbound/ is part of the HTTP tree — reload MUST fire.
+        let ev = debounced(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![dsl_root().join("proj/WS/inbound/echo.yml")],
+        );
+        assert!(batch_warrants_reload(&[ev], &dsl_root()));
+    }
+
+    #[test]
+    fn modify_data_under_ws_legacy_direct_triggers() {
+        // Legacy WS/<file>.yml layout — still triggers reload.
+        let ev = debounced(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![dsl_root().join("proj/WS/echo.yml")],
+        );
+        assert!(batch_warrants_reload(&[ev], &dsl_root()));
     }
 
     #[test]

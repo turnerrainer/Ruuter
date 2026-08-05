@@ -80,7 +80,7 @@ step_b:
     );
     let (status, body) = hit(build_router(tmp.path()), "/svc/hello").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hello world\"");
+    assert_eq!(body, "{\"response\":\"hello world\"}");
 }
 
 /// `skip: true` bypasses the step's action but STILL falls through
@@ -105,7 +105,7 @@ step_b:
     );
     let (status, body) = hit(build_router(tmp.path()), "/svc/hello").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hello unassigned\"");
+    assert_eq!(body, "{\"response\":\"hello unassigned\"}");
 }
 
 /// `sleep: <ms>` blocks the step's dispatch for that many ms. We use
@@ -177,7 +177,7 @@ done:
     let (status, body) = hit(build_router(tmp.path()), "/svc/loop").await;
     assert_eq!(status, 200);
     assert_eq!(
-        body, "{\"count\":3}",
+        body, "{\"response\":{\"count\":3}}",
         "bump.maxRecursions=3 should cap i at 3 and let done fire"
     );
 }
@@ -207,5 +207,5 @@ never:
     );
     let (status, body) = hit(build_router(tmp.path()), "/svc/hello").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"reached\"");
+    assert_eq!(body, "{\"response\":\"reached\"}");
 }

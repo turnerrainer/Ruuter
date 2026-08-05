@@ -20,6 +20,6 @@ tests:
       headers: { token: "my-token" }
     expect:
       status: 200
-      body: { secret: "value", owner: "tester" }
+      body: { response: { secret: "value", owner: "tester" } }
     verify_mocks:
       - { url_matches: "/protected", count: 1 }

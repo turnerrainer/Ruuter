@@ -8,7 +8,7 @@ tests:
       query: { authenticated: "false", role: "admin" }
     expect:
       status: 401
-      body: { error: "Authentication required" }
+      body: { response: { error: "Authentication required" } }
 
   - name: admin full access
     request:
@@ -18,9 +18,10 @@ tests:
     expect:
       status: 200
       body:
-        access: "full"
-        role: "admin"
-        permissions: ["read", "write", "delete"]
+        response:
+          access: "full"
+          role: "admin"
+          permissions: ["read", "write", "delete"]
 
   - name: user limited access
     request:
@@ -30,9 +31,10 @@ tests:
     expect:
       status: 200
       body:
-        access: "limited"
-        role: "user"
-        permissions: ["read"]
+        response:
+          access: "limited"
+          role: "user"
+          permissions: ["read"]
 
   - name: invalid role -> 403
     request:
@@ -41,4 +43,4 @@ tests:
       query: { authenticated: "true", role: "hacker" }
     expect:
       status: 403
-      body: { error: "Invalid role" }
+      body: { response: { error: "Invalid role" } }

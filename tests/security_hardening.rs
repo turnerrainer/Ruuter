@@ -162,7 +162,7 @@ async fn idempotency_no_cross_caller_replay_after_framework_removal() {
         .json()
         .await
         .unwrap();
-    assert_eq!(a["echo"]["owner"], "alice");
+    assert_eq!(a["response"]["echo"]["owner"], "alice");
 
     let resp_b = c
         .post(format!("http://127.0.0.1:{}/svc/echo", port))
@@ -177,7 +177,7 @@ async fn idempotency_no_cross_caller_replay_after_framework_removal() {
     );
     let b: serde_json::Value = resp_b.json().await.unwrap();
     assert_eq!(
-        b["echo"]["owner"], "eve",
+        b["response"]["echo"]["owner"], "eve",
         "S1 remediated: caller B sees its OWN body, not A's"
     );
 }
@@ -235,7 +235,7 @@ async fn idempotency_key_has_no_framework_effect() {
         .unwrap();
     assert!(first.headers().get("idempotency-replayed").is_none());
     let first_body: serde_json::Value = first.json().await.unwrap();
-    assert_eq!(first_body["echo"]["who"], "a");
+    assert_eq!(first_body["response"]["echo"]["who"], "a");
 
     let second = c
         .post(format!("http://127.0.0.1:{}/svc/echo", port))
@@ -249,7 +249,7 @@ async fn idempotency_key_has_no_framework_effect() {
         "framework must not emit Idempotency-Replayed"
     );
     let body: serde_json::Value = second.json().await.unwrap();
-    assert_eq!(body["echo"]["who"], "b", "second call runs its own DSL");
+    assert_eq!(body["response"]["echo"]["who"], "b", "second call runs its own DSL");
 }
 
 // ── SSRF: outbound allowlist bypasses ──────────────────────────────
@@ -1054,7 +1054,7 @@ reply:
         .unwrap();
     for key in ["has_process", "has_require", "has_buffer", "has_global"] {
         assert_eq!(
-            body[key], "undefined",
+            body["response"][key], "undefined",
             "Node global {} leaked into DSL scripting sandbox",
             key
         );
@@ -1092,8 +1092,8 @@ probe:
         .json()
         .await
         .unwrap();
-    assert_eq!(body["fs"], "undefined");
-    assert_eq!(body["read"], "undefined");
+    assert_eq!(body["response"]["fs"], "undefined");
+    assert_eq!(body["response"]["read"], "undefined");
 }
 
 // ── Iterate: DoS cap ───────────────────────────────────────────────
@@ -1181,7 +1181,7 @@ reply:
         .await
         .unwrap();
     assert_eq!(
-        body["logged"], "user said: ${1+1}",
+        body["response"]["logged"], "user said: ${1+1}",
         "user-supplied ${{...}} was re-evaluated by the framework — server-side template injection"
     );
 }
@@ -1306,10 +1306,10 @@ reply:
         .unwrap();
     // Raw header remains visible for any DSL that wants to log or
     // inspect the client's claim.
-    assert_eq!(body["xff"], "10.0.0.99, 8.8.8.8, ::1");
+    assert_eq!(body["response"]["xff"], "10.0.0.99, 8.8.8.8, ::1");
     // S4 fix: origin is NOT the spoofed XFF; it reflects the TCP
     // peer (loopback, since the test connects locally).
-    let origin = body["origin"].as_str().unwrap_or("");
+    let origin = body["response"]["origin"].as_str().unwrap_or("");
     assert_ne!(
         origin, "10.0.0.99, 8.8.8.8, ::1",
         "S4 fix: XFF from an untrusted peer must not become origin"
@@ -1358,7 +1358,7 @@ reply:
     // (RFC 7239 semantics). The trailing intermediate hops are
     // dropped from the framework-level `origin`.
     assert_eq!(
-        body["origin"], "10.0.0.99",
+        body["response"]["origin"], "10.0.0.99",
         "trusted peer's XFF leftmost IP must be promoted into incoming.origin (whole chain no longer adopted verbatim)"
     );
 }
@@ -1654,9 +1654,9 @@ reply: { return: { seen: "${v}" }, next: end }
         .unwrap();
     assert_eq!(denied.status(), 401);
     let body: serde_json::Value = denied.json().await.unwrap();
-    assert_eq!(body["error"], "no token");
+    assert_eq!(body["response"]["error"], "no token");
     assert!(
-        body.get("data").is_none(),
+        body["response"].get("data").is_none(),
         "main DSL leaked through the guard: {}",
         body
     );
@@ -1671,7 +1671,7 @@ reply: { return: { seen: "${v}" }, next: end }
         .await
         .unwrap();
     assert!(
-        probe["seen"].is_null() || probe["seen"] == serde_json::Value::Null,
+        probe["response"]["seen"].is_null() || probe["response"]["seen"] == serde_json::Value::Null,
         "the guarded DSL wrote state despite the guard denying: {}",
         probe
     );
@@ -1737,7 +1737,7 @@ ok: { return: { path: normal, ran: true }, next: end }
         "override guard should let request through without outer token"
     );
     let body: serde_json::Value = bypass.json().await.unwrap();
-    assert_eq!(body["ran"], true);
+    assert_eq!(body["response"]["ran"], true);
 
     // Normal path: outer guard STILL runs — 401 without token.
     let denied = client()
@@ -2024,7 +2024,7 @@ reply:
         .json()
         .await
         .unwrap();
-    assert_eq!(body["plain"], "hello world");
+    assert_eq!(body["response"]["plain"], "hello world");
 }
 
 /// The router allows `Content-Type: application/json; charset=utf-8`
@@ -2061,7 +2061,7 @@ reply:
             .await
             .unwrap();
         assert_eq!(
-            body["got"], "present",
+            body["response"]["got"], "present",
             "Content-Type `{}` was not parsed as JSON",
             ct
         );

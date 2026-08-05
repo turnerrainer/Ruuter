@@ -5,4 +5,4 @@ tests:
     request: { method: GET, path: /samples/basic/status-codes }
     expect:
       status: 200
-      body: { message: "Success", code: 200 }
+      body: { response: { message: "Success", code: 200 } }

@@ -200,7 +200,15 @@ fn is_dsl_file(p: &Path, include_disabled: bool) -> bool {
 }
 
 fn is_source_file(p: &Path) -> bool {
-    p.components().any(|c| c.as_os_str() == "sources")
+    // Legacy layout: <project>/sources/…
+    // New layout:    <project>/WS/outbound/…
+    let comps: Vec<_> = p.components().map(|c| c.as_os_str().to_owned()).collect();
+    if comps.iter().any(|c| c == "sources") {
+        return true;
+    }
+    comps
+        .windows(2)
+        .any(|w| w[0] == "WS" && w[1] == "outbound")
 }
 
 fn is_cron_job_file(p: &Path) -> bool {

@@ -23,8 +23,9 @@ tests:
     expect:
       status: 200
       body_matches:
-        user: { id: 7, name: "Kurtis Weissnat" }
-        posts: "$type:array"
+        response:
+          user: { id: 7, name: "Kurtis Weissnat" }
+          posts: "$type:array"
     verify_mocks:
       - { url_matches: "/users/7", count: 1 }
       - { url_matches: "/posts", count: 1 }

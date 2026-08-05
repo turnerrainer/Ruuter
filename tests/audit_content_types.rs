@@ -102,7 +102,7 @@ reply:
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hello\"");
+    assert_eq!(body, "{\"response\":\"hello\"}");
 }
 
 #[tokio::test]
@@ -131,7 +131,7 @@ reply:
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(resp_body, "\"hello upload\"");
+    assert_eq!(resp_body, "{\"response\":\"hello upload\"}");
 }
 
 // ── Outbound content_type on HttpStep ────────────────────────────
@@ -185,7 +185,7 @@ reply:
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-    assert_eq!(String::from_utf8_lossy(&bytes), "true");
+    assert_eq!(String::from_utf8_lossy(&bytes), "{\"response\":true}");
     m.assert_async().await;
 }
 

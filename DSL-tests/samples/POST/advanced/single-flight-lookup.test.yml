@@ -15,6 +15,7 @@ tests:
     expect:
       status: 200
       body_matches:
-        id: "test-id"
-        execution_count: "$type:number"
-        computed_at: "$type:number"
+        response:
+          id: "test-id"
+          execution_count: "$type:number"
+          computed_at: "$type:number"

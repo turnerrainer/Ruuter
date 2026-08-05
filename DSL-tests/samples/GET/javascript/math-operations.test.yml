@@ -9,15 +9,16 @@ tests:
     expect:
       status: 200
       body:
-        a: 10
-        b: 4
-        sum: 14
-        difference: 6
-        product: 40
-        quotient: 2.5
-        average: 7
-        max: 10
-        min: 4
+        response:
+          a: 10
+          b: 4
+          sum: 14
+          difference: 6
+          product: 40
+          quotient: 2.5
+          average: 7
+          max: 10
+          min: 4
 
   - name: division by zero returns null quotient
     request:
@@ -27,9 +28,10 @@ tests:
     expect:
       status: 200
       body_matches:
-        sum: 5
-        product: 0
-        quotient: null
+        response:
+          sum: 5
+          product: 0
+          quotient: null
 
   - name: non-numeric input triggers script error
     # The `parseFloat("hello")` in the first assign yields NaN, which

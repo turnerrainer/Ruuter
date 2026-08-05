@@ -10,8 +10,9 @@ tests:
     expect:
       status: 200
       body_matches:
-        success: true
-        entity: "$type:object"
+        response:
+          success: true
+          entity: "$type:object"
 
   - name: type defaults to 'default' when omitted
     request:
@@ -22,7 +23,8 @@ tests:
     expect:
       status: 200
       body_matches:
-        success: true
+        response:
+          success: true
 
   - name: missing name -> 400
     request:
@@ -32,4 +34,4 @@ tests:
       body: {}
     expect:
       status: 400
-      body: { error: "Name is required" }
+      body: { response: { error: "Name is required" } }

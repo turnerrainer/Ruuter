@@ -5,7 +5,7 @@ tests:
     request: { method: POST, path: /samples/state/inc }
     expect:
       status: 200
-      body: { counter: 1 }
+      body: { response: { counter: 1 } }
     verify_state:
       - { project: samples, key: counter, value: 1 }
 
@@ -13,7 +13,7 @@ tests:
     request: { method: POST, path: /samples/state/inc }
     expect:
       status: 200
-      body: { counter: 2 }
+      body: { response: { counter: 2 } }
     verify_state:
       - { project: samples, key: counter, value: 2 }
 
@@ -24,4 +24,4 @@ tests:
     request: { method: POST, path: /samples/state/inc }
     expect:
       status: 200
-      body: { counter: 42 }
+      body: { response: { counter: 42 } }

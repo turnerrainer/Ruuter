@@ -5,7 +5,7 @@ tests:
     request: { method: GET, path: /samples/basic/custom-headers }
     expect:
       status: 200
-      body: { message: "Response with custom headers" }
+      body: { response: { message: "Response with custom headers" } }
       headers:
         X-Custom-Header: "Custom Value"
         X-API-Version: "1.0"

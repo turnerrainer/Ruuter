@@ -21,6 +21,7 @@ tests:
     expect:
       status: 200
       body_matches:
-        user: "$type:object"
-        fetched_at: "$type:number"
-        requested_by: "rainer"
+        response:
+          user: "$type:object"
+          fetched_at: "$type:number"
+          requested_by: "rainer"

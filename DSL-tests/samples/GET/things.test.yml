@@ -7,16 +7,16 @@ tests:
     request: { method: GET, path: /samples/things }
     expect:
       status: 200
-      body: { mode: "list", items: ["a", "b", "c"] }
+      body: { response: { mode: "list", items: ["a", "b", "c"] } }
 
   - name: detail mode (one path param)
     request: { method: GET, path: /samples/things/abc-123 }
     expect:
       status: 200
-      body: { mode: "detail", id: "abc-123" }
+      body: { response: { mode: "detail", id: "abc-123" } }
 
   - name: subresource (two path params)
     request: { method: GET, path: /samples/things/abc-123/legs }
     expect:
       status: 200
-      body: { mode: "sub", id: "abc-123", subresource: "legs" }
+      body: { response: { mode: "sub", id: "abc-123", subresource: "legs" } }

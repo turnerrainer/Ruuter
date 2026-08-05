@@ -10,7 +10,7 @@ tests:
       body: { userId: "u-42" }
     expect:
       status: 401
-      body: { error: "Authentication required" }
+      body: { response: { error: "Authentication required" } }
 
   - name: non-admin role -> 403 from guard
     request:
@@ -23,7 +23,7 @@ tests:
       body: { userId: "u-42" }
     expect:
       status: 403
-      body: { error: "Admin role required" }
+      body: { response: { error: "Admin role required" } }
 
   - name: admin role reaches endpoint
     request:
@@ -37,11 +37,12 @@ tests:
     expect:
       status: 200
       body_matches:
-        success: true
-        deleted:
-          userId: "u-42"
-          deleted_by: "admin"
-          deleted_at: "$type:number"
+        response:
+          success: true
+          deleted:
+            userId: "u-42"
+            deleted_by: "admin"
+            deleted_at: "$type:number"
 
   - name: admin but missing userId -> 400 from endpoint
     request:
@@ -54,4 +55,4 @@ tests:
       body: {}
     expect:
       status: 400
-      body: { error: "userId is required" }
+      body: { response: { error: "userId is required" } }

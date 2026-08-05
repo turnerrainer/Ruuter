@@ -10,8 +10,9 @@ tests:
     expect:
       status: 200
       body_matches:
-        ok: true
-        seen_at_ms: "$type:number"
+        response:
+          ok: true
+          seen_at_ms: "$type:number"
     verify_state:
       - project: samples
         key: heartbeat.last_seen_ms

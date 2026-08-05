@@ -19,8 +19,9 @@ tests:
     expect:
       status: 201
       body_matches:
-        message: "Data posted successfully"
-        response: { id: 101, title: "hello", body: "world", userId: 1 }
+        response:
+          message: "Data posted successfully"
+          response: { id: 101, title: "hello", body: "world", userId: 1 }
     verify_mocks:
       - url_matches: "/posts"
         count: 1

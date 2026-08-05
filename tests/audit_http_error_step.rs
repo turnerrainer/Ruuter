@@ -105,7 +105,7 @@ unreachable:
     });
     let (status, body) = hit(router, "/svc/wrapped").await;
     assert_eq!(status, 503);
-    assert_eq!(body, "{\"handled\":true,\"upstream_status\":500}");
+    assert_eq!(body, "{\"response\":{\"handled\":true,\"upstream_status\":500}}");
     m.assert_async().await;
 }
 
@@ -189,6 +189,6 @@ happy_path:
     });
     let (status, body) = hit(router, "/svc/happy").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"hi\"");
+    assert_eq!(body, "{\"response\":\"hi\"}");
     m.assert_async().await;
 }
