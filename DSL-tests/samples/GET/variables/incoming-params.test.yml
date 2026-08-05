@@ -9,5 +9,6 @@ tests:
     expect:
       status: 200
       body:
-        received: { id: "42", name: "Rainer" }
-        message: "Received parameters successfully"
+        response:
+          received: { id: "42", name: "Rainer" }
+          message: "Received parameters successfully"

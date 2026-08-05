@@ -6,7 +6,8 @@ tests:
     expect:
       status: 200
       body_matches:
-        message: "Guards are DSL files with .guard.yml extension"
-        explanation: "$type:array"
-        examples: "$type:object"
-        usage: "$type:object"
+        response:
+          message: "Guards are DSL files with .guard.yml extension"
+          explanation: "$type:array"
+          examples: "$type:object"
+          usage: "$type:object"

@@ -6,7 +6,8 @@ tests:
     expect:
       status: 200
       body:
-        initial: 10
-        after_doubling: 20
-        after_squaring: 400
-        total_operations: 3
+        response:
+          initial: 10
+          after_doubling: 20
+          after_squaring: 400
+          total_operations: 3

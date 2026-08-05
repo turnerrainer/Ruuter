@@ -6,4 +6,4 @@ tests:
     request: { method: GET, path: /samples/basic/hello }
     expect:
       status: 200
-      body: "Hello, World!"
+      body: { response: "Hello, World!" }

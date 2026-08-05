@@ -6,11 +6,12 @@ tests:
     expect:
       status: 200
       body_matches:
-        current_ms: "$type:number"
-        current_iso: "$regex:^\\d{4}-\\d{2}-\\d{2}T"
-        unix_seconds: "$type:number"
-        year: "$type:number"
-        month: "$type:number"
-        day: "$type:number"
-        hours: "$type:number"
-        minutes: "$type:number"
+        response:
+          current_ms: "$type:number"
+          current_iso: "$regex:^\\d{4}-\\d{2}-\\d{2}T"
+          unix_seconds: "$type:number"
+          year: "$type:number"
+          month: "$type:number"
+          day: "$type:number"
+          hours: "$type:number"
+          minutes: "$type:number"

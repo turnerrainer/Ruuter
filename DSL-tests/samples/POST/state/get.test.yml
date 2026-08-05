@@ -5,7 +5,7 @@ tests:
     request: { method: POST, path: /samples/state/get }
     expect:
       status: 200
-      body: { counter: null }
+      body: { response: { counter: null } }
 
   - name: seeded key echoes value
     setup:
@@ -14,4 +14,4 @@ tests:
     request: { method: POST, path: /samples/state/get }
     expect:
       status: 200
-      body: { counter: 42 }
+      body: { response: { counter: 42 } }

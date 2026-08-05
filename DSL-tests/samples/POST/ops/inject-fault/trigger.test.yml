@@ -8,7 +8,7 @@ tests:
     request: { method: POST, path: /samples/ops/inject-fault/trigger }
     expect:
       status: 403
-      body: { error: "inject-fault is disabled in production" }
+      body: { response: { error: "inject-fault is disabled in production" } }
 
   - name: valid Bearer still blocked by override guard
     request:
@@ -17,4 +17,4 @@ tests:
       headers: { authorization: "Bearer valid" }
     expect:
       status: 403
-      body: { error: "inject-fault is disabled in production" }
+      body: { response: { error: "inject-fault is disabled in production" } }

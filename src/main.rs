@@ -39,6 +39,12 @@ async fn main() {
         None => info!("Using built-in default config (no ruuter.yaml found)"),
     }
 
+    // Audit finding 15 — warn at boot when a config field parses but
+    // isn't fully honoured. Prevents the silent-drop pattern that let
+    // Java operators port `application.yml` verbatim and get a
+    // no-op at runtime for fields the framework doesn't wire yet.
+    ruuter_on_rust::config::warn_on_stale_config_fields(&config);
+
     // Install script-engine limits before any ScriptEngine::new() runs.
     scripting::install_default_limits(ScriptLimits {
         max_loop_iterations: config.scripting.max_loop_iterations,
@@ -140,6 +146,12 @@ async fn main() {
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
     }
+    // Audit finding 13 — install the default exception DSL config
+    // if the operator set one. HttpStepExecutor invokes it on
+    // upstream error when no local `error:` handler is set.
+    if let Some(cfg) = config.default_dsl_in_case_of_exception.clone() {
+        engine = engine.with_default_exception_dsl(cfg);
+    }
 
     let trigger_dispatcher = Arc::new(TriggerDispatcher::new(
         loaded.triggers,
@@ -202,6 +214,19 @@ async fn main() {
     } else {
         http_client_for_handle.set_self_call_handler(router.clone());
     }
+
+    // Audit finding 01: install the step-driven reload handler.
+    // Every clone of the engine sees the same OnceCell slot, so
+    // one set() is enough. Handler itself gates on
+    // `dsl.allow_dsl_reloading` when the step fires — matches
+    // Java's "not enabled in configuration" log-and-drop.
+    engine.set_reload_handler(std::sync::Arc::new(
+        ruuter_on_rust::dsl::hot_reload::StepReloadHandler::new(
+            config.clone(),
+            constants.clone(),
+            router.clone(),
+        ),
+    ));
 
     // DSL hot-reload watcher (dev-only). Off by default. See the
     // module docstring for security posture and the exhaustive list

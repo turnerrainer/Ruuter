@@ -509,7 +509,7 @@ respond:
         .await
         .unwrap();
     let body: serde_json::Value = resp.json().await.unwrap();
-    let seen = body["origin_seen"].as_str().unwrap_or("");
+    let seen = body["response"]["origin_seen"].as_str().unwrap_or("");
     // Documented behaviour: falls all the way through to the peer,
     // ignoring both a non-IP XFF leftmost AND the valid X-Real-IP.
     // If a future fix threads X-Real-IP as a real fallback, `seen`
@@ -555,7 +555,7 @@ respond:
         .await
         .unwrap();
     let body: serde_json::Value = resp.json().await.unwrap();
-    let seen = body["origin_seen"].as_str().unwrap_or("");
+    let seen = body["response"]["origin_seen"].as_str().unwrap_or("");
     // All three trusted entries are unparseable → trusted list is
     // effectively empty → peer is not trusted → XFF is ignored →
     // origin reflects the peer. No warning is emitted; the operator

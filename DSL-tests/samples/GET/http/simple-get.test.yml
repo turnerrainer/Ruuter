@@ -15,7 +15,8 @@ tests:
     expect:
       status: 200
       body:
-        status: "success"
-        data: { id: 1, name: "Leanne Graham", username: "Bret" }
+        response:
+          status: "success"
+          data: { id: 1, name: "Leanne Graham", username: "Bret" }
     verify_mocks:
       - { url_matches: "/users/1", count: 1 }

@@ -15,8 +15,9 @@ tests:
     expect:
       status: 200
       body_matches:
-        upstream_status: 200
-        upstream_body: { echoed: true, note: "ratcheted" }
+        response:
+          upstream_status: 200
+          upstream_body: { echoed: true, note: "ratcheted" }
     verify_mocks:
       - url_matches: "/patch"
         count: 1

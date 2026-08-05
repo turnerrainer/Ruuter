@@ -79,8 +79,9 @@ impl StepExecutor for IterateStepExecutor {
             context.set_variable(into.clone(), Value::Array(collected));
         }
 
-        Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
-        ))
+        Ok(StepResult {
+            next_step: self.step.next.clone(),
+            ..StepResult::new()
+        })
     }
 }

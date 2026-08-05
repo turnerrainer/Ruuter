@@ -5,7 +5,7 @@ tests:
     request: { method: POST, path: /samples/scheduled/last-seen }
     expect:
       status: 200
-      body: { last_seen_ms: null, age_ms: null }
+      body: { response: { last_seen_ms: null, age_ms: null } }
 
   - name: seeded key returns numeric age
     setup:
@@ -17,5 +17,6 @@ tests:
     expect:
       status: 200
       body_matches:
-        last_seen_ms: 1704067200000
-        age_ms: "$type:number"
+        response:
+          last_seen_ms: 1704067200000
+          age_ms: "$type:number"

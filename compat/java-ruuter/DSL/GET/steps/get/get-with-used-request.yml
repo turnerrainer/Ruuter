@@ -1,0 +1,10 @@
+get_message:
+  call: http.get
+  args:
+    url: "[#DOMAIN_URL]:[#PORT]/steps/return/return-with-script"
+    query:
+      var: "value"
+  result: the_message
+
+return_value:
+  return: ${the_message.request}

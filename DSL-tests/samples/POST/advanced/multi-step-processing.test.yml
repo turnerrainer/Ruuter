@@ -10,12 +10,13 @@ tests:
     expect:
       status: 200
       body_matches:
-        result:
-          data: { foo: "bar" }
-          metadata:
-            source: "api"
-        status: "success"
-        version: "1.0"
+        response:
+          result:
+            data: { foo: "bar" }
+            metadata:
+              source: "api"
+          status: "success"
+          version: "1.0"
 
   - name: missing data -> 400
     request:
@@ -25,4 +26,4 @@ tests:
       body: {}
     expect:
       status: 400
-      body: { error: "Missing required field: data" }
+      body: { response: { error: "Missing required field: data" } }

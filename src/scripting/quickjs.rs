@@ -174,13 +174,16 @@ fn evaluate_string<'js>(
     if segs.len() == 1 {
         let (start, end, ref inner) = segs[0];
         if start == 0 && end == s.len() {
-            return execute_js(inner, ctx, registry, session);
+            let v = execute_js(inner, ctx, registry, session)?;
+            return maybe_suppress_optional_null(v, inner);
         }
     }
     // Whole-string `$=...=` line pattern
     if let Some(caps) = LINE_PATTERN.captures(s) {
         if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], ctx, registry, session);
+            let inner = &caps[1];
+            let v = execute_js(inner, ctx, registry, session)?;
+            return maybe_suppress_optional_null(v, inner);
         }
     }
 
@@ -191,8 +194,15 @@ fn evaluate_string<'js>(
     for (start, end, inner) in &segs {
         out.push_str(&s[cursor..*start]);
         match execute_js(inner, ctx, registry, session) {
-            Ok(Value::String(s2)) => out.push_str(&s2),
-            Ok(other) => out.push_str(&other.to_string()),
+            Ok(v) => {
+                // Audit finding 17: .optional. null suppression on
+                // each segment of a mixed string.
+                let coerced = maybe_suppress_optional_null(v, inner)?;
+                match coerced {
+                    Value::String(s2) => out.push_str(&s2),
+                    other => out.push_str(&other.to_string()),
+                }
+            }
             Err(e) => {
                 if last_err.is_none() {
                     last_err = Some(e);
@@ -207,6 +217,17 @@ fn evaluate_string<'js>(
         return Err(e);
     }
     Ok(Value::String(out))
+}
+
+/// Audit finding 17 — Java's `filterEmptyOptional`. See the
+/// matching helper in `boa.rs` for the full docstring; QuickJS and
+/// Boa share semantics so a DSL author writes the same YAML on
+/// either backend.
+fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
+    if matches!(v, Value::Null) && (expr.contains(".optional.") || expr.contains(".optional_")) {
+        return Ok(Value::String(String::new()));
+    }
+    Ok(v)
 }
 
 fn execute_js<'js>(
@@ -227,15 +248,20 @@ fn execute_js<'js>(
                 .compiled_flags
                 .get(id as usize)
                 .map(|f| f.load(Ordering::Acquire));
+            // Invoke via `.call(globalThis)` so `this` inside the
+            // script body is `globalThis` (matches Boa's top-level
+            // eval semantics). Plain `()` would leave `this` as
+            // `undefined` under QuickJS strict mode, breaking DSL
+            // authors' `${this['foo-bar']}` reads (audit finding 16).
             let script_bytes = if already == Some(true) {
-                format!("__fn_{}()", id)
+                format!("__fn_{}.call(globalThis)", id)
             } else {
                 // Combined define+invoke — single eval, no
                 // double-parse. The parenthesised assignment
-                // returns the freshly-defined function; the
-                // trailing `()` invokes it.
+                // returns the freshly-defined function; `.call`
+                // invokes it with `this === globalThis`.
                 format!(
-                    "(globalThis.__fn_{} = function(){{ return ({}); }})()",
+                    "(globalThis.__fn_{} = function(){{ return ({}); }}).call(globalThis)",
                     id, script
                 )
             };
@@ -249,7 +275,10 @@ fn execute_js<'js>(
         }
         None => {
             // Not registered — synthesised script. Compile inline.
-            let wrapped = format!("(function(){{ return ({}); }})()", script);
+            let wrapped = format!(
+                "(function(){{ return ({}); }}).call(globalThis)",
+                script
+            );
             ctx.eval(wrapped.as_bytes())
                 .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
         }
@@ -315,12 +344,16 @@ fn setup_bindings<'js>(ctx: &rquickjs::Ctx<'js>, context: &ExecutionContext) -> 
     )
     .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs bind incoming: {}", e)))?;
 
+    // Audit finding 16: bind via `globalThis[<js-string>]` rather
+    // than dot syntax on globalThis, so DSL variable names with
+    // non-identifier characters (dashes, dots) still bind cleanly
+    // instead of failing with a SyntaxError.
     for (key, value) in context.get_all_variables() {
         let value_json = serde_json::to_string(&value)?;
         ctx.eval::<(), _>(
             format!(
-                "globalThis.{} = JSON.parse({});",
-                key,
+                "globalThis[{}] = JSON.parse({});",
+                js_string_literal(&key),
                 js_string_literal(&value_json)
             )
             .as_bytes(),

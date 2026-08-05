@@ -10,8 +10,9 @@ tests:
     expect:
       status: 201
       body_matches:
-        data: { name: "widget", type: "gadget" }
-        metadata:
-          created_by: "system"
-          version: 1
-          created_at: "$type:number"
+        response:
+          data: { name: "widget", type: "gadget" }
+          metadata:
+            created_by: "system"
+            version: 1
+            created_at: "$type:number"

@@ -1,6 +1,6 @@
 [package]
 name = "ruuter-on-rust"
-version = "0.8.0-rc.1"
+version = "0.8.1-rc.2"
 edition = "2021"
 authors = ["Rainer Türner"]
 license = "Apache-2.0"
@@ -44,10 +44,16 @@ url = "2.5"
 rand = "0.8"
 rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures", "chrono"] }
 sha2 = "0.10"
+# Audit finding 11 — inbound multipart/form-data parser (Java parity).
+multer = "3"
+bytes = "1"
 
 [dev-dependencies]
 mockito = "1.5"
 tempfile = "3"
+# Transitive of notify-debouncer-full; pulled in directly for tests
+# that construct `DebouncedEvent` fixtures (needs `instant::Instant`).
+instant = "0.1"
 
 [[bin]]
 name = "ruuter-on-rust"

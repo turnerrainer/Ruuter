@@ -10,8 +10,9 @@ tests:
     expect:
       status: 200
       body:
-        message: "Validation passed"
-        data: { username: "rainer", email: "r@example.com" }
+        response:
+          message: "Validation passed"
+          data: { username: "rainer", email: "r@example.com" }
 
   - name: short username -> 400
     request:
@@ -21,7 +22,7 @@ tests:
       body: { username: "r", email: "r@example.com" }
     expect:
       status: 400
-      body: { error: "Username must be at least 3 characters" }
+      body: { response: { error: "Username must be at least 3 characters" } }
 
   - name: invalid email -> 400
     request:
@@ -31,4 +32,4 @@ tests:
       body: { username: "rainer", email: "not-an-email" }
     expect:
       status: 400
-      body: { error: "Invalid email format" }
+      body: { response: { error: "Invalid email format" } }

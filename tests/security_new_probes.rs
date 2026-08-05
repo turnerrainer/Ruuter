@@ -198,7 +198,7 @@ respond:
         .await
         .unwrap();
     let body: serde_json::Value = resp.json().await.unwrap();
-    let seen = body["origin_seen"].as_str().unwrap_or("");
+    let seen = body["response"]["origin_seen"].as_str().unwrap_or("");
     // **N2 fixed** — `resolve_origin` splits XFF on `,`, trims, and
     // takes the leftmost value only when it parses as an `IpAddr`.
     // A non-IP leftmost value (`attacker.example`) fails the parse
@@ -242,7 +242,7 @@ respond:
         .await
         .unwrap();
     let body: serde_json::Value = resp.json().await.unwrap();
-    let seen = body["origin_seen"].as_str().unwrap_or("");
+    let seen = body["response"]["origin_seen"].as_str().unwrap_or("");
     // **N3 fixed** — `resolve_origin` now parses both the peer IP
     // and each `trusted` entry as `IpAddr` and canonicalises
     // IPv4-mapped IPv6 back to plain IPv4. An operator writing

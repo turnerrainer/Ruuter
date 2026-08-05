@@ -98,12 +98,13 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
     if segs.len() == 1 {
         let (start, end, ref inner) = segs[0];
         if start == 0 && end == s.len() {
-            return execute_js(inner, boa);
+            return maybe_suppress_optional_null(execute_js(inner, boa)?, inner);
         }
     }
     if let Some(caps) = LINE_PATTERN.captures(s) {
         if caps.get(0).unwrap().as_str() == s {
-            return execute_js(&caps[1], boa);
+            let inner = &caps[1];
+            return maybe_suppress_optional_null(execute_js(inner, boa)?, inner);
         }
     }
 
@@ -114,8 +115,17 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
     for (start, end, inner) in &segs {
         out.push_str(&s[cursor..*start]);
         match execute_js(inner, boa) {
-            Ok(Value::String(s2)) => out.push_str(&s2),
-            Ok(other) => out.push_str(&other.to_string()),
+            Ok(v) => {
+                // Audit finding 17: `.optional.` in the expression
+                // text suppresses null → "" (Java's
+                // filterEmptyOptional). Applied per-segment for
+                // mixed strings.
+                let coerced = maybe_suppress_optional_null(v, inner)?;
+                match coerced {
+                    Value::String(s2) => out.push_str(&s2),
+                    other => out.push_str(&other.to_string()),
+                }
+            }
             Err(e) => {
                 if last_err.is_none() {
                     last_err = Some(e);
@@ -131,6 +141,26 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
         return Err(e);
     }
     Ok(Value::String(out))
+}
+
+/// Audit finding 17 — Java's `filterEmptyOptional`. When a script
+/// expression's text contains `.optional.` or `.optional_`, a null
+/// / undefined result is coerced to `""` (empty string). This lets
+/// DSL authors reach optional response fields without wrapping each
+/// access in a `switch:` guard:
+///
+/// ```yaml
+/// assign:
+///   tag: "${incoming.body.optional.tag}"   # missing → "", not null
+/// ```
+///
+/// Rust exposes evaluated null as `Value::Null` — coerce to empty
+/// string when the expression text opts in.
+fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
+    if matches!(v, Value::Null) && (expr.contains(".optional.") || expr.contains(".optional_")) {
+        return Ok(Value::String(String::new()));
+    }
+    Ok(v)
 }
 
 fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
@@ -196,16 +226,48 @@ fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()
     )))
     .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
 
+    // Audit finding 16: bind variables via `globalThis["<name>"] = …`
+    // rather than `var <name> = …`. Pre-fix, DSL variable names
+    // that aren't valid JS identifiers (dashes, dots, spaces) made
+    // the eval throw SyntaxError before the actual script even
+    // ran. Under this fix the binding always succeeds; identifier-
+    // valid names still resolve via bare `${foo}` (globalThis
+    // lookup) while non-identifier names remain reachable via
+    // `${this["foo-bar"]}` in the DSL.
     for (key, value) in context.get_all_variables() {
         let value_json = serde_json::to_string(&value)?;
         boa.eval(Source::from_bytes(&format!(
-            "var {} = {};",
-            key, value_json
+            "globalThis[{}] = {};",
+            js_string_literal(&key),
+            value_json
         )))
         .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
     }
 
     Ok(())
+}
+
+/// Audit finding 16 helper. Encode `s` as a JS string literal with
+/// proper escaping so untrusted variable names can't inject syntax
+/// into the eval string.
+fn js_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {

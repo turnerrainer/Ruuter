@@ -30,6 +30,7 @@ async fn run_patch(url: String, timeout_ms: Option<u64>) -> Result<serde_json::V
             next: Some("end".into()),
             error: None,
             timeout: timeout_ms,
+            base: Default::default(),
         }),
     );
     let dsl = Dsl::new(steps);

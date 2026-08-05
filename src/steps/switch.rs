@@ -32,8 +32,11 @@ impl StepExecutor for SwitchStepExecutor {
             }
         }
 
-        Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
-        ))
+        // Finding 03 fix: no condition matched — fall through to
+        // `next:` if set, else to source-order next.
+        Ok(StepResult {
+            next_step: self.step.next.clone(),
+            ..StepResult::new()
+        })
     }
 }

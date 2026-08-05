@@ -110,8 +110,39 @@ impl DslLoader {
             if name == "triggers" {
                 self.load_triggers(&path, project_name, &mut triggers)?;
             } else if RESERVED_SUBDIRS.contains(&name.as_str()) {
-                // sources/ etc. — handled by the source supervisor, not here.
+                // sources/ (legacy WS outbound) — handled by the source
+                // supervisor, not here. cronmanager-jobs/ is documentation
+                // only, never loaded.
                 continue;
+            } else if name == "WS" {
+                // WS/ has two sub-layouts:
+                //   NEW: WS/inbound/<path>.yml  → inbound frame handlers
+                //        WS/outbound/<feed>.yml → outbound feed configs
+                //             (loaded by src/sources/loader.rs, skipped here)
+                //   OLD: WS/<path>.yml directly → inbound frame handlers
+                //             (deprecated — WARN, still works)
+                let inbound_dir = path.join("inbound");
+                let outbound_dir = path.join("outbound");
+                if inbound_dir.exists() {
+                    let (dsls, method_guards) = self.load_method_dsls(&inbound_dir, &name)?;
+                    methods.insert(name, dsls);
+                    guards.extend(method_guards);
+                } else if outbound_dir.exists() {
+                    // Only outbound feeds under WS/ — no inbound DSLs to
+                    // load. That's a valid layout; the sources loader
+                    // picks up outbound/.
+                } else {
+                    // Legacy: files directly under WS/. Load as inbound.
+                    tracing::warn!(
+                        project = %project_name,
+                        "WS/ contains DSLs directly (legacy layout); \
+                         move them under WS/inbound/ to match the \
+                         WS/outbound/ layout for outbound feeds"
+                    );
+                    let (dsls, method_guards) = self.load_method_dsls(&path, &name)?;
+                    methods.insert(name, dsls);
+                    guards.extend(method_guards);
+                }
             } else {
                 let (dsls, method_guards) = self.load_method_dsls(&path, &name)?;
                 methods.insert(name, dsls);

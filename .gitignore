@@ -40,3 +40,12 @@ constants.local.ini
 
 # Postman workspace — regenerated from `curl /_/openapi.json`
 postman/openapi.json
+
+# In-house-only artifacts — never publish to GitHub.
+# May exist locally for internal audit / process work.
+/DIVERGENCES.md
+/COVERAGE-MATRIX.md
+/MIGRATION.md
+/REFACTO-DEVIATIONS.md
+/findings/
+/book/src/reference/compliance.md

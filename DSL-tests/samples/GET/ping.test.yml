@@ -6,4 +6,4 @@ tests:
     request: { method: GET, path: /samples/ping }
     expect:
       status: 202
-      body: pong
+      body: { response: pong }

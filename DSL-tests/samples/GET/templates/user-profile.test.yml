@@ -20,4 +20,4 @@ tests:
       query: { userId: "9" }
     expect:
       status: 200
-      body: { id: 9, name: "Glenna Reichert" }
+      body: { response: { id: 9, name: "Glenna Reichert" } }

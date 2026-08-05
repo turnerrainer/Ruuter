@@ -6,12 +6,13 @@ tests:
     expect:
       status: 200
       body_matches:
-        profile:
-          firstName: "Jane"
-          lastName: "Smith"
-          age: 28
-        settings:
-          theme: "dark"
-          notifications: true
-        metadata:
-          created: "$type:number"
+        response:
+          profile:
+            firstName: "Jane"
+            lastName: "Smith"
+            age: 28
+          settings:
+            theme: "dark"
+            notifications: true
+          metadata:
+            created: "$type:number"

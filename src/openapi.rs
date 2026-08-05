@@ -359,6 +359,7 @@ mod tests {
                 headers: None,
                 wrapper: None,
                 next: None,
+                base: Default::default(),
             }),
         );
         Dsl::new(steps)

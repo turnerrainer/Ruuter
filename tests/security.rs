@@ -198,7 +198,7 @@ reply:
         .json()
         .await
         .unwrap();
-    assert_eq!(r1["value"], 1);
+    assert_eq!(r1["response"]["value"], 1);
 
     let resp2 = c
         .post(format!("http://127.0.0.1:{}/svc/inc", port))
@@ -214,7 +214,7 @@ reply:
     );
     let r2: serde_json::Value = resp2.json().await.unwrap();
     assert_eq!(
-        r2["value"], 2,
+        r2["response"]["value"], 2,
         "second call must re-run the DSL (framework no longer caches by Idempotency-Key)"
     );
 }

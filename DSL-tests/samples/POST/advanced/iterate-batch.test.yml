@@ -14,11 +14,12 @@ tests:
     expect:
       status: 200
       body:
-        count: 3
-        totals:
-          - { id: "o1", net: 10 }
-          - { id: "o2", net: 30 }
-          - { id: "o3", net: 100 }
+        response:
+          count: 3
+          totals:
+            - { id: "o1", net: 10 }
+            - { id: "o2", net: 30 }
+            - { id: "o3", net: 100 }
 
   - name: empty orders yields zero totals
     request:
@@ -28,4 +29,4 @@ tests:
       body: { orders: [] }
     expect:
       status: 200
-      body: { count: 0, totals: [] }
+      body: { response: { count: 0, totals: [] } }

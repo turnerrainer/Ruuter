@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Audit-sweep fixes (rolling into `[0.8.0-rc.2]`). Full entry lives in
+the root [`CHANGELOG.md`](https://github.com/turnerrainer/Ruuter/blob/dev/CHANGELOG.md).
+
+- **Audit-sweep fixes**: hot-reload (step-driven + watcher coexist),
+  base-step fields (`sleep`, `maxRecursions`, `skip`, `next: null`)
+  now honoured, ReturnStep `Set-Cookie` / wrapper defaults, per-step
+  `maxRecursions` cap tracked, `default_dsl_in_case_of_exception` +
+  `finalResponse` status-code handling, guards `mode: stack |
+  closest_only` knob, script binding via `globalThis["<key>"]`,
+  `.optional.` null-suppression in script evaluation, boot-time WARN
+  for stale config fields.
+- **Response wrapper default flipped to `true`**. Old `false`
+  behaviour still reachable via `response.default_wrapper: false` or
+  per-step `wrapper: false`. See
+  [Response wrapper](../config/response-wrapper.md).
+- **WS layout renamed to `WS/{inbound,outbound}/`**. Legacy
+  `WS/*.yml` and `sources/*.yml` still load with a WARN — no
+  breakage, but rename before v1. See
+  [Reserved subdirectories](./reserved-subdirs.md).
+- **`compat/` parse gate** added to CI — every sample YAML in
+  `compat/` must round-trip through the parser cleanly on every PR.
+- **New book section**: [Configuration deep dive](../config/index.md)
+  — one page per knob, with defaults / rationale / breakage modes /
+  copy-clean YAML.
+
 ## [0.8.0-rc.1] - 2026-07-27
 
 See the [root `CHANGELOG.md`](https://github.com/turnerrainer/Ruuter/blob/dev/CHANGELOG.md#080-rc1---2026-07-27)

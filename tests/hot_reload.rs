@@ -85,7 +85,7 @@ async fn publish_dsls_makes_new_route_body_visible() {
     // v1 baseline
     let (status, body) = hit(router.clone().build_axum_router_from_arc(), "reload-test").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"v1\"");
+    assert_eq!(body, "{\"response\":\"v1\"}");
 
     // Rewrite the same DSL and re-load through the same public path
     // the watcher uses.
@@ -101,7 +101,7 @@ async fn publish_dsls_makes_new_route_body_visible() {
     // v2 visible on the SAME router Arc — swap is atomic and internal
     let (status, body) = hit(router.build_axum_router_from_arc(), "reload-test").await;
     assert_eq!(status, 200);
-    assert_eq!(body, "\"v2\"");
+    assert_eq!(body, "{\"response\":\"v2\"}");
 }
 
 /// A DSL added after boot (net-new file, not just a rewrite) becomes
@@ -135,7 +135,7 @@ async fn publish_dsls_exposes_new_route() {
 
     let (status, body) = hit(router.build_axum_router_from_arc(), "new-project").await;
     assert_eq!(status, 201);
-    assert_eq!(body, "\"fresh\"");
+    assert_eq!(body, "{\"response\":\"fresh\"}");
 }
 
 /// A DSL removed after boot returns 404 after publish. Verifies the

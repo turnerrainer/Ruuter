@@ -210,7 +210,21 @@ impl DslRouter {
             return longest_override.into_iter().collect();
         }
 
-        matches.into_iter().map(|(_, d)| d).collect()
+        // Audit finding 14: guard mode. Default `Stack` returns
+        // every ancestor guard (outer-first, already sorted).
+        // `ClosestOnly` keeps only the LAST entry (longest key,
+        // innermost ancestor) — matches Java's DslService.getGuard
+        // recursive strip-and-lookup.
+        match self.config.guards.mode {
+            crate::config::GuardMode::Stack => {
+                matches.into_iter().map(|(_, d)| d).collect()
+            }
+            crate::config::GuardMode::ClosestOnly => matches
+                .into_iter()
+                .last()
+                .map(|(_, d)| vec![d])
+                .unwrap_or_default(),
+        }
     }
 
     pub fn build_axum_router(self) -> Router {
@@ -282,6 +296,58 @@ impl DslRouter {
             .unwrap_or_else(generate_traceparent);
         let mut new_headers = headers;
         new_headers.insert("traceparent".to_string(), traceparent.clone());
+
+        // Audit finding 10: enforce declare-block allowlists (Java's
+        // DslService `filterFields` + `checkFields`). Body / query /
+        // header maps are filtered down to the declared allowlist;
+        // POST body additionally must CONTAIN every declared field
+        // (`checkFields`). GET runs the check against the query.
+        // Missing declaration = permissive (matches Java).
+        let mut body = body;
+        if let Some(decl) = &dsl.declaration {
+            if let Some(allow) = decl.effective_allowed_body() {
+                filter_str_keyed(&mut body, &allow);
+                if uppercase_method == "POST" {
+                    for field in &allow {
+                        if !body.contains_key(field) {
+                            return Err(RuuterError::DslExecution {
+                                step: "declare".into(),
+                                message: format!("Field missing: {}", field),
+                            });
+                        }
+                    }
+                }
+            }
+            if let Some(allow) = decl.effective_allowed_params() {
+                // Preserve the framework-injected `pathParams` key so
+                // path-param DSLs keep working regardless of the
+                // declared allowlist.
+                let path_params_saved = query.remove("pathParams");
+                filter_str_keyed(&mut query, &allow);
+                if let Some(pp) = path_params_saved {
+                    query.insert("pathParams".to_string(), pp);
+                }
+                if uppercase_method == "GET" {
+                    if let Some(allow_body) = decl.effective_allowed_body() {
+                        for field in &allow_body {
+                            if !query.contains_key(field) {
+                                return Err(RuuterError::DslExecution {
+                                    step: "declare".into(),
+                                    message: format!("Field missing: {}", field),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(allow) = decl.effective_allowed_header() {
+                filter_str_keyed(&mut new_headers, &allow);
+                // Keep traceparent regardless — framework-injected.
+                new_headers
+                    .entry("traceparent".to_string())
+                    .or_insert(traceparent.clone());
+            }
+        }
 
         let context = ExecutionContext::with_state(
             body,
@@ -475,10 +541,29 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
 
-    let headers_map: HashMap<String, String> = headers
+    let mut headers_map: HashMap<String, String> = headers
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
+
+    // Audit finding 07 (Java parity):
+    // ApplicationProperties.incomingRequests.headers is injected into
+    // every request's header map. Java has script-eval on the values
+    // (`Map<String, Object>`); Rust's config is `HashMap<String,
+    // String>` which is a strict subset — no eval needed. Later
+    // wins: the config-declared headers OVERWRITE any client-sent
+    // header of the same name (matches Java's `.putAll`).
+    //
+    // axum lower-cases HTTP header names when it exposes them; the
+    // context ships headers verbatim into `${incoming.headers.*}`
+    // as a JS object, and JS object keys are case-sensitive. We
+    // lower-case config keys here so operators can write
+    // `X-Canary` in ruuter.yaml but DSLs still read via
+    // `incoming.headers['x-canary']` (consistent with client-sent
+    // headers).
+    for (k, v) in &router.config.incoming_requests.headers {
+        headers_map.insert(k.to_ascii_lowercase(), v.clone());
+    }
 
     // Read body bytes (up to 16 MiB) then parse as JSON object.
     let body_bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await {
@@ -507,14 +592,26 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .map(|mime| mime.eq_ignore_ascii_case("application/json") || mime.ends_with("+json"))
         .unwrap_or(false);
 
+    let mime = content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or("");
+
+    // Audit finding 11 — Java-parity inbound content-type dispatch.
+    // Pre-fix, only application/json was parsed; everything else
+    // dropped the body silently. Now:
+    //   application/json (+ *+json)                  → parsed map (existing)
+    //   application/x-www-form-urlencoded            → key/value map (new)
+    //   multipart/form-data                          → filename→string map (new)
+    //   text/<subtype>                               → { <subtype>: <body> } (new)
+    //   anything else                                → empty (unchanged)
     let body_map: HashMap<String, Value> = if body_bytes.is_empty() {
         HashMap::new()
     } else if looks_json {
         match serde_json::from_slice::<Value>(&body_bytes) {
             Ok(Value::Object(map)) => map.into_iter().collect(),
             Ok(other) => {
-                // Non-object JSON — wrap under `value` so a DSL can still
-                // reach it via `incoming.body.value`, matching the WS shape.
                 let mut wrapper = HashMap::new();
                 wrapper.insert("value".to_string(), other);
                 wrapper
@@ -527,6 +624,47 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
                     .into_response();
             }
         }
+    } else if mime.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+        url::form_urlencoded::parse(&body_bytes)
+            .into_owned()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect()
+    } else if mime.eq_ignore_ascii_case("multipart/form-data") {
+        // Extract boundary from full content-type header (may include ;charset=…)
+        let boundary = match content_type
+            .split(';')
+            .map(str::trim)
+            .find_map(|s| s.strip_prefix("boundary="))
+        {
+            Some(b) => b.trim_matches('"').to_string(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "multipart/form-data missing boundary" })),
+                )
+                    .into_response();
+            }
+        };
+        match parse_multipart_body(&body_bytes, &boundary).await {
+            Ok(m) => m,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("multipart parse: {}", e) })),
+                )
+                    .into_response();
+            }
+        }
+    } else if let Some(subtype) = mime.strip_prefix("text/") {
+        // Java: `Map.of(subType, requestBody)` — the whole body under
+        // its text/<subtype> key. UTF-8 lossy so binary-in-text (rare
+        // but possible) doesn't 500 the request.
+        let mut wrapper = HashMap::new();
+        wrapper.insert(
+            subtype.to_string(),
+            Value::String(String::from_utf8_lossy(&body_bytes).into_owned()),
+        );
+        wrapper
     } else {
         HashMap::new()
     };
@@ -563,11 +701,51 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         .await;
 
     let (status_code, body_value, extra_headers) = match &dsl_outcome {
-        Ok(result) => (
-            StatusCode::from_u16(result.status).unwrap_or(StatusCode::OK),
-            result.value.clone().unwrap_or(json!({})),
-            result.headers.clone(),
-        ),
+        Ok(result) => {
+            // Audit finding 13 — finalResponse status defaults. When
+            // the DSL didn't set an explicit `status:` on its
+            // return step, the engine reports `status = 200`. If
+            // the operator configured `response.dsl_with_response_status`
+            // (value emitted) or `response.dsl_without_response_status`
+            // (no value emitted), that overrides — matches Java's
+            // `finalResponse.dslWithResponseHttpStatusCode`.
+            let status = if result.status == 200 {
+                if result.value.is_some() {
+                    router
+                        .config
+                        .response
+                        .dsl_with_response_status
+                        .unwrap_or(result.status)
+                } else {
+                    router
+                        .config
+                        .response
+                        .dsl_without_response_status
+                        .unwrap_or(result.status)
+                }
+            } else {
+                result.status
+            };
+
+            // Audit finding 12 — apply wrapper. Order of precedence:
+            //   1. ReturnStep's explicit `wrapper: X` (Some(true|false))
+            //   2. AppConfig `response.default_wrapper` when the step
+            //      didn't specify (default `true` — Java parity)
+            let wrap = result
+                .wrapper
+                .unwrap_or(router.config.response.default_wrapper);
+            let raw = result.value.clone().unwrap_or(json!({}));
+            let body = if wrap {
+                json!({ "response": raw })
+            } else {
+                raw
+            };
+            (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+                body,
+                result.headers.clone(),
+            )
+        }
         Err(RuuterError::FileNotFound(_)) => (
             StatusCode::NOT_FOUND,
             json!({"error": "Not Found"}),
@@ -821,11 +999,60 @@ impl DslRouter {
     }
 }
 
+/// Audit finding 11 — parse a `multipart/form-data` body into a
+/// `HashMap<String, Value>`. Each part with `filename="…"` becomes
+/// `<filename> → <utf-8 lossy contents>` (matches Java's
+/// `Arrays.stream(file).collect(toMap(f -> f.getOriginalFilename(),
+/// f -> new String(f.getBytes(), UTF_8)))` in DslController). Non-
+/// file parts (`name="…"` without a filename) become `<name> →
+/// <utf-8 lossy contents>`.
+///
+/// Deliberately minimal parser — depends on `multer` (a lightweight
+/// multipart crate). We only need the "extract every part into the
+/// map" contract; boundary detection is delegated.
+async fn parse_multipart_body(
+    body_bytes: &[u8],
+    boundary: &str,
+) -> std::result::Result<HashMap<String, Value>, String> {
+    use futures::stream;
+    let stream_body: bytes::Bytes = body_bytes.to_vec().into();
+    let stream = stream::iter(vec![Ok::<_, std::io::Error>(stream_body)]);
+    let mut multipart = multer::Multipart::new(stream, boundary.to_string());
+    let mut out = HashMap::new();
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let filename = field.file_name().map(|s| s.to_string());
+        let name = field.name().map(|s| s.to_string());
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
+            bytes.extend_from_slice(&chunk);
+        }
+        let content = String::from_utf8_lossy(&bytes).into_owned();
+        // Prefer filename as key (Java behaviour for `file[]`
+        // uploads); fall back to field name.
+        let key = filename.or(name).unwrap_or_else(|| "part".to_string());
+        out.insert(key, Value::String(content));
+    }
+    Ok(out)
+}
+
 fn is_override_guard(dsl: &Dsl) -> bool {
     dsl.declaration
         .as_ref()
         .and_then(|d| d.override_ancestors)
         .unwrap_or(false)
+}
+
+/// Audit finding 10 helper — restrict `map` to keys in `allowed`.
+/// Generic over the value type so we can filter body/query/headers
+/// with one implementation. Java's `DslService.filterFields`.
+fn filter_str_keyed<V>(map: &mut HashMap<String, V>, allowed: &[String]) {
+    let allowed_set: std::collections::HashSet<&str> =
+        allowed.iter().map(String::as_str).collect();
+    map.retain(|k, _| allowed_set.contains(k.as_str()));
 }
 
 fn parse_payload(text: &str) -> Value {

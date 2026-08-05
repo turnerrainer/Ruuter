@@ -70,7 +70,7 @@ fetch:
   next: shape
 
 shape:
-  return: { got: "${profile.response.body}" }
+  return: { got: "${profile}" }
   next: end
 "#,
         ),
@@ -143,7 +143,7 @@ call:
   result: r
   next: shape
 shape:
-  return: { echoed: "${r.response.body.pong}" }
+  return: { echoed: "${r.pong}" }
   next: end
 "#,
         ),
@@ -188,7 +188,7 @@ mk:
   result: out
   next: shape
 shape:
-  return: { name: "${out.response.body.created}" }
+  return: { name: "${out.created}" }
   next: end
 "#,
         ),

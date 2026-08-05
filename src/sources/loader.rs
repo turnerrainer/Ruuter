@@ -1,4 +1,7 @@
-//! Scan `<DSL>/<project>/sources/*.yml` and parse each into a SourceConfig.
+//! Scan `<DSL>/<project>/WS/outbound/*.yml` (preferred) or the legacy
+//! `<DSL>/<project>/sources/*.yml` (deprecated) and parse each into a
+//! `SourceConfig`. When both directories exist, the new layout wins and
+//! the legacy layout is ignored with a WARN.
 
 use crate::config::AppConfig;
 use crate::sources::config::SourceConfig;
@@ -27,11 +30,40 @@ pub fn load_all(app: &AppConfig) -> Result<Vec<(String, String, SourceConfig)>> 
             .ok_or_else(|| RuuterError::FileNotFound("Invalid project name".into()))?
             .to_string();
 
-        let sources_dir = project_path.join("sources");
-        if !sources_dir.exists() {
-            continue;
+        // New canonical layout: <project>/WS/outbound/
+        let ws_outbound_dir = project_path.join("WS").join("outbound");
+        // Legacy layout: <project>/sources/
+        let legacy_sources_dir = project_path.join("sources");
+
+        let (dir_to_load, legacy_in_use) = match (
+            ws_outbound_dir.exists(),
+            legacy_sources_dir.exists(),
+        ) {
+            (true, true) => {
+                tracing::warn!(
+                    project = %project_name,
+                    "both WS/outbound/ and sources/ present; using WS/outbound/ \
+                     and ignoring sources/ (rename or delete sources/ to \
+                     silence)"
+                );
+                (Some(ws_outbound_dir), false)
+            }
+            (true, false) => (Some(ws_outbound_dir), false),
+            (false, true) => {
+                tracing::warn!(
+                    project = %project_name,
+                    "sources/ layout is deprecated; rename to WS/outbound/ \
+                     to match the inbound WS/inbound/ layout"
+                );
+                (Some(legacy_sources_dir), true)
+            }
+            (false, false) => (None, false),
+        };
+
+        let _ = legacy_in_use;
+        if let Some(dir) = dir_to_load {
+            load_project_sources(&dir, &project_name, &mut out)?;
         }
-        load_project_sources(&sources_dir, &project_name, &mut out)?;
     }
     Ok(out)
 }

@@ -10,5 +10,6 @@ tests:
     expect:
       status: 201
       body_matches:
-        created: { username: "rainer", email: "r@example.com" }
-        timestamp: "$type:number"
+        response:
+          created: { username: "rainer", email: "r@example.com" }
+          timestamp: "$type:number"

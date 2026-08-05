@@ -6,7 +6,8 @@ tests:
     expect:
       status: 200
       body:
-        user:
-          name: "John Doe"
-          age: 30
-          city: "Tallinn"
+        response:
+          user:
+            name: "John Doe"
+            age: 30
+            city: "Tallinn"

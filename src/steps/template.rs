@@ -4,7 +4,7 @@ use crate::state::StateStore;
 use crate::steps::engine::StepEngine;
 use crate::steps::{StepExecutor, StepResult, TemplateStep};
 use crate::{Result, RuuterError};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 
 pub struct TemplateStepExecutor {
@@ -86,8 +86,22 @@ impl StepExecutor for TemplateStepExecutor {
             HashMap::new()
         };
 
+        // Audit finding 06: header values are `Value` and each one
+        // is passed through the script engine (matches Java's
+        // `evaluateScripts(headers, …)`). Evaluated result is
+        // coerced to a header-safe String — objects/arrays become
+        // JSON text (same as Java's `convertMapObjectValuesToString`).
         let child_headers: HashMap<String, String> = if let Some(h) = &self.step.headers {
-            h.clone()
+            let mut evaluated = HashMap::with_capacity(h.len());
+            for (k, v) in h {
+                let val = self.script_engine.evaluate(v, context)?;
+                let as_str = match val {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                evaluated.insert(k.clone(), as_str);
+            }
+            evaluated
         } else {
             HashMap::new()
         };
@@ -109,23 +123,21 @@ impl StepExecutor for TemplateStepExecutor {
 
         let result = self.engine.run(&target_dsl, &child_ctx).await?;
 
-        // Bind the template's return value into the caller's context
-        // under the caller-provided `result` name, mirroring how the
-        // http step binds its response.
+        // Audit finding 06: Java binds `templateInstance.getReturnValue()`
+        // directly under `resultName` — the caller's `${templateVar}`
+        // reads the raw return value, NOT a `.response.body` chain.
+        // We match that here so ported Java DSLs work as-is.
         if let Some(result_name) = &self.step.result {
-            let bound = json!({
-                "response": {
-                    "status": result.status,
-                    "body": result.value,
-                    "headers": result.headers,
-                }
-            });
+            let bound = result.value.clone().unwrap_or(Value::Null);
             context.set_variable(result_name.clone(), bound);
         }
 
-        Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
-        ))
+        // Finding 03 fix: return `next` as-is (None → engine falls
+        // through to source-order next). Never force `"end"`.
+        Ok(StepResult {
+            next_step: self.step.next.clone(),
+            ..StepResult::new()
+        })
     }
 }
 

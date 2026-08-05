@@ -7,7 +7,7 @@ tests:
     request: { method: GET, path: /samples/protected/data }
     expect:
       status: 401
-      body: { error: "Authorization header required" }
+      body: { response: { error: "Authorization header required" } }
 
   - name: non-Bearer scheme -> 401
     request:
@@ -16,7 +16,7 @@ tests:
       headers: { authorization: "Basic dXNlcjpwYXNz" }
     expect:
       status: 401
-      body: { error: "Invalid token format" }
+      body: { response: { error: "Invalid token format" } }
 
   - name: too-short Bearer -> 401
     request:
@@ -25,7 +25,7 @@ tests:
       headers: { authorization: "Bearer x" }
     expect:
       status: 401
-      body: { error: "Invalid token format" }
+      body: { response: { error: "Invalid token format" } }
 
   - name: valid Bearer reaches endpoint
     request:
@@ -35,6 +35,7 @@ tests:
     expect:
       status: 200
       body_matches:
-        message: "This is protected data"
-        user: "authenticated-user"
-        timestamp: "$type:number"
+        response:
+          message: "This is protected data"
+          user: "authenticated-user"
+          timestamp: "$type:number"

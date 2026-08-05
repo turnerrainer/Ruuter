@@ -1,0 +1,8 @@
+get_message:
+  call: http.get
+  args:
+    url: "[#DOMAIN_URL]:[#PORT]/steps/return/return-with-script"
+    query:
+      some_val: "Hello World"
+      another_val: 123
+  result: the_message

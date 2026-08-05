@@ -44,6 +44,32 @@ pub struct AppConfig {
     #[serde(default)]
     pub response_default_headers: HashMap<String, String>,
 
+    /// Audit finding 12 — response wrapper. When true (the default)
+    /// and the DSL's terminating `return:` step didn't set `wrapper:
+    /// false`, the response body is wrapped in
+    /// `{"response": <value>}` — Java-parity `RuuterResponse` shape.
+    /// Set to `false` for raw unwrapped bodies. A ReturnStep's
+    /// explicit `wrapper: true|false` always wins over this config.
+    #[serde(default)]
+    pub response: ResponseConfig,
+
+    /// Audit finding 13 — Java `defaultDslInCaseOfException` parity.
+    /// When set, an HTTP step whose status falls outside
+    /// `http_codes_allow_list` AND has no local `error:` step will
+    /// invoke this fallback DSL. The fallback receives an enriched
+    /// body containing `statusCode`, `responseBody`, and
+    /// `failedRequestId` (traceparent trace id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_dsl_in_case_of_exception: Option<DefaultHttpDslConfig>,
+
+    /// Audit finding 14 — guard evaluation mode. Default `Stack`
+    /// (current Rust behaviour: every ancestor guard runs
+    /// outer-first). `ClosestOnly` matches Java's `DslService.getGuard`
+    /// which runs ONLY the innermost ancestor guard. Guards with
+    /// `override_ancestors: true` still override in either mode.
+    #[serde(default)]
+    pub guards: GuardsConfig,
+
     #[serde(default)]
     pub internal_requests: InternalRequestsConfig,
 
@@ -135,6 +161,107 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// Audit finding 14 — guard evaluation mode.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct GuardsConfig {
+    #[serde(default)]
+    pub mode: GuardMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardMode {
+    /// Current Rust behaviour: every matching ancestor guard runs
+    /// outer-first. Safer default (more checks). Preserved for
+    /// operators who rely on stacked guards.
+    #[default]
+    Stack,
+    /// Java parity: only the closest (longest-key) ancestor guard
+    /// runs. Ancestor guards are silently skipped.
+    ClosestOnly,
+}
+
+/// Audit finding 13 — Java `DefaultHttpDsl` shape. Names an HTTP DSL
+/// (routed as `<request_type> /<project>/<dsl>`) to invoke when an
+/// upstream call errors out and no local `error:` step is set.
+///
+/// `body`, `query`, and `headers` are supplied verbatim to the
+/// fallback DSL. The framework enriches `body` with `statusCode`,
+/// `responseBody`, and `failedRequestId` (traceparent trace id)
+/// keys before dispatch (Java's `DefaultHttpDsl.executeHttpDefaultDsl`).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct DefaultHttpDslConfig {
+    /// DSL name relative to the project. Java: `dsl:` field.
+    pub dsl: String,
+    /// HTTP method used to look up the fallback DSL. Defaults to
+    /// POST (matches Java's `requestType` default in samples).
+    #[serde(default = "default_exception_request_type", alias = "requestType")]
+    pub request_type: String,
+    /// Project the fallback DSL lives under. Rust has a project
+    /// layer that Java doesn't — operators explicitly name it here.
+    /// Defaults to "framework" so operators can drop a
+    /// `DSL/framework/POST/default-dsl.yml` and reference it by
+    /// bare `dsl: default-dsl`.
+    #[serde(default = "default_exception_project")]
+    pub project: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub body: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub query: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+}
+
+fn default_exception_request_type() -> String {
+    "POST".to_string()
+}
+fn default_exception_project() -> String {
+    "framework".to_string()
+}
+
+/// Audit finding 12 — response-shape defaults. See `AppConfig::response`
+/// for the wrapper default semantics; other fields (dsl-with-response
+/// / -without-response status codes) mirror Java's `finalResponse`
+/// block from `application.yml` (finding 13).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResponseConfig {
+    /// Default wrapper mode when the ReturnStep doesn't specify.
+    /// `true` (default) wraps in `{"response": <value>}` — matches
+    /// Java Ruuter's `RuuterResponse` shape. `false` returns raw
+    /// body. A step-level `wrapper: X` always wins over this.
+    #[serde(default = "default_response_wrapper")]
+    pub default_wrapper: bool,
+
+    /// Audit finding 13 — Java `finalResponse.dslWithResponseHttpStatusCode`:
+    /// status returned when the DSL's `return:` step emitted a value
+    /// and didn't set an explicit `status:`. `None` = 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsl_with_response_status: Option<u16>,
+
+    /// Audit finding 13 — Java `finalResponse.dslWithoutResponseHttpStatusCode`:
+    /// status returned when the DSL never reached a `return:` step
+    /// (loop-cap exhaustion, empty pipeline, all steps skipped).
+    /// `None` = 200. Java's sample sets 300; operators picking that
+    /// pattern get an explicit "no body" signal separate from a
+    /// happy-path 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsl_without_response_status: Option<u16>,
+}
+
+fn default_response_wrapper() -> bool {
+    true
+}
+
+impl Default for ResponseConfig {
+    fn default() -> Self {
+        Self {
+            default_wrapper: default_response_wrapper(),
+            dsl_with_response_status: None,
+            dsl_without_response_status: None,
+        }
+    }
 }
 
 /// Framework hook for PATTERNS.md §3 (If-Match / ETag). The actual ETag
@@ -400,6 +527,9 @@ impl Default for AppConfig {
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
+            response: ResponseConfig::default(),
+            default_dsl_in_case_of_exception: None,
+            guards: GuardsConfig::default(),
         }
     }
 }
@@ -464,6 +594,71 @@ impl AppConfig {
             }
         }
         Ok((Self::default(), None))
+    }
+}
+
+/// Audit finding 15 — startup warning for config fields that the
+/// framework accepts (so operators can port a Java `application.yml`
+/// as-is) but doesn't yet wire end-to-end. Each warn line names the
+/// affected field AND the intended contract so an operator can tell
+/// "not implemented" from "wrong value."
+///
+/// Runs once at boot from main.rs, AFTER config load and BEFORE
+/// listener startup, so the signal is visible in the same log
+/// stream as the "Loaded config from …" line.
+pub fn warn_on_stale_config_fields(config: &AppConfig) {
+    // stop_in_case_of_exception=false is un-honoured (the engine
+    // propagates every step error via `?`, so it always stops).
+    if !config.stop_in_case_of_exception {
+        tracing::warn!(
+            "config: stop_in_case_of_exception=false is not honoured — the engine \
+             always halts a run on step error (Java's continue-on-error semantics \
+             are not implemented). Remove the setting or leave the default (true)."
+        );
+    }
+
+    // The four logging.* flags are documented but currently no
+    // consumer reads them. Warn per-flag so operators can see which
+    // knob is inert.
+    if config.logging.display_request_content {
+        tracing::warn!(
+            "config: logging.display_request_content=true has no effect yet — \
+             http-step body/query/header logging is not implemented."
+        );
+    }
+    if config.logging.display_response_content {
+        tracing::warn!(
+            "config: logging.display_response_content=true has no effect yet — \
+             http-step response-body logging is not implemented."
+        );
+    }
+    if config.logging.print_stack_trace {
+        tracing::warn!(
+            "config: logging.print_stack_trace=true has no effect yet — \
+             engine errors always render via Display."
+        );
+    }
+    if config.logging.meaningful_errors {
+        tracing::warn!(
+            "config: logging.meaningful_errors=true has no effect yet — \
+             engine does not distinguish meaningful vs. raw error paths."
+        );
+    }
+
+    // allowed_filetypes vs processed_filetypes — pre-fix Rust only
+    // reads processed_filetypes. Warn when they differ so operators
+    // know allowed_filetypes was silently the same list.
+    let allowed: std::collections::HashSet<_> =
+        config.dsl.allowed_filetypes.iter().collect();
+    let processed: std::collections::HashSet<_> =
+        config.dsl.processed_filetypes.iter().collect();
+    if allowed != processed {
+        tracing::warn!(
+            "config: dsl.allowed_filetypes differs from dsl.processed_filetypes — \
+             the loader only consults processed_filetypes. allowed_filetypes is a \
+             Java-parity noun that has no gating effect. Fold the two into \
+             processed_filetypes or accept that allowed_filetypes is inert."
+        );
     }
 }
 

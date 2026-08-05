@@ -24,8 +24,11 @@ impl StepExecutor for AssignStepExecutor {
             context.set_variable(key.clone(), evaluated);
         }
 
-        Ok(StepResult::with_next(
-            self.step.next.clone().unwrap_or_else(|| "end".to_string()),
-        ))
+        // Finding 03 fix: return `next` as-is (None → engine falls
+        // through to source-order next). Never force `"end"`.
+        Ok(StepResult {
+            next_step: self.step.next.clone(),
+            ..StepResult::new()
+        })
     }
 }
