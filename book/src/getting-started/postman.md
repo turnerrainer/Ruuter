@@ -23,7 +23,7 @@ Under `postman/` at the repo root:
 1. **File → Import** → drop both JSON files.
 2. Top-right environment selector → pick **"Ruuter-on-Rust (local)"**.
 3. Open the `samples` folder → click any request → **Send**. First few to try:
-   - `GET samples/ping` — 202 with `"pong"`
+   - `GET samples/ping` — 202 with `{"response":"pong"}`
    - `GET samples/variables/incoming-params?id=42&name=Ada` — echoes the params
    - `GET samples/basic/status-codes` — custom status
 4. Click the collection root → **Run collection** → **Run Ruuter-on-Rust DSL API**.

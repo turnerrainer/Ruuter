@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1-rc.3] - 2026-08-05
+
+Hotfix release. Re-cuts `0.8.1-rc.2` with the smoke-test regression
+introduced by the wrapper-default flip. `0.8.1-rc.2` images are on
+both registries but are **unsigned** — the smoke test in `publish.yml`
+asserted `/samples/ping` returned `"pong"` while the flipped wrapper
+default now returns `{"response":"pong"}`, so cosign never ran.
+Pull `0.8.1-rc.3` for signed, smoke-verified images.
+
+### Fixed
+
+- **`.github/workflows/publish.yml`** — smoke test now expects the
+  wrapped shape `{"response":"pong"}` on `/samples/ping`, matching
+  the runtime behaviour under `response.default_wrapper: true`.
+- **Book pages** documenting `/samples/ping` responses updated to the
+  wrapped shape: `book/src/introduction.md`,
+  `book/src/getting-started/run-locally.md`,
+  `book/src/getting-started/postman.md`,
+  `book/src/dsl/steps/return.md`.
+
+### Notes
+
+- Everything else from `0.8.1-rc.2` applies verbatim — this is only
+  a smoke-test + docs fix. No runtime code change.
+- Consumers who pulled `0.8.1-rc.2` should switch to `0.8.1-rc.3`
+  before running cosign verification.
+
 ## [0.8.1-rc.2] - 2026-08-05
 
 Second **pre-release** cut. Java-parity audit sweep (17 findings)

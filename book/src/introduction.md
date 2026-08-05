@@ -22,7 +22,7 @@ Response:
 HTTP/1.1 202 Accepted
 xpingstatusheader: pong delivered
 
-"pong"
+{"response":"pong"}
 ```
 
 No compile step, no annotations, no code-gen. Restart the container
@@ -30,7 +30,7 @@ after editing a file and the route is live — or opt in to
 [hot reload](./ops/hot-reload.md) for zero-restart edits during
 development.
 
-**Version:** 0.8.0-rc.1 (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
+**Version:** 0.8.1-rc.3 (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
 
 ## What ships in the box
 

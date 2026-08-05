@@ -264,7 +264,10 @@ jobs:
             # not just that the process bound its port. `-fsS` fails
             # on non-2xx so we get a proper exit code.
             body="$(curl -fsS http://localhost:18080/samples/ping)"
-            expected='"pong"'
+            # response.default_wrapper defaults to true (Java parity)
+            # since v0.8.1-rc.2, so the DSL's `return: pong` comes back
+            # wrapped in the RuuterResponse envelope.
+            expected='{"response":"pong"}'
             if [ "${body}" != "${expected}" ]; then
               echo "::error::${platform}: /samples/ping returned ${body}, expected ${expected}"
               docker logs "${cid}" || true
