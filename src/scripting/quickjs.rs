@@ -248,15 +248,20 @@ fn execute_js<'js>(
                 .compiled_flags
                 .get(id as usize)
                 .map(|f| f.load(Ordering::Acquire));
+            // Invoke via `.call(globalThis)` so `this` inside the
+            // script body is `globalThis` (matches Boa's top-level
+            // eval semantics). Plain `()` would leave `this` as
+            // `undefined` under QuickJS strict mode, breaking DSL
+            // authors' `${this['foo-bar']}` reads (audit finding 16).
             let script_bytes = if already == Some(true) {
-                format!("__fn_{}()", id)
+                format!("__fn_{}.call(globalThis)", id)
             } else {
                 // Combined define+invoke — single eval, no
                 // double-parse. The parenthesised assignment
-                // returns the freshly-defined function; the
-                // trailing `()` invokes it.
+                // returns the freshly-defined function; `.call`
+                // invokes it with `this === globalThis`.
                 format!(
-                    "(globalThis.__fn_{} = function(){{ return ({}); }})()",
+                    "(globalThis.__fn_{} = function(){{ return ({}); }}).call(globalThis)",
                     id, script
                 )
             };
@@ -270,7 +275,10 @@ fn execute_js<'js>(
         }
         None => {
             // Not registered — synthesised script. Compile inline.
-            let wrapped = format!("(function(){{ return ({}); }})()", script);
+            let wrapped = format!(
+                "(function(){{ return ({}); }}).call(globalThis)",
+                script
+            );
             ctx.eval(wrapped.as_bytes())
                 .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
         }
