@@ -18,8 +18,17 @@ impl DslParser {
     }
 
     pub fn parse_file(&self, path: &Path) -> Result<Dsl> {
-        let content = fs::read_to_string(path)?;
+        // Issue #26 — every error bubbling out of parse_file MUST
+        // include the file path, otherwise an operator with dozens
+        // of DSLs sees `YAML error: did not find expected key at
+        // line 55 column 39` with no way to tell which file. Wrap
+        // once at the file-boundary; downstream errors (step-level,
+        // JSON reserialisation) already name the offending step, so
+        // path + step-name together give the operator a full pointer.
+        let content = fs::read_to_string(path)
+            .map_err(|e| RuuterError::DslParse(format!("{}: {}", path.display(), e)))?;
         self.parse_content(&content)
+            .map_err(|e| RuuterError::DslParse(format!("{}: {}", path.display(), e)))
     }
 
     /// Parse a DSL from an in-memory YAML string. Constants

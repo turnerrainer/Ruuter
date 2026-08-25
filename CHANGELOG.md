@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **#26 — YAML parse failure did not name the file.** DSL loader
+  errors bubbled up a bare `serde_yaml_ng::Error` (line + column
+  only) rendered as `Failed to load DSLs: YAML error: did not find
+  expected key at line 55 column 39, ...`. An operator with dozens
+  of DSLs had no way to tell which file was broken. Fixed at
+  `parser.rs::parse_file` — every error out of that boundary is
+  now wrapped as `DSL parsing error: <path>: <underlying>`. The
+  underlying YAML diagnostic (line, column, context) is preserved
+  in full; the path just gets prepended. Regression tests in
+  `tests/parse_error_file_path.rs`.
+
 ### Added
 
 - **Declaration parity with Resql (task 070).** DSL `declaration:`
