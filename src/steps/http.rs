@@ -57,25 +57,23 @@ impl StepExecutor for HttpStepExecutor {
             None
         };
 
-        let query = if let Some(q) = &self.step.args.query {
-            let mut evaluated = HashMap::new();
-            for (k, v) in q {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            Some(evaluated)
-        } else {
-            None
-        };
-
-        let mut headers = if let Some(h) = &self.step.args.headers {
-            let mut evaluated = HashMap::new();
-            for (k, v) in h {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            evaluated
-        } else {
-            HashMap::new()
-        };
+        // Issue #25 — accept either a YAML mapping (per-key values,
+        // each with `${…}` interpolation) or a whole-map `${expr}`
+        // string that evaluates to an object at runtime. Same for
+        // headers below.
+        let query = evaluate_map_arg(
+            self.step.args.query.as_ref(),
+            &self.script_engine,
+            context,
+            "query",
+        )?;
+        let mut headers = evaluate_map_arg(
+            self.step.args.headers.as_ref(),
+            &self.script_engine,
+            context,
+            "headers",
+        )?
+        .unwrap_or_default();
 
         // Auto-forward traceparent unless the DSL already set one — every
         // Buerostack component participates in W3C tracecontext by default
@@ -231,6 +229,75 @@ impl StepExecutor for HttpStepExecutor {
             next_step: self.step.next.clone(),
             ..StepResult::new()
         })
+    }
+}
+
+/// Issue #25 — evaluate a step-arg that YAML can express two ways:
+///
+/// 1. **YAML mapping** — each value is evaluated per-key (each may
+///    itself contain `${…}` expressions). This is the traditional
+///    shape.
+/// 2. **A `${expr}` string** — evaluated once; the result must be
+///    a JSON object, which is then flattened into the map.
+///
+/// Any other JSON shape (array, scalar, non-object) is a hard
+/// runtime error naming the offending arg — DSL authors get a
+/// clear diagnostic instead of a silent broken request.
+///
+/// `arg_name` is the field name (`"headers"` / `"query"`) so
+/// error messages point at the right place.
+pub(crate) fn evaluate_map_arg(
+    arg: Option<&Value>,
+    script_engine: &ScriptEngine,
+    context: &ExecutionContext,
+    arg_name: &str,
+) -> Result<Option<HashMap<String, Value>>> {
+    let Some(v) = arg else {
+        return Ok(None);
+    };
+    match v {
+        Value::Object(map) => {
+            let mut out = HashMap::with_capacity(map.len());
+            for (k, val) in map {
+                out.insert(k.clone(), script_engine.evaluate(val, context)?);
+            }
+            Ok(Some(out))
+        }
+        Value::String(_) => {
+            // Whole-map expression form. Evaluate once; require object.
+            let evaluated = script_engine.evaluate(v, context)?;
+            match evaluated {
+                Value::Object(map) => Ok(Some(map.into_iter().collect())),
+                Value::Null => Ok(None),
+                other => Err(RuuterError::DslExecution {
+                    step: "http".into(),
+                    message: format!(
+                        "http step arg `{}`: expression must evaluate to an object, got {}",
+                        arg_name,
+                        json_kind(&other)
+                    ),
+                }),
+            }
+        }
+        other => Err(RuuterError::DslExecution {
+            step: "http".into(),
+            message: format!(
+                "http step arg `{}`: expected a YAML mapping or `${{expr}}` string, got {}",
+                arg_name,
+                json_kind(other)
+            ),
+        }),
+    }
+}
+
+fn json_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 

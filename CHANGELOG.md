@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **#25 — Cannot provide a dynamic headers map.** `http.<verb>`
+  step's `headers:` and `query:` args (and `return` step's
+  `headers:`) rejected a top-level `${expr}` string at DSL load
+  time with `invalid type: string, expected a map`. The parser
+  never handed the value to the script engine. Fixed by loosening
+  the field type from `Option<HashMap<String, Value>>` to
+  `Option<Value>` and evaluating both shapes at runtime:
+  - **YAML mapping** (traditional) — each value evaluated per-key.
+  - **`${expr}` string** — evaluated once; result MUST be a JSON
+    object (else clear step error naming the field); `null` = no
+    headers.
+
+  Enables the merge-headers pattern from the issue:
+  ```yaml
+  merge_headers:
+    assign:
+      merged_headers: "${Object.assign({}, ...)}"
+  forward:
+    call: http.post
+    args:
+      headers: "${merged_headers}"    # now works
+  ```
+
+  New integration tests in `tests/dynamic_map_args.rs` cover
+  parse-time (both shapes), runtime evaluation, and the
+  non-object diagnostic path.
+
 - **#26 — YAML parse failure did not name the file.** DSL loader
   errors bubbled up a bare `serde_yaml_ng::Error` (line + column
   only) rendered as `Failed to load DSLs: YAML error: did not find

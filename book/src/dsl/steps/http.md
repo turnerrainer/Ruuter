@@ -52,6 +52,52 @@ Reference downstream: `${upstream.response.status}`, `${upstream.response.body.f
 - Upstream status is filtered against `http_codes_allow_list` when non-empty; disallowed = step error.
 - On network error / timeout: the step returns an error; the DSL response is `500` unless the DSL handles it via a wrapping guard.
 
+## Dynamic `headers:` / `query:` maps
+
+Both `headers:` and `query:` accept two shapes:
+
+**Per-key mapping** (traditional; each value may embed `${…}`):
+
+```yaml
+args:
+  headers:
+    Authorization: "Bearer ${token}"
+    X-Trace-Id:    "${incoming.headers['x-trace-id']}"
+```
+
+**Whole-map expression** — a single `${expr}` string that evaluates
+to a JSON object at runtime. Useful when the map is computed by
+merging / spreading upstream:
+
+```yaml
+compute:
+  assign:
+    merged_headers: "${Object.assign({}, upstream.response.body[0].headers, { 'Content-Type': 'application/json' })}"
+  next: forward
+
+forward:
+  call: http.post
+  args:
+    url: "[#REMOTE_SERVICE_URL]"
+    headers: "${merged_headers}"     # ← whole-map expression
+    body: "${incoming.body}"
+```
+
+Runtime rules for the whole-map form:
+
+- The expression MUST evaluate to a JSON object. Anything else
+  (array, scalar, `null`) is a step error with a diagnostic
+  naming the field. `null` is treated as "no headers".
+- Individual values inside the resulting object are used verbatim
+  (no second-pass `${…}` evaluation — do the interpolation inside
+  the expression).
+- The framework still auto-forwards `traceparent` unless the
+  evaluated map contains it.
+
+Prior to v0.9, only the per-key mapping shape was accepted —
+`headers: "${expr}"` failed at DSL load time with
+`invalid type: string, expected a map`. Issue #25 tracked the fix.
+
 ## Runnable example
 
 `DSL/samples/GET/http/simple-get.yml`:
