@@ -26,13 +26,29 @@ The bound variable is:
 {
   "response": {
     "status":  200,
-    "body":    { ... }  // parsed JSON or null when body isn't JSON
+    "body":    { ... },  // see below
     "headers": { "content-type": "application/json", ... }
   }
 }
 ```
 
 Reference downstream: `${upstream.response.status}`, `${upstream.response.body.field}`, `${upstream.response.headers['x-my-header']}`.
+
+### Response body decoding
+
+- **JSON** upstream (any body that parses as JSON) → parsed value
+  (object / array / number / string / bool / null).
+- **Non-JSON** upstream (XML, HTML, plaintext, or any body that
+  fails JSON parse) → the raw text as a string, accessible via
+  `${upstream.response.body}`. UTF-8 lossy: invalid byte
+  sequences render as U+FFFD rather than failing the step.
+- **Empty** body → `null`.
+
+Before issue #23 was fixed, non-JSON responses silently became
+`null`, losing the payload — an XML mapper couldn't return XML,
+a plaintext error message from an upstream disappeared, etc. The
+fallback-to-string behaviour lets DSLs forward or inspect non-JSON
+upstreams without special-casing.
 
 ## Verbs
 

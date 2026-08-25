@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **#23 — `http.<verb>` step lost non-JSON upstream response bodies.**
+  Upstream responses that weren't valid JSON silently became
+  `null` in `${result.response.body}` — an XML mapper's
+  `<root>…</root>`, an upstream's plain-text diagnostic, or any
+  `text/*` payload was unrecoverable to the DSL. Fixed at
+  `http_client/mod.rs`: try JSON parse first (unchanged for JSON
+  responses), fall back to `Value::String(from_utf8_lossy(bytes))`
+  on parse failure. Empty bodies still become `None`. Binary
+  bytes are UTF-8-lossy-decoded (`U+FFFD` for invalid sequences)
+  rather than panicking.
+
 - **#25 — Cannot provide a dynamic headers map.** `http.<verb>`
   step's `headers:` and `query:` args (and `return` step's
   `headers:`) rejected a top-level `${expr}` string at DSL load
