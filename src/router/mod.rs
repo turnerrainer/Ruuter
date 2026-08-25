@@ -808,7 +808,16 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         )
         .await;
 
-    let (status_code, body_value, extra_headers) = match &dsl_outcome {
+    // `raw_body`, when Some, bypasses axum::Json and emits the string
+    // as raw bytes — see issue #24. Only set when `wrapper: false`
+    // AND the DSL value is a JSON string; every other shape stays on
+    // the JSON path.
+    let (status_code, body_value, extra_headers, raw_body): (
+        StatusCode,
+        Value,
+        HashMap<String, String>,
+        Option<String>,
+    ) = match &dsl_outcome {
         Ok(result) => {
             // Audit finding 13 — finalResponse status defaults. When
             // the DSL didn't set an explicit `status:` on its
@@ -842,6 +851,39 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
             let wrap = result
                 .wrapper
                 .unwrap_or(router.config.response.default_wrapper);
+
+            // Issue #24 — raw non-JSON emission. When ALL of:
+            //   1. `wrapper: false` (or config default_wrapper: false), AND
+            //   2. return value is a String, AND
+            //   3. DSL supplied a Content-Type header that isn't JSON
+            // then bypass axum::Json so the body isn't JSON-encoded
+            // (no surrounding quotes, no escape of `<`, `&`, etc).
+            // The Content-Type gate is deliberate: it means DSLs
+            // that simply used `wrapper: false` without setting a
+            // Content-Type (a common pattern before this fix — the
+            // wrapper flag was interpreted as "no envelope, still
+            // JSON") keep their existing shape. Only DSLs that
+            // opted into a non-JSON contract by declaring it via
+            // Content-Type get the raw emission path.
+            let dsl_content_type = result.headers.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case("content-type") {
+                    Some(v.as_str())
+                } else {
+                    None
+                }
+            });
+            let dsl_wants_non_json = dsl_content_type
+                .map(|ct| {
+                    let mime = ct.split(';').next().unwrap_or("").trim();
+                    !mime.eq_ignore_ascii_case("application/json") && !mime.ends_with("+json")
+                })
+                .unwrap_or(false);
+            let raw_string: Option<String> = if !wrap && dsl_wants_non_json {
+                result.value.as_ref().and_then(|v| v.as_str().map(String::from))
+            } else {
+                None
+            };
+
             let raw = result.value.clone().unwrap_or(json!({}));
             let body = if wrap {
                 json!({ "response": raw })
@@ -852,17 +894,20 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                 StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
                 body,
                 result.headers.clone(),
+                raw_string,
             )
         }
         Err(RuuterError::FileNotFound(_)) => (
             StatusCode::NOT_FOUND,
             json!({"error": "Not Found"}),
             HashMap::new(),
+            None,
         ),
         Err(RuuterError::BadRequest(msg)) => (
             StatusCode::BAD_REQUEST,
             json!({ "error": msg }),
             HashMap::new(),
+            None,
         ),
         Err(e) => {
             let chain = if router.config.logging.print_stack_trace {
@@ -879,12 +924,35 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": e.to_string() }),
                 HashMap::new(),
+                None,
             )
         }
     };
 
-    let mut response = match &dsl_outcome {
-        Ok(_) => {
+    let mut response = match (&dsl_outcome, raw_body) {
+        // Issue #24 — raw-string emission path. axum::Json is
+        // bypassed. The DSL declared its Content-Type (that's what
+        // opted them into this branch — see the gate above); we
+        // seed a text/plain default first and let the DSL header
+        // in `extra_headers` override so the merge order stays
+        // uniform with the JSON path.
+        (Ok(_), Some(s)) => {
+            let mut resp = (status_code, s).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            for (k, v) in extra_headers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::try_from(k.as_str()),
+                    HeaderValue::try_from(v.as_str()),
+                ) {
+                    resp.headers_mut().insert(name, value);
+                }
+            }
+            resp
+        }
+        (Ok(_), None) => {
             let mut resp = (status_code, Json(body_value)).into_response();
             for (k, v) in extra_headers {
                 if let (Ok(name), Ok(value)) = (
@@ -896,7 +964,7 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
             }
             resp
         }
-        Err(_) => (status_code, Json(body_value)).into_response(),
+        (Err(_), _) => (status_code, Json(body_value)).into_response(),
     };
 
     // Echo traceparent + X-Trace-Id so ops can correlate a client-side

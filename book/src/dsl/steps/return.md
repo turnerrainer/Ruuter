@@ -43,6 +43,59 @@ scalar / array is a step error); `null` = no headers. Issue #25
 tracked adding this shape — previously only the per-key mapping
 form parsed.
 
+## Non-JSON responses (XML, HTML, plaintext)
+
+By default, the response body is serialised through JSON — a
+string return value comes out surrounded by double quotes with
+special characters escaped, which is wrong for `text/xml` /
+`text/html` / `text/plain` payloads.
+
+To emit a raw response body, ALL of the following must hold:
+
+1. `wrapper: false` on the return step (or `response.default_wrapper: false` in config).
+2. The return value is a JSON string (not an object / array / number).
+3. The DSL sets a non-JSON `Content-Type` header on the return step.
+
+When all three hold, the framework bypasses `axum::Json` and
+writes the raw string bytes with the DSL's Content-Type. Any
+one condition missing → JSON path (back-compat preserved).
+
+```yaml
+respond:
+  return: "<root><item>hello</item></root>"
+  headers:
+    Content-Type: "text/xml"
+  wrapper: false
+  status: 201
+```
+
+Response:
+
+```http
+HTTP/1.1 201 Created
+content-type: text/xml
+content-length: 31
+
+<root><item>hello</item></root>
+```
+
+Issue #24 tracked this fix; before, the body came out as
+`"<root>&#x2F;<item>hello&#x2F;<&#x2F;item>&#x2F;<&#x2F;root>"`
+JSON-encoded regardless of the Content-Type header.
+
+### Why the Content-Type gate?
+
+Requiring an explicit non-JSON Content-Type is a deliberate
+back-compat gate: DSLs that already used `wrapper: false` without
+a Content-Type (interpreted as "no envelope, still JSON") keep
+their existing shape. Only DSLs that opt into a non-JSON contract
+via Content-Type get raw emission — the fix is opt-in per-return-
+step, not a global behaviour change.
+
+For structured (object / array) response bodies, JSON is still
+the right shape — those cases stay on the JSON path regardless
+of `wrapper:` and Content-Type.
+
 ## Bare-value response
 
 ```yaml

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **#24 — `return` with `wrapper: false` always JSON-serialised
+  the body.** A DSL returning an XML/HTML/plaintext string with
+  `Content-Type: text/xml` (or similar) still went through
+  `axum::Json`, so the response body came out wrapped in double
+  quotes with characters JSON-escaped. Fixed in
+  `router/mod.rs`: when the DSL sets `wrapper: false`, the
+  return value is a JSON string, AND the DSL declared a
+  non-JSON Content-Type header, bypass `axum::Json` and emit
+  the raw string bytes with the DSL's Content-Type. All other
+  shapes (objects, arrays, numbers, DSLs without an explicit
+  non-JSON Content-Type) stay on the JSON path so prior
+  behaviour is preserved. 8 regression tests in
+  `tests/non_json_response.rs` cover both this fix and #23.
+
 - **#23 — `http.<verb>` step lost non-JSON upstream response bodies.**
   Upstream responses that weren't valid JSON silently became
   `null` in `${result.response.body}` — an XML mapper's
