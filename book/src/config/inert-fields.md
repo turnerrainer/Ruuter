@@ -21,11 +21,10 @@ message. See `warn_on_stale_config_fields` in `src/config/mod.rs`.
 | Field | Warning surface | Why it's inert |
 |---|---|---|
 | `stop_in_case_of_exception: false` | WARN when explicitly set to `false` | The engine propagates every step error via `?`, so it always stops. Java's continue-on-error semantics are not implemented. Remove the setting or leave the default (`true`). |
-| `logging.display_request_content: true` | WARN when `true` | HTTP-step body/query/header logging is not implemented. |
-| `logging.display_response_content: true` | WARN when `true` | HTTP-step response-body logging is not implemented. |
-| `logging.print_stack_trace: true` | WARN when `true` | Engine errors always render via `Display`; there is no separate stack-trace path. |
-| `logging.meaningful_errors: true` | WARN when `true` | The engine does not distinguish meaningful vs. raw error paths. |
 | `dsl.allowed_filetypes` differing from `dsl.processed_filetypes` | WARN when the two lists differ | The loader only consults `processed_filetypes`. `allowed_filetypes` is a Java-parity noun with no gating effect. Fold the two into `processed_filetypes` or accept that `allowed_filetypes` is inert. |
+
+The four Java-parity `logging.*` flags used to live here but are
+now wired end-to-end — see [Logging](../logging/index.md).
 
 ## What breaks if you set it wrong
 
@@ -37,12 +36,13 @@ WARN by message text.
 
 ## When these might get wired
 
-Not on any roadmap. The list is stable: `logging.*` and
-`stop_in_case_of_exception` are Java-shape parity nouns whose
-semantics don't survive translation to Ruuter-on-Rust's engine model
-(no continue-on-error, no separated error paths).
-`dsl.allowed_filetypes` remains for source-level parity with Java
-sample configs.
+`stop_in_case_of_exception` is Java-shape parity whose continue-on-
+error semantics don't survive translation to Ruuter-on-Rust's engine
+model (every step propagates via `?`). `dsl.allowed_filetypes`
+remains for source-level parity with Java sample configs.
+
+The four `logging.*` flags used to live in this table but have
+been wired end-to-end — see [Logging](../logging/index.md).
 
 ## Cross-links
 

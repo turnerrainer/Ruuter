@@ -1,5 +1,6 @@
 use crate::context::ExecutionContext;
 use crate::http_client::HttpClient;
+use crate::logging::{cap_and_sanitize, redact, render_body_for_log};
 use crate::scripting::ScriptEngine;
 use crate::steps::engine::StepEngine;
 use crate::steps::{HttpStep, StepExecutor, StepResult};
@@ -95,13 +96,44 @@ impl StepExecutor for HttpStepExecutor {
 
         let timeout = self.step.timeout.map(Duration::from_millis);
 
+        // Per-step logging knobs: DEBUG lines with redacted +
+        // capped request / response bodies, gated by
+        // `logging.display_request_content` /
+        // `display_response_content`. Java-parity fields
+        // (Java Ruuter emitted these into MDC).
+        let logging = self.engine.as_ref().map(|e| e.logging());
+        let url_str = url.as_str().unwrap_or("").to_string();
+
+        if let Some(cfg) = logging.as_deref() {
+            if cfg.display_request_content {
+                let body_rendered = render_body_for_log(body.as_ref(), cfg);
+                let headers_rendered = headers
+                    .as_ref()
+                    .map(|h| {
+                        let sh: HashMap<String, String> = h
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.to_string()))
+                            .collect();
+                        redact::redact_headers(&sh, &cfg.redact_headers)
+                    })
+                    .unwrap_or_default();
+                tracing::debug!(
+                    http.request.method = %method,
+                    url.full = %cap_and_sanitize(&url_str, 512),
+                    http.request.body = %body_rendered,
+                    http.request.headers = ?headers_rendered,
+                    "outbound http request"
+                );
+            }
+        }
+
         // Audit finding 11 — thread the DSL's `content_type:` into the
         // transport so it can pick JSON / plaintext / formdata /
         // multipart / dynamicBody / json_override behaviour.
         let response = self
             .http_client
             .request_with_ct(
-                method,
+                method.clone(),
                 url.as_str().unwrap_or(""),
                 body.as_ref(),
                 query.as_ref(),
@@ -110,6 +142,22 @@ impl StepExecutor for HttpStepExecutor {
                 self.step.args.content_type.as_deref(),
             )
             .await?;
+
+        if let Some(cfg) = logging.as_deref() {
+            if cfg.display_response_content {
+                let body_rendered = render_body_for_log(response.body.as_ref(), cfg);
+                let headers_rendered =
+                    redact::redact_headers(&response.headers, &cfg.redact_headers);
+                tracing::debug!(
+                    http.request.method = %method,
+                    url.full = %cap_and_sanitize(&url_str, 512),
+                    http.response.status_code = response.status,
+                    http.response.body = %body_rendered,
+                    http.response.headers = ?headers_rendered,
+                    "upstream http response"
+                );
+            }
+        }
 
         // Bind the result BEFORE the allow-list check so the
         // `error:` step (and downstream steps in general) can read

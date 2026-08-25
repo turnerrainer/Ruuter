@@ -369,21 +369,152 @@ pub struct DslConfig {
     /// list of what does / does not reload.
     #[serde(default)]
     pub allow_dsl_reloading: bool,
+
+    /// Task 070 — emit one WARN per HTTP-routed DSL that has no
+    /// `declaration:` block. Missing declaration is NEVER an error
+    /// (the DSL still loads and runs — matches Java-parity permissive
+    /// posture); the WARN is the operator's signal that OpenAPI
+    /// generation, per-field allowlisting, and typed request/response
+    /// schemas are unavailable for that route. Default `true` so
+    /// operators moving from Resql (which mandates declarations)
+    /// see the gap. Flip to `false` if the corpus intentionally runs
+    /// without declarations.
+    #[serde(default = "default_true")]
+    pub warn_on_missing_declaration: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+/// Log output format. `Text` (default) is `tracing`'s human-friendly
+/// single-line renderer — great for local dev and container logs
+/// scraped by grep. `Json` emits one JSON object per event and is the
+/// recommended production shape: Loki, Elastic, CloudWatch, Datadog
+/// all key on structured fields without per-service regex parsing.
+///
+/// Env override: `RUUTER_LOG_FORMAT=text|json` wins over the config
+/// file so operators can flip a running container without editing
+/// `ruuter.yaml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+fn default_max_body_bytes() -> usize {
+    2048
+}
+
+/// Header names redacted by default from every logged HTTP request /
+/// response header map. Names are compared case-insensitively.
+fn default_redact_headers() -> Vec<String> {
+    vec![
+        "authorization".into(),
+        "proxy-authorization".into(),
+        "cookie".into(),
+        "set-cookie".into(),
+        "x-api-key".into(),
+        "x-auth-token".into(),
+    ]
+}
+
+/// Body-field names redacted by default from every logged JSON body.
+/// Matched case-insensitively at any nesting depth.
+fn default_redact_body_fields() -> Vec<String> {
+    vec![
+        "password".into(),
+        "pass".into(),
+        "secret".into(),
+        "token".into(),
+        "access_token".into(),
+        "refresh_token".into(),
+        "api_key".into(),
+        "authorization".into(),
+    ]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoggingConfig {
+    /// Include outbound HTTP request bodies in per-step DEBUG log
+    /// lines. Redacted (see `redact_body_fields`) and capped to
+    /// `max_body_bytes`. Off by default — bodies routinely carry
+    /// PII / secrets.
     #[serde(default)]
     pub display_request_content: bool,
 
+    /// Include upstream HTTP response bodies in per-step DEBUG log
+    /// lines. Redacted and capped the same way as
+    /// `display_request_content`.
     #[serde(default)]
     pub display_response_content: bool,
 
+    /// On step error, include the error's `source()` chain on the
+    /// ERROR log line. Off by default — the top-level `Display` is
+    /// usually enough and chains can leak upstream schema details.
     #[serde(default)]
     pub print_stack_trace: bool,
 
+    /// On step error, emit a second WARN line with the underlying
+    /// cause message. Off by default — the primary ERROR line is
+    /// usually enough. Named after Java Ruuter's flag of the same
+    /// meaning.
     #[serde(default)]
     pub meaningful_errors: bool,
+
+    /// Log output format. Default `text`; `json` emits one JSON
+    /// object per event. Env `RUUTER_LOG_FORMAT` overrides.
+    #[serde(default)]
+    pub format: LogFormat,
+
+    /// Emit one INFO line per completed HTTP request with method,
+    /// route, status, duration, trace_id, project, origin. On by
+    /// default — this is the operational access log every service
+    /// should have.
+    #[serde(default = "default_true")]
+    pub access_log: bool,
+
+    /// Emit one DEBUG line per DSL step with step name / type /
+    /// elapsed. Off by default — chatty for high-QPS DSLs.
+    #[serde(default)]
+    pub step_timing: bool,
+
+    /// Cap on any body content included in a log line. Defaults to
+    /// 2 KiB — enough to identify the shape without shipping full
+    /// payloads to the log store.
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
+
+    /// Header names replaced with `"[REDACTED]"` in any logged
+    /// header map. Case-insensitive. Defaults cover common auth /
+    /// session headers; add project-specific names as needed.
+    #[serde(default = "default_redact_headers")]
+    pub redact_headers: Vec<String>,
+
+    /// JSON body field names replaced with `"[REDACTED]"` in any
+    /// logged body. Case-insensitive, applied at every nesting
+    /// depth. Defaults cover common secret-bearing field names.
+    #[serde(default = "default_redact_body_fields")]
+    pub redact_body_fields: Vec<String>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            display_request_content: false,
+            display_response_content: false,
+            print_stack_trace: false,
+            meaningful_errors: false,
+            format: LogFormat::default(),
+            access_log: true,
+            step_timing: false,
+            max_body_bytes: default_max_body_bytes(),
+            redact_headers: default_redact_headers(),
+            redact_body_fields: default_redact_body_fields(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -490,6 +621,7 @@ impl Default for DslConfig {
             allowed_filetypes: default_allowed_filetypes(),
             processed_filetypes: default_processed_filetypes(),
             allow_dsl_reloading: false,
+            warn_on_missing_declaration: true,
         }
     }
 }
@@ -617,33 +749,9 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
         );
     }
 
-    // The four logging.* flags are documented but currently no
-    // consumer reads them. Warn per-flag so operators can see which
-    // knob is inert.
-    if config.logging.display_request_content {
-        tracing::warn!(
-            "config: logging.display_request_content=true has no effect yet — \
-             http-step body/query/header logging is not implemented."
-        );
-    }
-    if config.logging.display_response_content {
-        tracing::warn!(
-            "config: logging.display_response_content=true has no effect yet — \
-             http-step response-body logging is not implemented."
-        );
-    }
-    if config.logging.print_stack_trace {
-        tracing::warn!(
-            "config: logging.print_stack_trace=true has no effect yet — \
-             engine errors always render via Display."
-        );
-    }
-    if config.logging.meaningful_errors {
-        tracing::warn!(
-            "config: logging.meaningful_errors=true has no effect yet — \
-             engine does not distinguish meaningful vs. raw error paths."
-        );
-    }
+    // logging.* flags — as of the observability chapter (see
+    // book/src/logging/) all four are wired end-to-end.
+    // No WARN emitted regardless of value.
 
     // allowed_filetypes vs processed_filetypes — pre-fix Rust only
     // reads processed_filetypes. Warn when they differ so operators

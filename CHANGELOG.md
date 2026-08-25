@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Declaration parity with Resql (task 070).** DSL `declaration:`
+  block gains:
+  - **Rich per-field metadata** — `DslField` now carries `type`,
+    `required`, `format`, `description`, `default`, and (for arrays)
+    `items`. Bare `{field: X}` entries continue to parse; richer
+    shape is additive.
+  - **Typed `returns:`** — structured response schema flows into
+    OpenAPI 2xx response body.
+  - **`strict: true` per-DSL posture** — unknown body / query /
+    header keys return **400 Bad Request** with a diagnostic
+    naming the field, instead of silently filtering. Traceparent
+    is always allowed under strict headers (framework-injected).
+  - **Boot-time WARN per HTTP DSL missing a declaration** — never
+    fatal; the DSL still loads and runs. Gated by
+    `dsl.warn_on_missing_declaration` (default `true`); flip to
+    `false` in `ruuter.yaml` to silence for corpora that
+    intentionally run permissive. Per operator instruction
+    (2026-08-25): missing declaration NEVER halts Ruuter.
+  - **New `RuuterError::BadRequest` variant** maps to 400 in the
+    response builder (used today by the strict-key gate; extensible
+    to other client-input rejections).
+  - **Removed dead struct fields** `method` and `accepts` from
+    `DeclarationStep`. Repurposed `returns` from an unread
+    `Option<String>` to a typed `Option<Vec<DslField>>`. Old
+    `returns: "<string>"` values are silently ignored (they were
+    never read in prior Rust versions).
+  - **New sample** `DSL/samples/POST/typed-users/create.yml`
+    demonstrates the full richer shape.
+  - **New book chapter** `book/src/dsl/steps/declaration.md`
+    rewritten to cover the whole surface.
+  - **12 new integration tests** in `tests/declaration_parity.rs`.
+  - **New parser API** `DslParser::parse_content(&str)` so tests /
+    linters / IDE plugins can parse in-memory DSLs without a
+    filesystem path.
+  - **New `openapi.rs` helpers** `field_schema`, `build_object_schema`,
+    `build_named_parameter` for typed schema emission.
+  - See `DIVERGENCES.md` D-39 for the full parity write-up.
+
+- **Structured logging (industry-standard).** Full observability
+  section at `book/src/logging/`. Every request opens a
+  `tracing::info_span!("http_request", …)` carrying OpenTelemetry
+  HTTP semantic-convention fields (`http.request.method`,
+  `http.route`, `http.response.status_code`, `client.address`) plus
+  DSL context (`dsl.project`, `trace_id`), so every log line inside
+  a request is automatically decorated. One INFO access-log line
+  per completed request. New `src/logging/` module handles
+  redaction of secret-bearing headers and JSON body fields
+  (case-insensitive, recursive), body caps, CRLF stripping
+  (log-injection defence), and bounded error-chain rendering.
+- **JSON log format.** `logging.format: json` (or env
+  `RUUTER_LOG_FORMAT=json`) emits one OTel-log-shape JSON object
+  per event. Default remains `text` for local dev.
+- **Per-step DEBUG timing.** `logging.step_timing: true` emits a
+  `dsl.step` / `dsl.step.type` / `duration_ms` DEBUG line per step
+  (mirrors Java's `LoggingUtils.logStep`).
+- **Outbound HTTP body dumps** (Java parity). `display_request_content`
+  and `display_response_content` config flags — previously
+  accepted-but-inert — are now wired end-to-end via
+  `src/steps/http.rs`. Redacted and capped by the same knobs that
+  guard access-log fields.
+- **Structured error rendering.** `meaningful_errors: true` emits
+  a second WARN line with the underlying `source().to_string()`;
+  `print_stack_trace: true` includes the `source()` chain
+  (bounded to 5 hops) on the primary ERROR line.
+- **Trace-id lifecycle unified.** `handle_request` adopts inbound
+  `traceparent` or generates one at request entry, injects it
+  into the request headers so it's visible to every downstream
+  step AND matches the `X-Trace-Id` returned in the response.
+  Previous behaviour computed a fresh id at response-write time
+  that didn't match the DSL-side value.
+
+### Changed
+
+- **`observability::init` signature** now takes `&AppConfig` (was
+  no-arg) so `logging.format` is honoured at boot. `main.rs` now
+  loads config before initialising the subscriber.
+- **D-29** in `DIVERGENCES.md` expanded to cover structured logs.
+  **D-35** shrunk — four `logging.*` fields wired end-to-end, no
+  longer WARN at boot.
+- **`book/src/config/inert-fields.md`, `book/src/ops/env.md`,
+  `book/src/ops/configuration.md`** updated to match the wired
+  behaviour and reference the new logging chapter.
+
 ## [0.8.1-rc.3] - 2026-08-05
 
 Hotfix release. Re-cuts `0.8.1-rc.2` with the smoke-test regression

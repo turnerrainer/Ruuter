@@ -101,6 +101,26 @@ impl DslStep {
         }
     }
 
+    /// Short type name used in structured log fields (`dsl.step.type`)
+    /// and OTel span names. Stable across the DSL / OpenAPI surface —
+    /// dashboards that group by step type can rely on these strings.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            DslStep::Assign(_) => "assign",
+            DslStep::Return(_) => "return",
+            DslStep::Http(_) => "http",
+            DslStep::HttpMock(_) => "http_mock",
+            DslStep::Switch(_) => "switch",
+            DslStep::Log(_) => "log",
+            DslStep::Template(_) => "template",
+            DslStep::State(_) => "state",
+            DslStep::Iterate(_) => "iterate",
+            DslStep::WsSend(_) => "ws_send",
+            DslStep::SingleFlight(_) => "single_flight",
+            DslStep::Declaration(_) => "declaration",
+        }
+    }
+
     /// The step's explicit `next:` value, or `None` if unset.
     /// Engine treats `None` as "fall through to source-order next"
     /// (Java-parity, audit finding 03).

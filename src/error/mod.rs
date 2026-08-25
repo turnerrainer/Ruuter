@@ -42,4 +42,12 @@ pub enum RuuterError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// Task 070 — client-input rejection that must surface as 400
+    /// Bad Request rather than the generic 500 that `DslExecution`
+    /// maps to. Used today by `declaration.strict: true` to reject
+    /// unknown request fields; extensible to other client-input
+    /// gates as they land.
+    #[error("Bad request: {0}")]
+    BadRequest(String),
 }
