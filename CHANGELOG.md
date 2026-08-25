@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-rc.1] - 2026-08-26
+
+Substantial feature release: comprehensive structured-logging chapter,
+task 070 declaration-parity-with-Resql, and four upstream fixes
+(#23, #24, #25, #26). Version bumped to 0.9.0 (from 0.8.1-rc series)
+per SemVer — the logging observability surface and the DSL
+declaration richness are additive but large enough to warrant a
+minor.
+
 ### Fixed
 
 - **#24 — `return` with `wrapper: false` always JSON-serialised
