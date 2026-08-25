@@ -101,6 +101,26 @@ impl DslStep {
         }
     }
 
+    /// Short type name used in structured log fields (`dsl.step.type`)
+    /// and OTel span names. Stable across the DSL / OpenAPI surface —
+    /// dashboards that group by step type can rely on these strings.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            DslStep::Assign(_) => "assign",
+            DslStep::Return(_) => "return",
+            DslStep::Http(_) => "http",
+            DslStep::HttpMock(_) => "http_mock",
+            DslStep::Switch(_) => "switch",
+            DslStep::Log(_) => "log",
+            DslStep::Template(_) => "template",
+            DslStep::State(_) => "state",
+            DslStep::Iterate(_) => "iterate",
+            DslStep::WsSend(_) => "ws_send",
+            DslStep::SingleFlight(_) => "single_flight",
+            DslStep::Declaration(_) => "declaration",
+        }
+    }
+
     /// The step's explicit `next:` value, or `None` if unset.
     /// Engine treats `None` as "fall through to source-order next"
     /// (Java-parity, audit finding 03).
@@ -234,8 +254,12 @@ pub struct ReturnStep {
     /// `${upstream.response.status}` that evaluates to a u16.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<Value>,
+    /// Response headers — either a YAML mapping with per-key values
+    /// (each value may contain `${…}` expressions), or a single
+    /// `${expr}` string that evaluates to an object at runtime.
+    /// Issue #25.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, Value>>,
+    pub headers: Option<Value>,
     /// Java-parity: default true — wrap response in `{"response": ...}`
     /// envelope unless explicitly `wrapper: false`. Handled by the
     /// router at response-serialisation time.
@@ -274,10 +298,20 @@ pub struct HttpArgs {
     /// pass the inbound body through verbatim.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
+    /// Query params — either a YAML mapping with per-key values
+    /// (each value may contain `${…}` expressions), or a single
+    /// `${expr}` string that evaluates to an object at runtime.
+    /// Issue #25 — accepting only a mapping here forced DSL authors
+    /// to inline every key literally, defeating computed / merged
+    /// param maps.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub query: Option<HashMap<String, Value>>,
+    pub query: Option<Value>,
+    /// Headers — either a YAML mapping with per-key values (each
+    /// value may contain `${…}` expressions), or a single `${expr}`
+    /// string that evaluates to an object at runtime. Same
+    /// rationale as `query`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, Value>>,
+    pub headers: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
 }

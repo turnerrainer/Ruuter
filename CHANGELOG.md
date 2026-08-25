@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-rc.1] - 2026-08-26
+
+Substantial feature release: comprehensive structured-logging chapter,
+task 070 declaration-parity-with-Resql, and four upstream fixes
+(#23, #24, #25, #26). Version bumped to 0.9.0 (from 0.8.1-rc series)
+per SemVer — the logging observability surface and the DSL
+declaration richness are additive but large enough to warrant a
+minor.
+
+### Fixed
+
+- **#24 — `return` with `wrapper: false` always JSON-serialised
+  the body.** A DSL returning an XML/HTML/plaintext string with
+  `Content-Type: text/xml` (or similar) still went through
+  `axum::Json`, so the response body came out wrapped in double
+  quotes with characters JSON-escaped. Fixed in
+  `router/mod.rs`: when the DSL sets `wrapper: false`, the
+  return value is a JSON string, AND the DSL declared a
+  non-JSON Content-Type header, bypass `axum::Json` and emit
+  the raw string bytes with the DSL's Content-Type. All other
+  shapes (objects, arrays, numbers, DSLs without an explicit
+  non-JSON Content-Type) stay on the JSON path so prior
+  behaviour is preserved. 8 regression tests in
+  `tests/non_json_response.rs` cover both this fix and #23.
+
+- **#23 — `http.<verb>` step lost non-JSON upstream response bodies.**
+  Upstream responses that weren't valid JSON silently became
+  `null` in `${result.response.body}` — an XML mapper's
+  `<root>…</root>`, an upstream's plain-text diagnostic, or any
+  `text/*` payload was unrecoverable to the DSL. Fixed at
+  `http_client/mod.rs`: try JSON parse first (unchanged for JSON
+  responses), fall back to `Value::String(from_utf8_lossy(bytes))`
+  on parse failure. Empty bodies still become `None`. Binary
+  bytes are UTF-8-lossy-decoded (`U+FFFD` for invalid sequences)
+  rather than panicking.
+
+- **#25 — Cannot provide a dynamic headers map.** `http.<verb>`
+  step's `headers:` and `query:` args (and `return` step's
+  `headers:`) rejected a top-level `${expr}` string at DSL load
+  time with `invalid type: string, expected a map`. The parser
+  never handed the value to the script engine. Fixed by loosening
+  the field type from `Option<HashMap<String, Value>>` to
+  `Option<Value>` and evaluating both shapes at runtime:
+  - **YAML mapping** (traditional) — each value evaluated per-key.
+  - **`${expr}` string** — evaluated once; result MUST be a JSON
+    object (else clear step error naming the field); `null` = no
+    headers.
+
+  Enables the merge-headers pattern from the issue:
+  ```yaml
+  merge_headers:
+    assign:
+      merged_headers: "${Object.assign({}, ...)}"
+  forward:
+    call: http.post
+    args:
+      headers: "${merged_headers}"    # now works
+  ```
+
+  New integration tests in `tests/dynamic_map_args.rs` cover
+  parse-time (both shapes), runtime evaluation, and the
+  non-object diagnostic path.
+
+- **#26 — YAML parse failure did not name the file.** DSL loader
+  errors bubbled up a bare `serde_yaml_ng::Error` (line + column
+  only) rendered as `Failed to load DSLs: YAML error: did not find
+  expected key at line 55 column 39, ...`. An operator with dozens
+  of DSLs had no way to tell which file was broken. Fixed at
+  `parser.rs::parse_file` — every error out of that boundary is
+  now wrapped as `DSL parsing error: <path>: <underlying>`. The
+  underlying YAML diagnostic (line, column, context) is preserved
+  in full; the path just gets prepended. Regression tests in
+  `tests/parse_error_file_path.rs`.
+
+### Added
+
+- **Declaration parity with Resql (task 070).** DSL `declaration:`
+  block gains:
+  - **Rich per-field metadata** — `DslField` now carries `type`,
+    `required`, `format`, `description`, `default`, and (for arrays)
+    `items`. Bare `{field: X}` entries continue to parse; richer
+    shape is additive.
+  - **Typed `returns:`** — structured response schema flows into
+    OpenAPI 2xx response body.
+  - **`strict: true` per-DSL posture** — unknown body / query /
+    header keys return **400 Bad Request** with a diagnostic
+    naming the field, instead of silently filtering. Traceparent
+    is always allowed under strict headers (framework-injected).
+  - **Boot-time WARN per HTTP DSL missing a declaration** — never
+    fatal; the DSL still loads and runs. Gated by
+    `dsl.warn_on_missing_declaration` (default `true`); flip to
+    `false` in `ruuter.yaml` to silence for corpora that
+    intentionally run permissive. Per operator instruction
+    (2026-08-25): missing declaration NEVER halts Ruuter.
+  - **New `RuuterError::BadRequest` variant** maps to 400 in the
+    response builder (used today by the strict-key gate; extensible
+    to other client-input rejections).
+  - **Removed dead struct fields** `method` and `accepts` from
+    `DeclarationStep`. Repurposed `returns` from an unread
+    `Option<String>` to a typed `Option<Vec<DslField>>`. Old
+    `returns: "<string>"` values are silently ignored (they were
+    never read in prior Rust versions).
+  - **New sample** `DSL/samples/POST/typed-users/create.yml`
+    demonstrates the full richer shape.
+  - **New book chapter** `book/src/dsl/steps/declaration.md`
+    rewritten to cover the whole surface.
+  - **12 new integration tests** in `tests/declaration_parity.rs`.
+  - **New parser API** `DslParser::parse_content(&str)` so tests /
+    linters / IDE plugins can parse in-memory DSLs without a
+    filesystem path.
+  - **New `openapi.rs` helpers** `field_schema`, `build_object_schema`,
+    `build_named_parameter` for typed schema emission.
+  - See `DIVERGENCES.md` D-39 for the full parity write-up.
+
+- **Structured logging (industry-standard).** Full observability
+  section at `book/src/logging/`. Every request opens a
+  `tracing::info_span!("http_request", …)` carrying OpenTelemetry
+  HTTP semantic-convention fields (`http.request.method`,
+  `http.route`, `http.response.status_code`, `client.address`) plus
+  DSL context (`dsl.project`, `trace_id`), so every log line inside
+  a request is automatically decorated. One INFO access-log line
+  per completed request. New `src/logging/` module handles
+  redaction of secret-bearing headers and JSON body fields
+  (case-insensitive, recursive), body caps, CRLF stripping
+  (log-injection defence), and bounded error-chain rendering.
+- **JSON log format.** `logging.format: json` (or env
+  `RUUTER_LOG_FORMAT=json`) emits one OTel-log-shape JSON object
+  per event. Default remains `text` for local dev.
+- **Per-step DEBUG timing.** `logging.step_timing: true` emits a
+  `dsl.step` / `dsl.step.type` / `duration_ms` DEBUG line per step
+  (mirrors Java's `LoggingUtils.logStep`).
+- **Outbound HTTP body dumps** (Java parity). `display_request_content`
+  and `display_response_content` config flags — previously
+  accepted-but-inert — are now wired end-to-end via
+  `src/steps/http.rs`. Redacted and capped by the same knobs that
+  guard access-log fields.
+- **Structured error rendering.** `meaningful_errors: true` emits
+  a second WARN line with the underlying `source().to_string()`;
+  `print_stack_trace: true` includes the `source()` chain
+  (bounded to 5 hops) on the primary ERROR line.
+- **Trace-id lifecycle unified.** `handle_request` adopts inbound
+  `traceparent` or generates one at request entry, injects it
+  into the request headers so it's visible to every downstream
+  step AND matches the `X-Trace-Id` returned in the response.
+  Previous behaviour computed a fresh id at response-write time
+  that didn't match the DSL-side value.
+
+### Changed
+
+- **`observability::init` signature** now takes `&AppConfig` (was
+  no-arg) so `logging.format` is honoured at boot. `main.rs` now
+  loads config before initialising the subscriber.
+- **D-29** in `DIVERGENCES.md` expanded to cover structured logs.
+  **D-35** shrunk — four `logging.*` fields wired end-to-end, no
+  longer WARN at boot.
+- **`book/src/config/inert-fields.md`, `book/src/ops/env.md`,
+  `book/src/ops/configuration.md`** updated to match the wired
+  behaviour and reference the new logging chapter.
+
 ## [0.8.1-rc.3] - 2026-08-05
 
 Hotfix release. Re-cuts `0.8.1-rc.2` with the smoke-test regression

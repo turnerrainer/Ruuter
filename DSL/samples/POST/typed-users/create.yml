@@ -1,0 +1,44 @@
+# Task 070 sample — richer declaration shape.
+#
+# Demonstrates:
+#   - Structured `allowlist.body` with per-field type / format / required
+#   - Typed `returns:` for the response body schema
+#   - Per-DSL `strict: true` — unknown keys → 400 instead of silent filter
+#
+# GET /_/openapi.json shows the typed request + response schemas
+# derived from this declaration. POST with an extra key returns 400.
+
+declaration:
+  description: "Create a user. Rejects unknown body keys with 400."
+  strict: true
+  allowlist:
+    body:
+      - field: userName
+        type: string
+        required: true
+        format: email
+        description: "Login handle."
+      - field: age
+        type: integer
+        required: false
+        default: 18
+      - field: tags
+        type: array
+        items:
+          field: __item__
+          type: string
+        description: "Free-form labels."
+  returns:
+    - field: id
+      type: integer
+      required: true
+      description: "Server-assigned identifier."
+    - field: created
+      type: boolean
+      required: true
+
+reply:
+  status: 201
+  return:
+    id: 42
+    created: true

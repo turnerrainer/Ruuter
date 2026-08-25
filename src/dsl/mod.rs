@@ -1,6 +1,7 @@
 use crate::steps::DslStep;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub mod hot_reload;
 pub mod interpolate;
@@ -18,9 +19,6 @@ pub struct Dsl {
 pub struct DeclarationStep {
     pub version: Option<String>,
     pub description: Option<String>,
-    pub method: Option<String>,
-    pub accepts: Option<String>,
-    pub returns: Option<String>,
     pub namespace: Option<String>,
     pub allowed_body: Option<Vec<String>>,
     pub allowed_header: Option<Vec<String>>,
@@ -28,11 +26,26 @@ pub struct DeclarationStep {
     /// Audit finding 10 — Java-parity structured allowlist. When
     /// present, `allowed_body`, `allowed_header`, `allowed_params`
     /// derive from `allowlist.body`, `allowlist.headers`,
-    /// `allowlist.params` (each entry is a `{field: <name>}` map).
+    /// `allowlist.params` (each entry is a `{field: <name>}` map or
+    /// a richer entry with per-field metadata; see `DslField`).
     /// Explicit legacy flat fields still win over the structured
     /// form; use `.effective_allowed_*` accessors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowlist: Option<Allowlist>,
+    /// Task 070 — structured response schema. When set, OpenAPI's
+    /// 200 response for this DSL emits the declared properties (with
+    /// types, formats, and a required array); otherwise the spec
+    /// falls back to `{"type":"object","additionalProperties":true}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returns: Option<Vec<DslField>>,
+    /// Task 070 — per-DSL opt-in for strict-unknown-keys posture.
+    /// When `Some(true)`, the router rejects body / query / header
+    /// keys not in the effective allowlist with a 400. Default
+    /// `None` (Ruuter's traditional filter-and-continue posture).
+    /// Only meaningful when at least one allowlist is declared —
+    /// with no allowlist, "unknown" isn't defined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
     /// Task 020 — when `Some(true)` on a guard DSL, this guard REPLACES
     /// all ancestor guards for the routes it protects (rather than
     /// stacking on top of them). Used when a specific endpoint has
@@ -48,9 +61,8 @@ pub struct DeclarationStep {
 }
 
 /// Audit finding 10 — Java's structured `allowlist:` block. Each
-/// entry is a `DslField` (currently a single `field:` string; the
-/// Java version reserves room for per-field metadata like `format:`,
-/// `required:`, etc.).
+/// entry is a `DslField` (either a bare `{field: <name>}` map or a
+/// richer entry with per-field type metadata; see `DslField`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Allowlist {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,9 +75,57 @@ pub struct Allowlist {
     pub params: Option<Vec<DslField>>,
 }
 
+/// Task 070 — per-field metadata used by allowlist entries AND
+/// response schemas. Backwards-compat: a bare `{field: userName}`
+/// still parses (all extended fields default to `None`). Richer
+/// entries opt in per-field:
+///
+/// ```yaml
+/// - field: userName
+///   type: string
+///   required: true
+///   format: email
+///   description: "Login handle."
+///   default: "guest"
+/// - field: tags
+///   type: array
+///   items:
+///     field: __item__
+///     type: string
+/// ```
+///
+/// `type` values Ruuter maps to OpenAPI directly:
+/// `string`, `integer`, `number`, `boolean`, `array`, `object`.
+/// `format` (`email`, `uuid`, `date-time`, …) is passed through
+/// verbatim. Same vocabulary as Resql task 008, so a partner
+/// consuming both services' `openapi.json` sees one schema shape.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DslField {
     pub field: String,
+    /// OpenAPI type name; passed through to `schema.type`. Absent →
+    /// falls back to `string` in the generated spec.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "type")]
+    pub field_type: Option<String>,
+    /// Whether the field is required. Absent → `false` for request
+    /// parameters (Ruuter default); response schemas use it to
+    /// populate `required: [...]` on the response body schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// OpenAPI `format` hint (e.g. `email`, `date-time`, `uuid`).
+    /// Absent → not emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// Human-readable description for the OpenAPI spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Default value (any JSON literal). Emitted as `default:` on
+    /// the field's schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Value>,
+    /// For `type: array` — the item schema (recursive DslField).
+    /// Ignored for non-array types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<DslField>>,
 }
 
 impl DeclarationStep {
@@ -89,6 +149,33 @@ impl DeclarationStep {
         self.allowed_params
             .clone()
             .or_else(|| self.allowlist.as_ref().and_then(|a| a.params.as_ref()).map(|v| v.iter().map(|f| f.field.clone()).collect()))
+    }
+
+    /// Task 070 — whether strict-unknown-keys posture is on for
+    /// this DSL. `Some(true)` → router rejects unknown body / query
+    /// / header keys with a 400. Absent or `Some(false)` → traditional
+    /// filter-and-continue.
+    pub fn is_strict(&self) -> bool {
+        self.strict.unwrap_or(false)
+    }
+
+    /// Task 070 — structured body allowlist (with per-field metadata).
+    /// `None` when the DSL uses only the legacy flat `allowed_body:
+    /// [name, ...]` form. Consumers that need the type / required /
+    /// format hints (OpenAPI generator) prefer this over
+    /// `effective_allowed_body`.
+    pub fn structured_body(&self) -> Option<&[DslField]> {
+        self.allowlist.as_ref().and_then(|a| a.body.as_deref())
+    }
+
+    /// Task 070 — structured params allowlist. See `structured_body`.
+    pub fn structured_params(&self) -> Option<&[DslField]> {
+        self.allowlist.as_ref().and_then(|a| a.params.as_deref())
+    }
+
+    /// Task 070 — structured headers allowlist. See `structured_body`.
+    pub fn structured_headers(&self) -> Option<&[DslField]> {
+        self.allowlist.as_ref().and_then(|a| a.headers.as_deref())
     }
 }
 

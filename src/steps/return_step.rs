@@ -1,7 +1,7 @@
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
 use crate::steps::{ReturnStep, StepExecutor, StepResult};
-use crate::Result;
+use crate::{Result, RuuterError};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -50,12 +50,54 @@ impl StepExecutor for ReturnStepExecutor {
         // Map<String, Object>). Cookie-as-map values then get
         // Java-parity defaults added (HttpOnly, Secure, Path=/,
         // Max-Age=28800) before being serialised.
-        let headers = if let Some(h) = &self.step.headers {
+        // Issue #25 — headers can be either a YAML mapping (values
+        // may each carry `${…}`) or a single `${expr}` string that
+        // evaluates to an object. Normalise to a mapping first, then
+        // render each value (with Set-Cookie's Java-parity defaults).
+        let source_map: Option<serde_json::Map<String, Value>> = match &self.step.headers {
+            None => None,
+            Some(Value::Object(m)) => Some(m.clone()),
+            Some(Value::String(_)) => {
+                let evaluated = self
+                    .script_engine
+                    .evaluate(self.step.headers.as_ref().unwrap(), context)?;
+                match evaluated {
+                    Value::Object(m) => Some(m),
+                    Value::Null => None,
+                    other => {
+                        return Err(RuuterError::DslExecution {
+                            step: "return".into(),
+                            message: format!(
+                                "return step `headers`: expression must evaluate to an object, got {}",
+                                match other {
+                                    Value::Bool(_) => "boolean",
+                                    Value::Number(_) => "number",
+                                    Value::String(_) => "string",
+                                    Value::Array(_) => "array",
+                                    _ => "other",
+                                }
+                            ),
+                        });
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(RuuterError::DslExecution {
+                    step: "return".into(),
+                    message: format!(
+                        "return step `headers`: expected a mapping or `${{expr}}` string, got {:?}",
+                        other
+                    ),
+                });
+            }
+        };
+
+        let headers = if let Some(h) = source_map {
             let mut out = HashMap::with_capacity(h.len());
             for (k, v) in h {
                 // Recursive script eval — nested `${…}` inside map /
                 // array values resolves against context.
-                let evaluated = self.script_engine.evaluate(v, context)?;
+                let evaluated = self.script_engine.evaluate(&v, context)?;
 
                 let header_value = if k.eq_ignore_ascii_case(SET_COOKIE_HEADER) {
                     render_set_cookie(&evaluated)
@@ -65,7 +107,7 @@ impl StepExecutor for ReturnStepExecutor {
                         other => other.to_string(),
                     }
                 };
-                out.insert(k.clone(), header_value);
+                out.insert(k, header_value);
             }
             Some(out)
         } else {

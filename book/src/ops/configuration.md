@@ -93,12 +93,23 @@ dsl:
   allowed_filetypes: [.yml, .yaml]        # accepted-but-inert; see config/inert-fields.md
   processed_filetypes: [.yml, .yaml]
   allow_dsl_reloading: false              # dev only — see book/src/ops/hot-reload.md
+  warn_on_missing_declaration: true       # task 070 — WARN at boot per HTTP DSL
+                                          # without a `declaration:` block. Never
+                                          # halts Ruuter. Flip to `false` to
+                                          # silence for corpora that intentionally
+                                          # run permissive. See dsl/steps/declaration.md.
 
-logging:                                  # accepted-but-inert; see config/inert-fields.md
-  display_request_content:  false
-  display_response_content: false
-  print_stack_trace:        false
-  meaningful_errors:        false
+logging:                                  # full ref: logging/index.md
+  format:                    text         # or `json`. Env: RUUTER_LOG_FORMAT
+  access_log:                true         # one INFO per completed request
+  step_timing:               false        # DEBUG line per DSL step
+  display_request_content:   false        # DEBUG line with outbound request body
+  display_response_content:  false        # DEBUG line with upstream response body
+  max_body_bytes:            2048         # cap for any logged body
+  print_stack_trace:         false        # include error `source()` chain on ERROR
+  meaningful_errors:         false        # extra WARN with cause message on step error
+  # redact_headers / redact_body_fields default to a sensible
+  # auth+secret list; extend project-specifically as needed.
 
 stop_in_case_of_exception: true           # accepted-but-inert; the engine always halts on step error
 ```

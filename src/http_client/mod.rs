@@ -651,10 +651,23 @@ impl HttpClient {
                 .to_vec()
         };
 
+        // Issue #23 — non-JSON responses used to become `null` in the
+        // DSL (`serde_json::from_slice(...).ok()` returned `None`),
+        // silently discarding the payload. Now: try JSON first; on
+        // parse failure keep the raw text as a Value::String so the
+        // DSL can still forward / inspect it (e.g. an XML mapper
+        // returning `<root>…</root>`, or an upstream returning
+        // `text/plain` diagnostics). UTF-8 lossy so a binary blob
+        // doesn't crash the step — invalid sequences map to U+FFFD.
         let body: Option<Value> = if bytes.is_empty() {
             None
         } else {
-            serde_json::from_slice::<Value>(&bytes).ok()
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(v) => Some(v),
+                Err(_) => Some(Value::String(
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                )),
+            }
         };
 
         Ok(HttpResponse {

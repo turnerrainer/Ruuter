@@ -44,6 +44,59 @@ pub struct LoadedProjects {
     pub guards: GuardDsls,
 }
 
+/// Task 070 — walk the loaded HTTP tree and emit one WARN per DSL
+/// that has no `declaration:` block. Missing declaration is NEVER
+/// an error; the WARN is the operator's signal that OpenAPI
+/// generation, per-field typing, and strict-key posture are
+/// unavailable for that route. Gated by `dsl.warn_on_missing_declaration`
+/// so operators intentionally running without declarations can
+/// silence it. Guards are excluded (they don't participate in the
+/// OpenAPI surface); non-HTTP method buckets (`WS/`) are excluded.
+///
+/// Returns the count of DSLs missing a declaration for the caller's
+/// summary line, regardless of whether the WARN was emitted.
+pub fn warn_on_missing_declarations(http: &HttpDsls, enabled: bool) -> usize {
+    let mut missing = 0usize;
+    let mut project_names: Vec<&String> = http.keys().collect();
+    project_names.sort();
+    for project in project_names {
+        let by_method = &http[project];
+        let mut method_names: Vec<&String> = by_method.keys().collect();
+        method_names.sort();
+        for method in method_names {
+            // Skip non-HTTP buckets — `WS/` (inbound frame handlers)
+            // isn't an OpenAPI-shape route, so declaration-driven spec
+            // enrichment doesn't apply.
+            if !matches!(
+                method.to_uppercase().as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD"
+            ) {
+                continue;
+            }
+            let mut keys: Vec<&String> = by_method[method].keys().collect();
+            keys.sort();
+            for key in keys {
+                let dsl = &by_method[method][key];
+                if dsl.declaration.is_none() {
+                    missing += 1;
+                    if enabled {
+                        tracing::warn!(
+                            project = %project,
+                            method = %method,
+                            dsl = %key,
+                            "declaration missing; openapi spec, per-field typing, \
+                             and strict-key posture are unavailable for this route. \
+                             Set `dsl.warn_on_missing_declaration: false` in ruuter.yaml \
+                             to silence this WARN."
+                        );
+                    }
+                }
+            }
+        }
+    }
+    missing
+}
+
 pub struct DslLoader {
     config: AppConfig,
     constants: HashMap<String, String>,

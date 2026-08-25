@@ -3,10 +3,12 @@
 //! so DSL semantics are identical regardless of where the request /
 //! event originated.
 
+use crate::config::LoggingConfig;
 use crate::context::ExecutionContext;
 use crate::dsl::loader::{HttpDsls, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
+use crate::logging::error_chain;
 use crate::scripting::ExpressionRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
@@ -20,7 +22,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{error, warn};
+use std::time::Instant;
+use tracing::{debug, error, warn};
 
 /// Wired by the framework (usually the router) so the engine can
 /// honour Java-parity `reloadDsl: true` step field (audit finding 01).
@@ -72,6 +75,11 @@ pub struct StepEngine {
     /// the step has no local `error:`, HttpStepExecutor asks the
     /// engine to invoke this DSL with an enriched body.
     default_exception_dsl: Option<crate::config::DefaultHttpDslConfig>,
+    /// Structured-logging config. Shared clone (Arc inside) so every
+    /// engine clone observes the same knobs — flipping `step_timing`
+    /// or the redact lists is a config-file change + process restart,
+    /// not a per-clone runtime decision.
+    logging: Arc<LoggingConfig>,
 }
 
 #[derive(Debug)]
@@ -104,7 +112,23 @@ impl StepEngine {
             expr_registry: ExpressionRegistry::default(),
             reload_handler: Arc::new(once_cell::sync::OnceCell::new()),
             default_exception_dsl: None,
+            logging: Arc::new(LoggingConfig::default()),
         }
+    }
+
+    /// Attach the framework-wide logging config so this engine (and
+    /// every step it dispatches) honours `step_timing`, body-content
+    /// toggles, redact lists, error-chain rendering, etc. Callers
+    /// should pass an `Arc` cloned from `AppConfig.logging`.
+    pub fn with_logging(mut self, logging: Arc<LoggingConfig>) -> Self {
+        self.logging = logging;
+        self
+    }
+
+    /// Structured-logging knobs shared with every step. Cheap to
+    /// clone — the config lives behind an `Arc`.
+    pub fn logging(&self) -> Arc<LoggingConfig> {
+        self.logging.clone()
     }
 
     /// Audit finding 13 — attach the default exception DSL config.
@@ -306,14 +330,76 @@ impl StepEngine {
                 tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
             }
 
-            let result = if skipped {
+            // Per-step timing / error-chain instrumentation. Wall-
+            // clock is captured only when at least one of the two
+            // knobs is on — cheap check, avoids a `now()` syscall
+            // per step for the default config.
+            let want_timing = self.logging.step_timing;
+            let want_error_chain =
+                self.logging.print_stack_trace || self.logging.meaningful_errors;
+            let step_started = if want_timing || want_error_chain {
+                Some(Instant::now())
+            } else {
+                None
+            };
+
+            let step_outcome = if skipped {
                 // Skipped step still counts as a transition (budget
                 // decrement above) but produces no state change and
                 // no `next:` directive, so the engine falls through
                 // to source-order next.
-                crate::steps::StepResult::new()
+                Ok(crate::steps::StepResult::new())
             } else {
-                self.execute_single_step(step, context).await?
+                self.execute_single_step(step, context).await
+            };
+
+            let result = match step_outcome {
+                Ok(r) => {
+                    if want_timing {
+                        let elapsed_ms =
+                            step_started.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
+                        debug!(
+                            dsl.step = %step_name,
+                            dsl.step.type = %step.type_name(),
+                            duration_ms = elapsed_ms,
+                            skipped = skipped,
+                            "step completed"
+                        );
+                    }
+                    r
+                }
+                Err(e) => {
+                    // Structured error line with optional cause
+                    // chain (`print_stack_trace`) and optional
+                    // second WARN line with just the underlying
+                    // message (`meaningful_errors`, Java parity).
+                    let elapsed_ms = step_started
+                        .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0);
+                    let chain = if self.logging.print_stack_trace {
+                        error_chain(&e)
+                    } else {
+                        String::new()
+                    };
+                    error!(
+                        dsl.step = %step_name,
+                        dsl.step.type = %step.type_name(),
+                        duration_ms = elapsed_ms,
+                        error = %e,
+                        cause_chain = %chain,
+                        "step failed"
+                    );
+                    if self.logging.meaningful_errors {
+                        if let Some(src) = std::error::Error::source(&e) {
+                            warn!(
+                                dsl.step = %step_name,
+                                cause = %src,
+                                "step failed (underlying cause)"
+                            );
+                        }
+                    }
+                    return Err(e);
+                }
             };
 
             if result.should_return {

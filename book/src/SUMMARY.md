@@ -71,6 +71,17 @@
 - [Scripting engines (Boa vs QuickJS)](./framework/scripting-engines.md)
 - [Default response headers](./framework/default-headers.md)
 
+# Logging
+
+- [Overview](./logging/index.md)
+- [Output formats](./logging/formats.md)
+- [Field vocabulary](./logging/fields.md)
+- [Configuration reference](./logging/configuration.md)
+- [Redaction & log-injection defence](./logging/redaction.md)
+- [Errors & trace correlation](./logging/errors.md)
+- [Recipes](./logging/recipes.md)
+- [Java Ruuter parity](./logging/java-parity.md)
+
 # Testing
 
 - [Overview](./testing/overview.md)

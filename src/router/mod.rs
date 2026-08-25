@@ -3,6 +3,7 @@ use crate::context::ExecutionContext;
 use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::{HttpResponse, SelfCallHandler};
+use crate::logging::{error_chain, sanitize_log_value, trace_id_from_traceparent};
 use crate::state::StateStore;
 use crate::steps::engine::{DslExecutionResult, StepEngine};
 use crate::ws::{random_client_id, Outbound, WsRegistry};
@@ -164,11 +165,8 @@ impl DslRouter {
                 return Some((dsl.clone(), candidate, stripped));
             }
             // Strip the trailing segment; prepend to keep URL order.
-            if let Some(last) = segments.pop() {
-                stripped.insert(0, last.to_string());
-            } else {
-                return None;
-            }
+            let last = segments.pop()?;
+            stripped.insert(0, last.to_string());
         }
     }
 
@@ -305,8 +303,17 @@ impl DslRouter {
         // Missing declaration = permissive (matches Java).
         let mut body = body;
         if let Some(decl) = &dsl.declaration {
+            let strict = decl.is_strict();
             if let Some(allow) = decl.effective_allowed_body() {
-                filter_str_keyed(&mut body, &allow);
+                // Task 070 — strict posture: reject unknown keys with
+                // 400 instead of silently filtering. Traditional
+                // (filter-and-continue) posture preserved when
+                // `strict: false`.
+                if strict {
+                    reject_unknown_str_keyed(&body, &allow, "body")?;
+                } else {
+                    filter_str_keyed(&mut body, &allow);
+                }
                 if uppercase_method == "POST" {
                     for field in &allow {
                         if !body.contains_key(field) {
@@ -323,7 +330,11 @@ impl DslRouter {
                 // path-param DSLs keep working regardless of the
                 // declared allowlist.
                 let path_params_saved = query.remove("pathParams");
-                filter_str_keyed(&mut query, &allow);
+                if strict {
+                    reject_unknown_str_keyed(&query, &allow, "params")?;
+                } else {
+                    filter_str_keyed(&mut query, &allow);
+                }
                 if let Some(pp) = path_params_saved {
                     query.insert("pathParams".to_string(), pp);
                 }
@@ -341,7 +352,21 @@ impl DslRouter {
                 }
             }
             if let Some(allow) = decl.effective_allowed_header() {
-                filter_str_keyed(&mut new_headers, &allow);
+                // Strict posture on headers is measured against a
+                // filtered view that keeps framework-injected headers
+                // (traceparent) out of the "unknown" bucket. Otherwise
+                // every request with a traceparent (i.e. every request)
+                // would 400 under strict.
+                if strict {
+                    let allow_with_tp: Vec<String> = allow
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once("traceparent".to_string()))
+                        .collect();
+                    reject_unknown_str_keyed(&new_headers, &allow_with_tp, "headers")?;
+                } else {
+                    filter_str_keyed(&mut new_headers, &allow);
+                }
                 // Keep traceparent regardless — framework-injected.
                 new_headers
                     .entry("traceparent".to_string())
@@ -434,7 +459,90 @@ async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoRespo
     Json((**router.openapi_spec.load()).clone())
 }
 
-async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) -> Response {
+async fn handle_request(
+    State(router): State<Arc<DslRouter>>,
+    mut request: Request,
+) -> Response {
+    use tracing::Instrument;
+    let start = std::time::Instant::now();
+    let method_str = request.method().as_str().to_string();
+    let uri_path = request.uri().path().to_string();
+    let project_for_span = uri_path
+        .split('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
+    // Adopt the inbound traceparent verbatim if present, else
+    // generate one now so every request-scoped log line carries a
+    // stable `trace_id` (and matches the `X-Trace-Id` returned to
+    // the client). Injected into the request headers so the DSL
+    // execution context reads the same value downstream — one
+    // trace id per request, no reallocation later.
+    let (traceparent_value, needed_injection) = match request
+        .headers()
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(existing) => (existing.to_string(), false),
+        None => (generate_traceparent(), true),
+    };
+    if needed_injection {
+        if let Ok(hv) = HeaderValue::try_from(traceparent_value.as_str()) {
+            request
+                .headers_mut()
+                .insert(HeaderName::from_static("traceparent"), hv);
+        }
+    }
+    let trace_id_str = trace_id_from_traceparent(&traceparent_value)
+        .unwrap_or("")
+        .to_string();
+
+    let peer_ip_str = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_default();
+
+    // Request-scoped span. Every downstream `info!`/`warn!`/`error!`
+    // fired during this request inherits these fields when the JSON
+    // formatter (or an OTLP exporter) is active. Fields follow the
+    // OpenTelemetry HTTP semantic conventions where they exist.
+    let request_span = tracing::info_span!(
+        "http_request",
+        otel.name = %format!("HTTP {} /{}", method_str, sanitize_log_value(&uri_path).trim_start_matches('/')),
+        http.request.method = %method_str,
+        http.route = %sanitize_log_value(&uri_path),
+        dsl.project = %project_for_span,
+        client.address = %peer_ip_str,
+        trace_id = %trace_id_str,
+    );
+    let span_for_log = request_span.clone();
+
+    let router_for_log = router.clone();
+    let response = handle_request_inner(router, request)
+        .instrument(request_span)
+        .await;
+
+    if router_for_log.config.logging.access_log {
+        let status = response.status().as_u16();
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _guard = span_for_log.enter();
+        tracing::info!(
+            http.request.method = %method_str,
+            http.route = %sanitize_log_value(&uri_path),
+            http.response.status_code = status,
+            duration_ms,
+            dsl.project = %project_for_span,
+            client.address = %peer_ip_str,
+            trace_id = %trace_id_str,
+            "http request completed"
+        );
+    }
+
+    response
+}
+
+async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
@@ -700,7 +808,16 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
         )
         .await;
 
-    let (status_code, body_value, extra_headers) = match &dsl_outcome {
+    // `raw_body`, when Some, bypasses axum::Json and emits the string
+    // as raw bytes — see issue #24. Only set when `wrapper: false`
+    // AND the DSL value is a JSON string; every other shape stays on
+    // the JSON path.
+    let (status_code, body_value, extra_headers, raw_body): (
+        StatusCode,
+        Value,
+        HashMap<String, String>,
+        Option<String>,
+    ) = match &dsl_outcome {
         Ok(result) => {
             // Audit finding 13 — finalResponse status defaults. When
             // the DSL didn't set an explicit `status:` on its
@@ -734,6 +851,39 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
             let wrap = result
                 .wrapper
                 .unwrap_or(router.config.response.default_wrapper);
+
+            // Issue #24 — raw non-JSON emission. When ALL of:
+            //   1. `wrapper: false` (or config default_wrapper: false), AND
+            //   2. return value is a String, AND
+            //   3. DSL supplied a Content-Type header that isn't JSON
+            // then bypass axum::Json so the body isn't JSON-encoded
+            // (no surrounding quotes, no escape of `<`, `&`, etc).
+            // The Content-Type gate is deliberate: it means DSLs
+            // that simply used `wrapper: false` without setting a
+            // Content-Type (a common pattern before this fix — the
+            // wrapper flag was interpreted as "no envelope, still
+            // JSON") keep their existing shape. Only DSLs that
+            // opted into a non-JSON contract by declaring it via
+            // Content-Type get the raw emission path.
+            let dsl_content_type = result.headers.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case("content-type") {
+                    Some(v.as_str())
+                } else {
+                    None
+                }
+            });
+            let dsl_wants_non_json = dsl_content_type
+                .map(|ct| {
+                    let mime = ct.split(';').next().unwrap_or("").trim();
+                    !mime.eq_ignore_ascii_case("application/json") && !mime.ends_with("+json")
+                })
+                .unwrap_or(false);
+            let raw_string: Option<String> = if !wrap && dsl_wants_non_json {
+                result.value.as_ref().and_then(|v| v.as_str().map(String::from))
+            } else {
+                None
+            };
+
             let raw = result.value.clone().unwrap_or(json!({}));
             let body = if wrap {
                 json!({ "response": raw })
@@ -744,25 +894,65 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
                 StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
                 body,
                 result.headers.clone(),
+                raw_string,
             )
         }
         Err(RuuterError::FileNotFound(_)) => (
             StatusCode::NOT_FOUND,
             json!({"error": "Not Found"}),
             HashMap::new(),
+            None,
+        ),
+        Err(RuuterError::BadRequest(msg)) => (
+            StatusCode::BAD_REQUEST,
+            json!({ "error": msg }),
+            HashMap::new(),
+            None,
         ),
         Err(e) => {
-            error!("Error executing DSL: {}", e);
+            let chain = if router.config.logging.print_stack_trace {
+                error_chain(e)
+            } else {
+                String::new()
+            };
+            error!(
+                error = %e,
+                cause_chain = %chain,
+                "DSL execution failed"
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": e.to_string() }),
                 HashMap::new(),
+                None,
             )
         }
     };
 
-    let mut response = match &dsl_outcome {
-        Ok(_) => {
+    let mut response = match (&dsl_outcome, raw_body) {
+        // Issue #24 — raw-string emission path. axum::Json is
+        // bypassed. The DSL declared its Content-Type (that's what
+        // opted them into this branch — see the gate above); we
+        // seed a text/plain default first and let the DSL header
+        // in `extra_headers` override so the merge order stays
+        // uniform with the JSON path.
+        (Ok(_), Some(s)) => {
+            let mut resp = (status_code, s).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            for (k, v) in extra_headers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::try_from(k.as_str()),
+                    HeaderValue::try_from(v.as_str()),
+                ) {
+                    resp.headers_mut().insert(name, value);
+                }
+            }
+            resp
+        }
+        (Ok(_), None) => {
             let mut resp = (status_code, Json(body_value)).into_response();
             for (k, v) in extra_headers {
                 if let (Ok(name), Ok(value)) = (
@@ -774,15 +964,14 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, request: Request) 
             }
             resp
         }
-        Err(_) => (status_code, Json(body_value)).into_response(),
+        (Err(_), _) => (status_code, Json(body_value)).into_response(),
     };
 
     // Echo traceparent + X-Trace-Id so ops can correlate a client-side
-    // request id with server-side traces. If the caller sent a traceparent
-    // we adopt it verbatim; otherwise we generated one at execute_dsl
-    // time — but that generation is inside execute_dsl and we don't have
-    // the string back here, so we compute it again from what the caller
-    // sent or generate a matching pair for the response only.
+    // request id with server-side traces. `handle_request` already
+    // injected the traceparent (either the caller's or a fresh one)
+    // into the request headers before dispatching, so the same id
+    // that's in every log line inside this request is echoed back.
     let response_traceparent = headers
         .get("traceparent")
         .and_then(|v| v.to_str().ok())
@@ -1053,6 +1242,29 @@ fn filter_str_keyed<V>(map: &mut HashMap<String, V>, allowed: &[String]) {
     let allowed_set: std::collections::HashSet<&str> =
         allowed.iter().map(String::as_str).collect();
     map.retain(|k, _| allowed_set.contains(k.as_str()));
+}
+
+/// Task 070 helper — strict-unknown-keys posture: return an error
+/// naming the first unknown key found in `map`. Called only when
+/// the DSL opted in via `declaration.strict: true`. `section` names
+/// which surface (body / params / headers) the rejection came from,
+/// so the DSL author's 400 message points at the right field bucket.
+fn reject_unknown_str_keyed<V>(
+    map: &HashMap<String, V>,
+    allowed: &[String],
+    section: &str,
+) -> Result<()> {
+    let allowed_set: std::collections::HashSet<&str> =
+        allowed.iter().map(String::as_str).collect();
+    for k in map.keys() {
+        if !allowed_set.contains(k.as_str()) {
+            return Err(RuuterError::BadRequest(format!(
+                "Unexpected field in {}: {}",
+                section, k
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn parse_payload(text: &str) -> Value {

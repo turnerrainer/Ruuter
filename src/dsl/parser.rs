@@ -18,14 +18,29 @@ impl DslParser {
     }
 
     pub fn parse_file(&self, path: &Path) -> Result<Dsl> {
-        let content = fs::read_to_string(path)?;
-        let replaced = self.replace_constants(&content);
+        // Issue #26 — every error bubbling out of parse_file MUST
+        // include the file path, otherwise an operator with dozens
+        // of DSLs sees `YAML error: did not find expected key at
+        // line 55 column 39` with no way to tell which file. Wrap
+        // once at the file-boundary; downstream errors (step-level,
+        // JSON reserialisation) already name the offending step, so
+        // path + step-name together give the operator a full pointer.
+        let content = fs::read_to_string(path)
+            .map_err(|e| RuuterError::DslParse(format!("{}: {}", path.display(), e)))?;
+        self.parse_content(&content)
+            .map_err(|e| RuuterError::DslParse(format!("{}: {}", path.display(), e)))
+    }
 
+    /// Parse a DSL from an in-memory YAML string. Constants
+    /// substitution runs (using the parser's configured constants map)
+    /// so tests / linters / IDE plugins that don't have a filesystem
+    /// path can drive the parser the same way `parse_file` does.
+    pub fn parse_content(&self, content: &str) -> Result<Dsl> {
+        let replaced = self.replace_constants(content);
         // IndexMap preserves source order — the entry step is whatever
         // comes first in the YAML, as the Ruuter DSL contract requires.
         let yaml: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(&replaced)?;
         let steps = self.parse_steps(yaml)?;
-
         Ok(Dsl::new(steps))
     }
 
@@ -117,10 +132,12 @@ impl DslParser {
             // is one of the Declaration-only fields. Java uses the
             // explicit `call: declare` form; Rust callers historically
             // wrote `declaration: { override_ancestors: true }` etc.
-            // Both work.
-            ["version", "description", "method", "accepts", "returns", "namespace",
+            // Both work. `method`, `accepts` were dropped in task 070
+            // (dead struct fields); `returns` was repurposed as a
+            // typed response schema; `strict` is a new task-070 flag.
+            ["version", "description", "returns", "namespace",
              "allowed_body", "allowed_header", "allowed_params",
-             "override_ancestors", "allowlist"]
+             "override_ancestors", "allowlist", "strict"]
             .iter()
             .any(|k| key_present(k))
         {

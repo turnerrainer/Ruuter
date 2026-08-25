@@ -26,13 +26,29 @@ The bound variable is:
 {
   "response": {
     "status":  200,
-    "body":    { ... }  // parsed JSON or null when body isn't JSON
+    "body":    { ... },  // see below
     "headers": { "content-type": "application/json", ... }
   }
 }
 ```
 
 Reference downstream: `${upstream.response.status}`, `${upstream.response.body.field}`, `${upstream.response.headers['x-my-header']}`.
+
+### Response body decoding
+
+- **JSON** upstream (any body that parses as JSON) → parsed value
+  (object / array / number / string / bool / null).
+- **Non-JSON** upstream (XML, HTML, plaintext, or any body that
+  fails JSON parse) → the raw text as a string, accessible via
+  `${upstream.response.body}`. UTF-8 lossy: invalid byte
+  sequences render as U+FFFD rather than failing the step.
+- **Empty** body → `null`.
+
+Before issue #23 was fixed, non-JSON responses silently became
+`null`, losing the payload — an XML mapper couldn't return XML,
+a plaintext error message from an upstream disappeared, etc. The
+fallback-to-string behaviour lets DSLs forward or inspect non-JSON
+upstreams without special-casing.
 
 ## Verbs
 
@@ -51,6 +67,52 @@ Reference downstream: `${upstream.response.status}`, `${upstream.response.body.f
 - Response body is capped at `http_response_size_limit`; over-cap = step error.
 - Upstream status is filtered against `http_codes_allow_list` when non-empty; disallowed = step error.
 - On network error / timeout: the step returns an error; the DSL response is `500` unless the DSL handles it via a wrapping guard.
+
+## Dynamic `headers:` / `query:` maps
+
+Both `headers:` and `query:` accept two shapes:
+
+**Per-key mapping** (traditional; each value may embed `${…}`):
+
+```yaml
+args:
+  headers:
+    Authorization: "Bearer ${token}"
+    X-Trace-Id:    "${incoming.headers['x-trace-id']}"
+```
+
+**Whole-map expression** — a single `${expr}` string that evaluates
+to a JSON object at runtime. Useful when the map is computed by
+merging / spreading upstream:
+
+```yaml
+compute:
+  assign:
+    merged_headers: "${Object.assign({}, upstream.response.body[0].headers, { 'Content-Type': 'application/json' })}"
+  next: forward
+
+forward:
+  call: http.post
+  args:
+    url: "[#REMOTE_SERVICE_URL]"
+    headers: "${merged_headers}"     # ← whole-map expression
+    body: "${incoming.body}"
+```
+
+Runtime rules for the whole-map form:
+
+- The expression MUST evaluate to a JSON object. Anything else
+  (array, scalar, `null`) is a step error with a diagnostic
+  naming the field. `null` is treated as "no headers".
+- Individual values inside the resulting object are used verbatim
+  (no second-pass `${…}` evaluation — do the interpolation inside
+  the expression).
+- The framework still auto-forwards `traceparent` unless the
+  evaluated map contains it.
+
+Prior to v0.9, only the per-key mapping shape was accepted —
+`headers: "${expr}"` failed at DSL load time with
+`invalid type: string, expected a map`. Issue #25 tracked the fix.
 
 ## Runnable example
 

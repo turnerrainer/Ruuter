@@ -18,22 +18,24 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
+    // Load configuration BEFORE initialising tracing so
+    // `logging.format` is honoured. If config load fails, fall back
+    // to `eprintln!` because there is no subscriber yet.
+    let (config, config_source) = match AppConfig::load_or_default() {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     // Initialize tracing (with OTel exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set).
-    let tracer_provider = observability::init();
+    let tracer_provider = observability::init(&config);
 
     info!("Starting Ruuter-on-Rust v{}", env!("CARGO_PKG_VERSION"));
     if tracer_provider.is_some() {
         info!("OpenTelemetry exporter active");
     }
-
-    // Load configuration (file if resolvable, defaults otherwise)
-    let (config, config_source) = match AppConfig::load_or_default() {
-        Ok(pair) => pair,
-        Err(e) => {
-            error!("Failed to load config: {}", e);
-            std::process::exit(1);
-        }
-    };
     match &config_source {
         Some(p) => info!("Loaded config from {}", p.display()),
         None => info!("Using built-in default config (no ruuter.yaml found)"),
@@ -80,6 +82,21 @@ async fn main() {
                 "Loaded {} HTTP DSLs across {} projects, {} trigger DSLs across {} channels, {} guards",
                 http_total, d.http.len(), trigger_total, d.triggers.len(), guard_total
             );
+            // Task 070 — surface DSLs without a declaration block.
+            // Never fatal; just an operator signal. Gate on the
+            // config toggle (default on) so noisy corpora can silence it.
+            let missing_decl = ruuter_on_rust::dsl::loader::warn_on_missing_declarations(
+                &d.http,
+                config.dsl.warn_on_missing_declaration,
+            );
+            if missing_decl > 0 && config.dsl.warn_on_missing_declaration {
+                info!(
+                    "{} of {} HTTP DSLs have no declaration block; add `declaration:` \
+                     for richer OpenAPI + strict-key support (see book/src/dsl/declaration.md), \
+                     or set `dsl.warn_on_missing_declaration: false` to hide these WARNs.",
+                    missing_decl, http_total
+                );
+            }
             d
         }
         Err(e) => {
@@ -135,6 +152,7 @@ async fn main() {
     // wired further down, once the DslRouter Arc is available.
     let http_client = HttpClient::new(&config);
     let http_client_for_handle = http_client.clone();
+    let logging_arc = Arc::new(config.logging.clone());
     let mut engine = StepEngine::new(http_client)
         .with_ws_registry(ws_registry.clone())
         // `with_dsls_shared` (not `with_dsls`) so the engine and the
@@ -142,7 +160,8 @@ async fn main() {
         // hot-reload publish on the router would leave the engine's
         // template-lookup handle pointing at the stale tree.
         .with_dsls_shared(shared_http_dsls.clone())
-        .with_expr_registry(expr_registry);
+        .with_expr_registry(expr_registry)
+        .with_logging(logging_arc.clone());
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
     }

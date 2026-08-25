@@ -1,5 +1,6 @@
 use crate::context::ExecutionContext;
 use crate::http_client::HttpClient;
+use crate::logging::{cap_and_sanitize, redact, render_body_for_log};
 use crate::scripting::ScriptEngine;
 use crate::steps::engine::StepEngine;
 use crate::steps::{HttpStep, StepExecutor, StepResult};
@@ -56,25 +57,23 @@ impl StepExecutor for HttpStepExecutor {
             None
         };
 
-        let query = if let Some(q) = &self.step.args.query {
-            let mut evaluated = HashMap::new();
-            for (k, v) in q {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            Some(evaluated)
-        } else {
-            None
-        };
-
-        let mut headers = if let Some(h) = &self.step.args.headers {
-            let mut evaluated = HashMap::new();
-            for (k, v) in h {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            evaluated
-        } else {
-            HashMap::new()
-        };
+        // Issue #25 — accept either a YAML mapping (per-key values,
+        // each with `${…}` interpolation) or a whole-map `${expr}`
+        // string that evaluates to an object at runtime. Same for
+        // headers below.
+        let query = evaluate_map_arg(
+            self.step.args.query.as_ref(),
+            &self.script_engine,
+            context,
+            "query",
+        )?;
+        let mut headers = evaluate_map_arg(
+            self.step.args.headers.as_ref(),
+            &self.script_engine,
+            context,
+            "headers",
+        )?
+        .unwrap_or_default();
 
         // Auto-forward traceparent unless the DSL already set one — every
         // Buerostack component participates in W3C tracecontext by default
@@ -95,13 +94,44 @@ impl StepExecutor for HttpStepExecutor {
 
         let timeout = self.step.timeout.map(Duration::from_millis);
 
+        // Per-step logging knobs: DEBUG lines with redacted +
+        // capped request / response bodies, gated by
+        // `logging.display_request_content` /
+        // `display_response_content`. Java-parity fields
+        // (Java Ruuter emitted these into MDC).
+        let logging = self.engine.as_ref().map(|e| e.logging());
+        let url_str = url.as_str().unwrap_or("").to_string();
+
+        if let Some(cfg) = logging.as_deref() {
+            if cfg.display_request_content {
+                let body_rendered = render_body_for_log(body.as_ref(), cfg);
+                let headers_rendered = headers
+                    .as_ref()
+                    .map(|h| {
+                        let sh: HashMap<String, String> = h
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.to_string()))
+                            .collect();
+                        redact::redact_headers(&sh, &cfg.redact_headers)
+                    })
+                    .unwrap_or_default();
+                tracing::debug!(
+                    http.request.method = %method,
+                    url.full = %cap_and_sanitize(&url_str, 512),
+                    http.request.body = %body_rendered,
+                    http.request.headers = ?headers_rendered,
+                    "outbound http request"
+                );
+            }
+        }
+
         // Audit finding 11 — thread the DSL's `content_type:` into the
         // transport so it can pick JSON / plaintext / formdata /
         // multipart / dynamicBody / json_override behaviour.
         let response = self
             .http_client
             .request_with_ct(
-                method,
+                method.clone(),
                 url.as_str().unwrap_or(""),
                 body.as_ref(),
                 query.as_ref(),
@@ -110,6 +140,22 @@ impl StepExecutor for HttpStepExecutor {
                 self.step.args.content_type.as_deref(),
             )
             .await?;
+
+        if let Some(cfg) = logging.as_deref() {
+            if cfg.display_response_content {
+                let body_rendered = render_body_for_log(response.body.as_ref(), cfg);
+                let headers_rendered =
+                    redact::redact_headers(&response.headers, &cfg.redact_headers);
+                tracing::debug!(
+                    http.request.method = %method,
+                    url.full = %cap_and_sanitize(&url_str, 512),
+                    http.response.status_code = response.status,
+                    http.response.body = %body_rendered,
+                    http.response.headers = ?headers_rendered,
+                    "upstream http response"
+                );
+            }
+        }
 
         // Bind the result BEFORE the allow-list check so the
         // `error:` step (and downstream steps in general) can read
@@ -183,6 +229,75 @@ impl StepExecutor for HttpStepExecutor {
             next_step: self.step.next.clone(),
             ..StepResult::new()
         })
+    }
+}
+
+/// Issue #25 — evaluate a step-arg that YAML can express two ways:
+///
+/// 1. **YAML mapping** — each value is evaluated per-key (each may
+///    itself contain `${…}` expressions). This is the traditional
+///    shape.
+/// 2. **A `${expr}` string** — evaluated once; the result must be
+///    a JSON object, which is then flattened into the map.
+///
+/// Any other JSON shape (array, scalar, non-object) is a hard
+/// runtime error naming the offending arg — DSL authors get a
+/// clear diagnostic instead of a silent broken request.
+///
+/// `arg_name` is the field name (`"headers"` / `"query"`) so
+/// error messages point at the right place.
+pub(crate) fn evaluate_map_arg(
+    arg: Option<&Value>,
+    script_engine: &ScriptEngine,
+    context: &ExecutionContext,
+    arg_name: &str,
+) -> Result<Option<HashMap<String, Value>>> {
+    let Some(v) = arg else {
+        return Ok(None);
+    };
+    match v {
+        Value::Object(map) => {
+            let mut out = HashMap::with_capacity(map.len());
+            for (k, val) in map {
+                out.insert(k.clone(), script_engine.evaluate(val, context)?);
+            }
+            Ok(Some(out))
+        }
+        Value::String(_) => {
+            // Whole-map expression form. Evaluate once; require object.
+            let evaluated = script_engine.evaluate(v, context)?;
+            match evaluated {
+                Value::Object(map) => Ok(Some(map.into_iter().collect())),
+                Value::Null => Ok(None),
+                other => Err(RuuterError::DslExecution {
+                    step: "http".into(),
+                    message: format!(
+                        "http step arg `{}`: expression must evaluate to an object, got {}",
+                        arg_name,
+                        json_kind(&other)
+                    ),
+                }),
+            }
+        }
+        other => Err(RuuterError::DslExecution {
+            step: "http".into(),
+            message: format!(
+                "http step arg `{}`: expected a YAML mapping or `${{expr}}` string, got {}",
+                arg_name,
+                json_kind(other)
+            ),
+        }),
+    }
+}
+
+fn json_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
