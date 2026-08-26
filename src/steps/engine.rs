@@ -398,7 +398,22 @@ impl StepEngine {
                             );
                         }
                     }
-                    return Err(e);
+                    // Issue #28 — wrap the raw step error with the
+                    // step + project context that the response
+                    // builder will render. Without this, a caller
+                    // sees just the underlying leaf message (e.g.
+                    // "Script evaluation error: TypeError: ...")
+                    // with no hint which DSL step failed.
+                    // StepContext's #[source] keeps the original
+                    // error walkable via std::error::Error::source
+                    // so error_chain() still traverses the full
+                    // cause chain in the log line + response body.
+                    return Err(RuuterError::StepContext {
+                        step: step_name.clone(),
+                        step_type: step.type_name().to_string(),
+                        project: context.project().to_string(),
+                        source: Box::new(e),
+                    });
                 }
             };
 

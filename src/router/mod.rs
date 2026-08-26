@@ -910,19 +910,40 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
             None,
         ),
         Err(e) => {
-            let chain = if router.config.logging.print_stack_trace {
-                error_chain(e)
+            // Issues #28 + #29 — the caller-facing error body used
+            // to be just `e.to_string()` (top-level Display only),
+            // which discarded:
+            //   * The step + project context (StepContext wraps
+            //     every step error since #28's fix; see engine.rs).
+            //   * The source() chain (reqwest / hyper / io errors
+            //     chain their real cause — DNS failure, connection
+            //     refused, TLS handshake — as .source(), invisible
+            //     to Display).
+            // Now we always render the full chain via error_chain()
+            // so a client debugging "why did my http.<verb> step
+            // fail" sees the actual cause instead of a generic
+            // "error sending request for url (...)".
+            //
+            // `logging.print_stack_trace` still gates whether the
+            // LOG line carries the chain — response body is always
+            // enriched (the trade-off: response is one line, easier
+            // for the caller than sifting logs; logs get the
+            // controlled verbosity knob).
+            let chain = error_chain(e);
+            let response_msg = format!("{}{}", e, chain);
+            let log_chain = if router.config.logging.print_stack_trace {
+                chain.clone()
             } else {
                 String::new()
             };
             error!(
                 error = %e,
-                cause_chain = %chain,
+                cause_chain = %log_chain,
                 "DSL execution failed"
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": e.to_string() }),
+                json!({ "error": response_msg }),
                 HashMap::new(),
                 None,
             )

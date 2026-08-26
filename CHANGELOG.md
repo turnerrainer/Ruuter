@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **#28 — No error details when a JavaScript expression fails.**
+  Before: the response body was just the raw script engine error
+  (e.g. `Script evaluation error: TypeError: cannot convert null
+  or undefined to object`) with no indication of which DSL step
+  ran the failing expression. Now: every step error is wrapped
+  with `step '<name>' (<type>) in project '<project>' failed` at
+  the engine boundary via a new `RuuterError::StepContext`
+  variant. The response identifies the failing step + step type +
+  project by name.
+
+- **#29 — No error details when an outgoing HTTP request fails.**
+  Before: the response body was the top-level reqwest Display
+  only (e.g. `HTTP error: error sending request for url (...)`)
+  — the actual cause (DNS failure, connection refused, TLS
+  handshake, timeout) sat in `std::error::Error::source()` and
+  never surfaced. Now: the router's error response builder walks
+  the full source chain via `logging::error_chain()` (bounded to
+  5 hops) and joins it as `-> caused by: X -> caused by: Y`.
+  The caller sees the actual OS-level failure directly.
+
+  Combined output for both fixes (real example from an
+  unresolvable hostname):
+  ```json
+  {"error": "step 'call_upstream' (http) in project 'consignment' failed
+             -> caused by: HTTP error: error sending request for url (...)
+             -> caused by: error sending request for url (...)
+             -> caused by: client error (Connect)
+             -> caused by: dns error
+             -> caused by: failed to lookup address information: Temporary failure in name resolution"}
+  ```
+
+  4 regression tests in `tests/error_response_details.rs`. Book
+  chapter `book/src/logging/errors.md` documents the new
+  response-body shape.
+
 ## [0.9.0-rc.1] - 2026-08-26
 
 Substantial feature release: comprehensive structured-logging chapter,

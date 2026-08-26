@@ -1,8 +1,50 @@
 # Errors & trace correlation
 
-Two related mechanisms: what a failure looks like in the log
-stream, and how one `trace_id` links every event of one request
-into a single browsable timeline.
+Three related mechanisms: what a failure looks like in the
+**response body** the caller sees, what it looks like in the
+**log stream**, and how one `trace_id` links every event of
+one request into a single browsable timeline.
+
+## Response body
+
+When a request fails, the JSON error body always carries:
+
+1. **Which step** failed (name + type).
+2. **In which project.**
+3. **The full source-chain of causes** — top-level error, plus
+   `-> caused by: …` for every hop of `std::error::Error::source()`.
+
+Example — a DSL step named `call_upstream` that runs an
+`http.get` to an unresolvable hostname:
+
+```json
+{
+  "error": "step 'call_upstream' (http) in project 'consignment' failed -> caused by: HTTP error: error sending request for url (http://multiplexer:8083/...) -> caused by: error sending request for url (...) -> caused by: client error (Connect) -> caused by: dns error -> caused by: failed to lookup address information: Temporary failure in name resolution"
+}
+```
+
+Before this behaviour landed (issues #28 + #29), the same failure
+returned only:
+
+```json
+{"error":"HTTP error: error sending request for url (...)"}
+```
+
+— no step name, no DSL context, no underlying DNS/TCP/TLS
+diagnostic. Debugging required scanning server logs and hoping
+`meaningful_errors` was enabled.
+
+The chain is bounded to 5 hops so a runaway wrapper chain can't
+fill the response line.
+
+### Sensitive-info consideration
+
+The enriched shape can leak infrastructure names into the API
+surface (upstream hostnames, internal step names, DNS diagnostics).
+If your Ruuter is public-facing and you need to keep those
+private, wrap the endpoint in a DSL guard that rewrites the
+response body — the framework's default is "helpful over
+opaque" because most failures need this detail for debugging.
 
 ## Error rendering
 
