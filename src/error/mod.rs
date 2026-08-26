@@ -50,4 +50,24 @@ pub enum RuuterError {
     /// gates as they land.
     #[error("Bad request: {0}")]
     BadRequest(String),
+
+    /// Issue #28 — wrap a step's failure with step + project context
+    /// so the surface presented to the caller (error response body,
+    /// log lines) names WHICH step in WHICH project failed, not just
+    /// the raw underlying error. The `#[source]` attribute makes
+    /// `.source()` return the inner error so `error_chain()` still
+    /// walks the full cause chain (see `logging::error_chain`).
+    ///
+    /// Display is deliberately terse ("step 'X' (type) in project 'Y'
+    /// failed") — the inner error's message is picked up by the
+    /// cause-chain renderer, not duplicated here. See
+    /// `book/src/logging/errors.md` for the full error-shape story.
+    #[error("step '{step}' ({step_type}) in project '{project}' failed")]
+    StepContext {
+        step: String,
+        step_type: String,
+        project: String,
+        #[source]
+        source: Box<RuuterError>,
+    },
 }
