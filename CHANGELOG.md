@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-rc.2] - 2026-08-26
+
+Fast follow to 0.9.0-rc.1: same-day upstream fixes for two response-body
+error-clarity issues (#28, #29). The 0.9.0-rc.1 logging chapter
+enriched **log lines** with cause chains + step context, but the
+**JSON error response** the API caller receives was still just the
+top-level `Display`, discarding both the step context (#28) and the
+`std::error::Error::source()` chain (#29). rc.2 wires those into the
+response body — same enrichment shape as the log lines, uniformly.
+
 ### Fixed
 
 - **#28 — No error details when a JavaScript expression fails.**
