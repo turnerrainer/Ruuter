@@ -2,6 +2,7 @@ use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
 use crate::state::StateStore;
 use crate::steps::engine::StepEngine;
+use crate::steps::http::evaluate_map_arg;
 use crate::steps::{StepExecutor, StepResult, TemplateStep};
 use crate::{Result, RuuterError};
 use serde_json::Value;
@@ -61,50 +62,53 @@ impl StepExecutor for TemplateStepExecutor {
             })?
             .clone();
 
-        // Build the child context with caller-provided overrides. Body
-        // values get JS-evaluated so `${…}` inside the caller's args
-        // resolves against the caller's context. Query and headers
-        // start empty for the callee — this matches the "as if HTTP
-        // call" semantics documented for the Java Ruuter template step.
-        let child_body: HashMap<String, Value> = if let Some(body) = &self.step.body {
-            let mut evaluated = HashMap::with_capacity(body.len());
-            for (k, v) in body {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            evaluated
-        } else {
-            HashMap::new()
-        };
+        // Build the child context with caller-provided overrides. Each
+        // arg accepts either a YAML mapping (per-key `${…}` evaluated)
+        // or a single `${expr}` string that resolves to an object at
+        // runtime. Matches the "as if HTTP call" semantics documented
+        // for the Java Ruuter template step.
+        let child_body: HashMap<String, Value> = evaluate_map_arg(
+            self.step.body.as_ref(),
+            &self.script_engine,
+            context,
+            "template",
+            "body",
+        )?
+        .unwrap_or_default();
 
-        let child_query: HashMap<String, Value> = if let Some(q) = &self.step.query {
-            let mut evaluated = HashMap::with_capacity(q.len());
-            for (k, v) in q {
-                evaluated.insert(k.clone(), self.script_engine.evaluate(v, context)?);
-            }
-            evaluated
-        } else {
-            HashMap::new()
-        };
+        let child_query: HashMap<String, Value> = evaluate_map_arg(
+            self.step.query.as_ref(),
+            &self.script_engine,
+            context,
+            "template",
+            "query",
+        )?
+        .unwrap_or_default();
 
         // Audit finding 06: header values are `Value` and each one
         // is passed through the script engine (matches Java's
         // `evaluateScripts(headers, …)`). Evaluated result is
         // coerced to a header-safe String — objects/arrays become
         // JSON text (same as Java's `convertMapObjectValuesToString`).
-        let child_headers: HashMap<String, String> = if let Some(h) = &self.step.headers {
-            let mut evaluated = HashMap::with_capacity(h.len());
-            for (k, v) in h {
-                let val = self.script_engine.evaluate(v, context)?;
-                let as_str = match val {
-                    Value::String(s) => s,
-                    other => other.to_string(),
-                };
-                evaluated.insert(k.clone(), as_str);
-            }
-            evaluated
-        } else {
-            HashMap::new()
-        };
+        let child_headers: HashMap<String, String> = evaluate_map_arg(
+            self.step.headers.as_ref(),
+            &self.script_engine,
+            context,
+            "template",
+            "headers",
+        )?
+        .map(|m| {
+            m.into_iter()
+                .map(|(k, v)| {
+                    let as_str = match v {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (k, as_str)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
         // Fresh state store for the child? No — share the parent's
         // project-scoped state so a template's `state` step sees the
