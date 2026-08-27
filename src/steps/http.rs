@@ -65,12 +65,14 @@ impl StepExecutor for HttpStepExecutor {
             self.step.args.query.as_ref(),
             &self.script_engine,
             context,
+            "http",
             "query",
         )?;
         let mut headers = evaluate_map_arg(
             self.step.args.headers.as_ref(),
             &self.script_engine,
             context,
+            "http",
             "headers",
         )?
         .unwrap_or_default();
@@ -250,6 +252,7 @@ pub(crate) fn evaluate_map_arg(
     arg: Option<&Value>,
     script_engine: &ScriptEngine,
     context: &ExecutionContext,
+    step_name: &str,
     arg_name: &str,
 ) -> Result<Option<HashMap<String, Value>>> {
     let Some(v) = arg else {
@@ -270,9 +273,10 @@ pub(crate) fn evaluate_map_arg(
                 Value::Object(map) => Ok(Some(map.into_iter().collect())),
                 Value::Null => Ok(None),
                 other => Err(RuuterError::DslExecution {
-                    step: "http".into(),
+                    step: step_name.into(),
                     message: format!(
-                        "http step arg `{}`: expression must evaluate to an object, got {}",
+                        "{} step arg `{}`: expression must evaluate to an object, got {}",
+                        step_name,
                         arg_name,
                         json_kind(&other)
                     ),
@@ -280,9 +284,10 @@ pub(crate) fn evaluate_map_arg(
             }
         }
         other => Err(RuuterError::DslExecution {
-            step: "http".into(),
+            step: step_name.into(),
             message: format!(
-                "http step arg `{}`: expected a YAML mapping or `${{expr}}` string, got {}",
+                "{} step arg `{}`: expected a YAML mapping or `${{expr}}` string, got {}",
+                step_name,
                 arg_name,
                 json_kind(other)
             ),

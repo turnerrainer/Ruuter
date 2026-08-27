@@ -10,7 +10,7 @@ use super::{
 };
 use crate::context::ExecutionContext;
 use crate::{Result, RuuterError};
-use boa_engine::{Context as BoaContext, JsValue, Source};
+use boa_engine::{property::Attribute, Context as BoaContext, JsValue, Source};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -313,9 +313,31 @@ fn js_value_to_json(value: &JsValue, boa: &mut BoaContext) -> Result<Value> {
         }
     }
 
-    let json_str = value
-        .to_json(boa)
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?
-        .to_string();
+    // boa's built-in `to_json` panics on any object with a nested
+    // `undefined` value. Round-trip through `JSON.stringify` — spec
+    // says undefined properties drop from objects, undefined array
+    // slots become null. Slot is non-writable so a script can't
+    // hijack it mid-evaluation, and CONFIGURABLE so back-to-back
+    // fallbacks can rebind.
+    boa.register_global_property(
+        boa_engine::js_string!("__ruuter_serialize_tmp__"),
+        value.clone(),
+        Attribute::CONFIGURABLE,
+    )
+    .map_err(|e| RuuterError::ScriptEvaluation(format!("serialize slot: {}", e)))?;
+    let stringified = boa
+        .eval(Source::from_bytes(
+            "JSON.stringify(__ruuter_serialize_tmp__)",
+        ))
+        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
+    if stringified.is_undefined() {
+        return Ok(Value::Null);
+    }
+    let json_str = stringified
+        .as_string()
+        .ok_or_else(|| {
+            RuuterError::ScriptEvaluation("JSON.stringify returned non-string".to_string())
+        })?
+        .to_std_string_escaped();
     serde_json::from_str(&json_str).map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))
 }

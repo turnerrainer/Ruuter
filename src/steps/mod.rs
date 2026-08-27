@@ -375,15 +375,18 @@ pub struct TemplateStep {
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_type: Option<String>,
+    /// Body — either a YAML mapping with per-key values (each may
+    /// contain `${…}` expressions) or a single `${expr}` string that
+    /// evaluates to an object at runtime.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<HashMap<String, Value>>,
+    pub body: Option<Value>,
+    /// Query — same shape as `body`. Mapping or `${expr}`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub query: Option<HashMap<String, Value>>,
-    /// Java-parity: header values are `Value` (any JSON, incl. maps
-    /// with `${…}` expressions) and are evaluated at call time
-    /// (audit finding 06). String is coerced from evaluated value.
+    pub query: Option<Value>,
+    /// Headers — same shape as `body`. Evaluated values are coerced
+    /// to strings for the callee.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, Value>>,
+    pub headers: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
     #[serde(flatten)]
