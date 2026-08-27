@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-rc.3] - 2026-08-28
+
+Bug-fix roll-up on top of 0.9.0-rc.2. All three fixes share a common
+theme: shapes that were legal in Java Ruuter (and that ordinary DSL
+authors reach for) either crashed the runtime or were rejected at DSL
+load time. rc.3 makes them work as expected without changing existing
+behaviour for the shapes that already worked.
+
+### Fixed
+
+- **#33 — Ruuter crashed on undefined input.** Any script expression
+  that evaluated to an object with an `undefined` property panicked
+  the tokio worker with `not yet implemented: undefined to JSON` from
+  boa's built-in `JsValue::to_json`. The non-array object branch of
+  `js_value_to_json` now routes through `JSON.stringify`, which per
+  JS spec drops undefined properties from objects and turns undefined
+  array slots into `null` — matches the QuickJS backend's existing
+  behaviour. The serialisation slot is registered non-writable so a
+  script can't hijack it mid-evaluation.
+
+- **#34 — `Object.assign` with a missing header crashed the request.**
+  The exact reproduction — `Object.assign(base, { 'x-request-id':
+  incoming.headers['x-request-id'] })` when the source header is
+  absent — is the practical trigger for #33. Same fix, same commit;
+  end-to-end regression via the axum router (missing-header returns
+  200 not 500; present-header still propagates).
+
+- **#32 — Template step rejected `${expr}` for `body`, `query`,
+  `headers` at DSL load time.** The strict `Option<HashMap<String,
+  Value>>` typing meant a top-level `body: "${followup_json.response.body}"`
+  failed with `invalid type: string "${...}", expected a map` before
+  the DSL ever ran. Loosened to `Option<Value>` and evaluated at
+  runtime via the shared `evaluate_map_arg` helper — exact parity
+  with the 0.9.0-rc.1 #25 fix for `http.<verb>` and `return`.
+  Non-object runtime results still surface as a clear diagnostic
+  naming the step + arg.
+
+  19 regression tests across `tests/undefined_in_object.rs` and
+  `tests/template_dynamic_map_args.rs` — including composition tests
+  that exercise `Object.assign` + `undefined` through the template
+  step's body/query/headers.
+
 ## [0.9.0-rc.2] - 2026-08-26
 
 Fast follow to 0.9.0-rc.1: same-day upstream fixes for two response-body
