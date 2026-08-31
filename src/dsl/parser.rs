@@ -128,21 +128,43 @@ impl DslParser {
         } else if key_present("single_flight") {
             "single_flight"
         } else if
-            // Rust-extension implicit declaration: a step whose body
-            // is one of the Declaration-only fields. Java uses the
-            // explicit `call: declare` form; Rust callers historically
-            // wrote `declaration: { override_ancestors: true }` etc.
-            // Both work. `method`, `accepts` were dropped in task 070
-            // (dead struct fields); `returns` was repurposed as a
-            // typed response schema; `strict` is a new task-070 flag.
-            ["version", "description", "returns", "namespace",
-             "allowed_body", "allowed_header", "allowed_params",
-             "override_ancestors", "allowlist", "strict"]
-            .iter()
-            .any(|k| key_present(k))
+        // Rust-extension implicit declaration: a step whose body
+        // is one of the Declaration-only fields. Java uses the
+        // explicit `call: declare` form; Rust callers historically
+        // wrote `declaration: { override_ancestors: true }` etc.
+        // Both work. `method`, `accepts` were dropped in task 070
+        // (dead struct fields); `returns` was repurposed as a
+        // typed response schema; `strict` is a new task-070 flag.
+        [
+            "version",
+            "description",
+            "returns",
+            "namespace",
+            "allowed_body",
+            "allowed_header",
+            "allowed_params",
+            "override_ancestors",
+            "allowlist",
+            "strict",
+        ]
+        .iter()
+        .any(|k| key_present(k))
         {
             "declaration"
-        } else if mapping.iter().all(|(k, _)| matches!(k.as_str(), Some("next") | Some("skip") | Some("sleep") | Some("maxRecursions") | Some("max_recursions") | Some("reloadDsl") | Some("reloadDsls") | Some("reload_dsl") | Some("reload_dsls"))) {
+        } else if mapping.iter().all(|(k, _)| {
+            matches!(
+                k.as_str(),
+                Some("next")
+                    | Some("skip")
+                    | Some("sleep")
+                    | Some("maxRecursions")
+                    | Some("max_recursions")
+                    | Some("reloadDsl")
+                    | Some("reloadDsls")
+                    | Some("reload_dsl")
+                    | Some("reload_dsls")
+            )
+        }) {
             // Bare control-flow step — only base fields, no action
             // body. Common shape in Rust tests: `skip: { next: end }`
             // where the step name is a jump target but performs no

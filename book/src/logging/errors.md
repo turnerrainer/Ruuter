@@ -179,9 +179,11 @@ Server logs (JSON):
 $ docker compose logs ruuter | jq -c '. | select(.fields.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736")'
 ```
 
-returns every event fired inside that request: access log,
-per-step DEBUG lines (if `step_timing`), DSL `log:` events, any
-errors.
+returns every event fired inside that request: one INFO
+`Executed` line per step (with step-type-specific `attrs` — issue
+#37), the access log, per-step DEBUG lines (if `step_timing`),
+DSL `log:` events, any errors. Add `logging.log_dsl_runs: true`
+if you also want `DSL run started` / `DSL run completed` brackets.
 
 ### Correlating client-side and server-side
 

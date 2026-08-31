@@ -64,7 +64,11 @@ async fn post_json(router: Arc<DslRouter>, path: &str, body: serde_json::Value) 
         .header("content-type", "application/json")
         .body(Body::from(body_bytes))
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())
@@ -76,7 +80,11 @@ async fn get_status(router: Arc<DslRouter>, path: &str) -> u16 {
         .uri(path)
         .body(Body::empty())
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     resp.status().as_u16()
 }
 
@@ -348,9 +356,8 @@ reply:
     let spec = openapi::build_spec(&loaded, "test");
     // Bare fields → still a properties map, but each field falls back
     // to `type: string` (the DslField default) and no required array.
-    let schema =
-        &spec["paths"]["/svc/create"]["post"]["requestBody"]["content"]["application/json"]
-            ["schema"];
+    let schema = &spec["paths"]["/svc/create"]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"];
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["properties"]["userName"]["type"], "string");
     assert!(schema.get("required").is_none());
@@ -470,7 +477,11 @@ reply:
         .header("x-tenant", "acme")
         .body(Body::empty())
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
 }
 

@@ -5,9 +5,50 @@
 //!
 //! Reference: `book/src/logging/` (operator-facing chapter).
 
+pub mod fmt;
 pub mod redact;
 
 use crate::config::LoggingConfig;
+
+/// Convert an elapsed `Duration` to milliseconds at microsecond
+/// precision. Renders cleanly (`0.051`) instead of the f64-artefact
+/// tail (`0.05121800000000001`) that `as_secs_f64() * 1000.0`
+/// produces. Precision is 0.001 ms = 1 µs, plenty for anything a
+/// log reader cares about; JSON consumers still receive a numeric
+/// value.
+pub fn duration_ms(d: std::time::Duration) -> f64 {
+    d.as_micros() as f64 / 1000.0
+}
+
+/// Cap used by [`preview_body_for_log`] for step-line body previews.
+/// Deliberately much smaller than `LoggingConfig::max_body_bytes`
+/// (default 2 KiB): step-line previews sit inside a one-line-per-
+/// event terminal format, so a payload preview that spills onto a
+/// second line defeats the readability goal. 80 chars is roughly the
+/// width of a git commit subject line — enough to identify shape,
+/// short enough to keep the line unwrapped.
+pub const STEP_PREVIEW_MAX_BYTES: usize = 80;
+
+/// Render a JSON value as a compact single-line preview for a step's
+/// `attrs` field. Redacts per `cfg.redact_body_fields` and caps at
+/// [`STEP_PREVIEW_MAX_BYTES`]. Returns `None` for `null`/absent
+/// values (so the caller can skip the field entirely rather than
+/// emit `return.body=null` noise). Unlike [`render_body_for_log`],
+/// which is sized for the outbound-body DEBUG line, this helper
+/// exists specifically so a step-line preview fits on one terminal
+/// row.
+pub fn preview_body_for_log(
+    value: Option<&serde_json::Value>,
+    cfg: &LoggingConfig,
+) -> Option<String> {
+    let v = value?;
+    if v.is_null() {
+        return None;
+    }
+    let redacted = redact::redact_json(v, &cfg.redact_body_fields);
+    let s = serde_json::to_string(&redacted).ok()?;
+    Some(cap_and_sanitize(&s, STEP_PREVIEW_MAX_BYTES))
+}
 
 /// Strip CR / LF from a value about to enter a log field. Prevents
 /// log-line splicing when an attacker-controlled header or body
@@ -95,9 +136,7 @@ mod tests {
     #[test]
     fn trace_id_extract() {
         assert_eq!(
-            trace_id_from_traceparent(
-                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-            ),
+            trace_id_from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
             Some("4bf92f3577b34da6a3ce929d0e0e4736")
         );
         assert_eq!(trace_id_from_traceparent("garbage"), None);
@@ -123,8 +162,14 @@ mod tests {
             }
         }
         let deep = (0..10).fold(
-            E { msg: "leaf", source: None },
-            |acc, _| E { msg: "wrap", source: Some(Box::new(acc)) },
+            E {
+                msg: "leaf",
+                source: None,
+            },
+            |acc, _| E {
+                msg: "wrap",
+                source: Some(Box::new(acc)),
+            },
         );
         let chain = error_chain(&deep);
         assert!(chain.contains("caused by"));

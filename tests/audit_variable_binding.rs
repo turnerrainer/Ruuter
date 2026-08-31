@@ -34,9 +34,7 @@ fn build_router(dsl_root: &Path) -> Arc<DslRouter> {
     let engine = StepEngine::new(HttpClient::new(&cfg))
         .with_ws_registry(ws.clone())
         .with_dsls_shared(http.clone());
-    Arc::new(DslRouter::from_shared(
-        http, guards, cfg, state, ws, engine,
-    ))
+    Arc::new(DslRouter::from_shared(http, guards, cfg, state, ws, engine))
 }
 
 /// A variable with an identifier-invalid name (`foo-bar`) used to

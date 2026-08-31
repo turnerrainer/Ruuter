@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Compact one-line-per-event text formatter (terminal readability).**
+  The default `text` format switches from `tracing_subscriber`'s
+  built-in fmt layer to a custom formatter tuned for terminal
+  reading. Every event fits one line on any terminal ≥ 120 cols:
+  `HH:MM:SS.mmm LEVEL [t=<8hex> <project>] ▸ <step> (<type>)
+  <duration> → <next>  <attrs>` for `Executed`, `HH:MM:SS.mmm
+  LEVEL [t=<8hex> <project>] ⏹ <METHOD> <route> <status> <duration>
+  from <ip>` for the access log. Span noise dropped from text
+  rendering: `otel.name`, `http.request.method`, `http.route`,
+  `client.address` no longer duplicate onto every child event
+  (they remain on the OTLP span). Rust module target
+  (`ruuter_on_rust::steps::engine`) dropped. Timestamps trimmed
+  from nanosecond ISO-8601 to `HH:MM:SS.mmm` UTC.
+
+### Added
+
+- **`logging.format: pretty`** (env `RUUTER_LOG_FORMAT=pretty`).
+  Same layout as `text` plus ANSI colours (level, step marker,
+  duration, status) and Unicode markers (`▸` for step,
+  `⏹` for access log). Intended for interactive local dev; do
+  not pipe to files or aggregators (colour escapes leak).
+
+### Fixed
+
+- **`duration_ms` float-precision artefact.** Values like
+  `0.05121800000000001` on the log line — an artefact of f64
+  rendering — are gone. `crate::logging::duration_ms` now
+  computes via `Duration::as_micros() as f64 / 1000.0`, giving
+  microsecond precision (0.001 ms) without float tails.
+
+- **Compact `attrs` field names.** The per-step `attrs=` on the
+  `Executed` INFO line dropped its step-type prefix — the step type
+  is already on the line (`(state)`, `(switch)`, `(return)`, …), so
+  fields like `state.op="get"` are now just `op="get"`,
+  `http.response.status_code=200` is `status=200`. Full OTel
+  semantic-convention names still appear on the primary access log
+  line and on the OTel span for dashboard portability.
+  `switch.next=…` dropped entirely (redundant with the engine's
+  `→ next-step` positional column). Switch attrs renamed:
+  `switch.matched_branch=1` → `condition=1`, `switch.matched_condition="..."`
+  → `expr="..."`; no-match case renamed `matched="no-match"` →
+  `condition=undefined` for a single greppable predicate across
+  both branches. Net effect: an `Executed` line for a state.get
+  went from ~120 chars to ~95.
+
+- **`return`, `state.set`, `template` steps now surface content
+  on the trail.** Previously the `Executed` line for these
+  "answer" / side-effect steps only showed status / key metadata,
+  making the trail read like an access log without status codes.
+  Added: `return.body` (capped + redacted 80-char JSON preview of
+  the returned value), `state.value` (same treatment for the value
+  written), `template.body` (same for the callee's return). Values
+  honour `redact_body_fields` so project-specific PII / secret
+  extensions apply. Uses a new
+  `StepLogExtras::push_preformatted` variant so JSON previews
+  render as `return.body={"counter":1}` rather than the double-
+  quoted `return.body="{\"counter\":1}"`.
+
+
+### Added
+
+- **#37 — Java-parity per-step INFO execution trail.** Java
+  Ruuter emitted one INFO `Executed: <step-name>` line per DSL
+  step via `LoggingUtils.logStep()` at default log level; Ruuter-
+  on-Rust only had a DEBUG-gated `step_timing` line, off by
+  default. Result: at INFO (production) the DSL was a black box.
+  Fix: engine now emits one INFO `Executed` line per step with
+  `dsl.step`, `dsl.step.type`, `duration_ms`, `dsl.next.step`,
+  and a rendered `attrs` field carrying step-type-specific
+  context (HTTP: `url.full` + upstream status; switch: matched
+  branch; return: response status; state: op + key + hit; log:
+  message; iterate: item count; template: dsl + child status;
+  assign: keys; ws_send: mode + delivered; single_flight: role +
+  key; http_mock: status). Two new config knobs:
+  `logging.log_step_executions` (default `true`, the Java-parity
+  trail) and `logging.log_dsl_runs` (default `false`, opt-in
+  Rust-only enrichment — the request span already brackets each
+  run via `trace_id`, so the extra `DSL run started` /
+  `DSL run completed` INFO lines are opt-in for grep-based triage
+  where an explicit `terminated_by` label helps). Operators can
+  drop `log_step_executions` for very high-QPS DSLs.
+  Executor-side plumbing goes through a new
+  `StepResult.log_extras: StepLogExtras`, order-preserving with
+  CR/LF-sanitising Display so an attacker-controlled URL or log
+  message can't splice a fake log line. Docs updated
+  (`book/src/logging/configuration.md`, `fields.md`, and
+  `java-parity.md`).
+
 ## [0.9.0-rc.3] - 2026-08-28
 
 Bug-fix roll-up on top of 0.9.0-rc.2. All three fixes share a common

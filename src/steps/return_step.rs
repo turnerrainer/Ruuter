@@ -1,9 +1,12 @@
+use crate::config::LoggingConfig;
 use crate::context::ExecutionContext;
+use crate::logging::preview_body_for_log;
 use crate::scripting::ScriptEngine;
-use crate::steps::{ReturnStep, StepExecutor, StepResult};
+use crate::steps::{ReturnStep, StepExecutor, StepLogExtras, StepResult};
 use crate::{Result, RuuterError};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Java-parity `Set-Cookie` defaults. When the DSL emits a
 /// `Set-Cookie` header as a JSON object (`{ name: "session", value:
@@ -17,13 +20,27 @@ const SET_COOKIE_HEADER: &str = "Set-Cookie";
 pub struct ReturnStepExecutor {
     step: ReturnStep,
     script_engine: ScriptEngine,
+    /// Framework-wide logging config, threaded in so the step-line
+    /// return-body preview honours `redact_body_fields` (a project
+    /// that extends the redact list must see the extension respected
+    /// in every log surface, not just the outbound-body DEBUG line).
+    /// Falls back to defaults when the engine didn't supply one — the
+    /// framework's default `redact_body_fields` covers password / token
+    /// / secret / api_key, so an unconfigured executor is still safe
+    /// against the common cases.
+    logging: Arc<LoggingConfig>,
 }
 
 impl ReturnStepExecutor {
     pub fn new(step: ReturnStep) -> Self {
+        Self::with_logging(step, Arc::new(LoggingConfig::default()))
+    }
+
+    pub fn with_logging(step: ReturnStep, logging: Arc<LoggingConfig>) -> Self {
         Self {
             step,
             script_engine: ScriptEngine::new(),
+            logging,
         }
     }
 }
@@ -119,12 +136,27 @@ impl StepExecutor for ReturnStepExecutor {
         // router (which is the response-serialisation layer) can
         // honour it. Unset in DSL = None here = router treats as
         // default-true (Java parity).
+        let mut extras = StepLogExtras::new().push("status", status.unwrap_or(200));
+        if let Some(w) = self.step.wrapper {
+            extras = extras.push("wrapper", w);
+        }
+        // Issue: the return step was the only "answer" step that
+        // showed just status, not the returned content. Add a
+        // capped + redacted single-line preview so a reader sees
+        // WHAT the DSL returned without cross-referencing the
+        // response body or another log line. Skipped when the value
+        // is null so we don't get `return.body=null` noise on
+        // control-flow-only returns.
+        if let Some(preview) = preview_body_for_log(Some(&return_value), &self.logging) {
+            extras = extras.push_preformatted("body", preview);
+        }
         Ok(StepResult {
             should_return: true,
             return_value: Some(return_value),
             return_status: status,
             return_headers: headers,
             return_wrapper: self.step.wrapper,
+            log_extras: extras,
             ..StepResult::new()
         })
     }

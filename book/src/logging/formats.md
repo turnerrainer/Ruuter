@@ -1,39 +1,80 @@
 # Output formats
 
-Two output layers, one at a time (chosen at boot).
+Three output layers, one at a time (chosen at boot).
 
 ## Text (default)
 
-`tracing`'s human-friendly line renderer. Great for `docker logs`,
-`journalctl`, and grepping. This is the default because most
-first-run experiences of Ruuter are local dev and container-log
-tailing, where readability beats machine-parseability.
-
-Example line (line-wrapped here for reading; real output is one
-line per event):
+Compact one-line-per-event terminal-first layout. Each line looks
+like this — no wrapping on any terminal ≥ 120 columns:
 
 ```
-2026-08-25T10:04:37.180777Z INFO http_request{
-  otel.name=HTTP GET /samples/ping
-  http.request.method=GET
-  http.route=/samples/ping
-  dsl.project=samples
-  client.address=127.0.0.1
-  trace_id=c80300fe7cbd1b35cf1a3e741c82a6ab
-}:
-  ruuter_on_rust::router: http request completed
-  http.request.method=GET
-  http.route=/samples/ping
-  http.response.status_code=202
-  duration_ms=0.95583
-  dsl.project=samples
-  client.address=127.0.0.1
-  trace_id=c80300fe7cbd1b35cf1a3e741c82a6ab
+10:34:59.099 INFO  [t=2b380de4 samples] ▸ read_counter (state) 49µs → bump  state.op="get" state.key="counter" state.hit=false
+10:34:59.103 INFO  [t=2b380de4 samples] ▸ bump (assign) 4.8ms → write_counter  assign.keys="next_value"
+10:34:59.107 INFO  [t=2b380de4 samples] ▸ write_counter (state) 3.8ms → respond  state.op="set" state.key="counter"
+10:34:59.112 INFO  [t=2b380de4 samples] ▸ respond (return) 4.1ms → -  http.response.status_code=200
+10:34:59.112 INFO  [t=2b380de4 samples] ⏹ POST /samples/state/inc 200 13.6ms  from 127.0.0.1
 ```
 
-The `http_request{...}` prefix is the request-scoped span. Every
-line fired inside that span (access log, DSL `log:` step outputs,
-step-timing DEBUG lines, errors) inherits the span's fields.
+Anatomy of a `▸` line (per-step `Executed`):
+
+```
+HH:MM:SS.mmm LEVEL [t=<8hex trace_id> <project>] ▸ <step-name> (<step-type>) <duration> → <next-step>  <attrs>
+```
+
+Anatomy of a `⏹` line (access log):
+
+```
+HH:MM:SS.mmm LEVEL [t=<8hex trace_id> <project>] ⏹ <METHOD> <route> <status> <duration>  from <client-ip>
+```
+
+Design choices behind the format:
+
+- **8-hex short trace_id** in the `[t=… project]` prefix — enough
+  to disambiguate concurrent requests locally, greppable, doesn't
+  eat the line. The full 32-hex value stays on the OTLP span and
+  in the `X-Trace-Id` response header for cross-service tracing.
+- **Duration in the closest unit** — `49µs` / `4.8ms` / `1.23s`
+  instead of `0.049` / `4.8` / `1230.0` with an implicit `ms` unit.
+- **Rust module target dropped** — `ruuter_on_rust::steps::engine`
+  is noise to a DSL reader.
+- **OTel semantic-convention span fields elided** — `otel.name`,
+  `http.request.method`, `http.route`, `client.address` still ride
+  on the span for OTLP export, but text output filters them out
+  because they duplicate what's on the access-log line.
+
+With `logging.log_dsl_runs: true` set, two additional INFO lines
+frame every run: `DSL run started` before the first `Executed`
+line and `DSL run completed` after the last, carrying
+`terminated_by=return|end_of_steps|iteration_cap|error` and the
+step-count / total-duration summary. Off by default because the
+request span already brackets each run via `trace_id`.
+
+## Pretty (opt-in, local dev)
+
+Same layout as `text` plus ANSI colours and Unicode markers.
+Enable with `logging.format: pretty` or `RUUTER_LOG_FORMAT=pretty`.
+
+- Timestamp and `[t=… project]` prefix: dim grey
+- Level: green (INFO), yellow (WARN), red (ERROR)
+- `▸` (step marker): cyan
+- Step name: bold
+- Step type: dim
+- Duration: cyan
+- `→` (next arrow): dim
+- `⏹` (access-log marker): magenta
+- Status: green (2xx), yellow (3xx), red (4xx/5xx)
+
+Only turn on when the terminal will render ANSI. Piping to a file
+or a log aggregator leaks colour escapes — use `text` or `json`
+for those.
+
+The `attrs=…` field on each `Executed` line carries step-type-
+specific context that Java Ruuter's polymorphic `logStep` emitted
+into MDC (issue #37). For a `switch`, it's the matched-branch
+index + next target; for `http`, the URL + upstream status; for
+`state`, the op + key + hit; and so on. See the
+[Configuration reference](./configuration.md#log_step_executions)
+for the full per-type vocabulary.
 
 ## JSON
 
@@ -43,20 +84,24 @@ all key on structured fields without regex parsing. Turn on with
 `logging.format: json` in config, or `RUUTER_LOG_FORMAT=json` in
 env.
 
+A single request in the default config produces one JSON object
+per event. For `GET /samples/basic/hello`, the two-line trail looks
+like this (line-wrapped here for reading; each object is one line
+in real output). The `span` block is identical across both and is
+elided on the second for brevity:
+
 ```json
 {
-  "timestamp": "2026-08-25T10:07:12.020926Z",
+  "timestamp": "2026-08-25T10:07:12.019Z",
   "level": "INFO",
-  "target": "ruuter_on_rust::router",
+  "target": "ruuter_on_rust::steps::engine",
   "fields": {
-    "message": "http request completed",
-    "http.request.method": "GET",
-    "http.route": "/samples/basic/hello",
-    "http.response.status_code": 200,
-    "duration_ms": 1.762463,
-    "dsl.project": "samples",
-    "client.address": "127.0.0.1",
-    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+    "message": "Executed",
+    "dsl.step": "response",
+    "dsl.step.type": "return",
+    "duration_ms": 0.032,
+    "dsl.next.step": "-",
+    "attrs": "http.response.status_code=200"
   },
   "span": {
     "name": "http_request",
@@ -68,7 +113,28 @@ env.
     "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
   }
 }
+{
+  "timestamp": "2026-08-25T10:07:12.021Z", "level": "INFO",
+  "target": "ruuter_on_rust::router",
+  "fields": {
+    "message": "http request completed",
+    "http.request.method": "GET",
+    "http.route": "/samples/basic/hello",
+    "http.response.status_code": 200,
+    "duration_ms": 1.762463,
+    "dsl.project": "samples",
+    "client.address": "127.0.0.1",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+  },
+  "span": { … }
+}
 ```
+
+With `logging.log_dsl_runs: true`, two additional `DSL run started`
+and `DSL run completed` objects bracket the `Executed` line —
+useful when you want an explicit `terminated_by` label in the
+stream, redundant when the request span is already giving you
+per-request framing.
 
 - **`timestamp`** — ISO-8601 with UTC offset.
 - **`level`** — `INFO`, `WARN`, `ERROR`, `DEBUG`, `TRACE`.
@@ -84,13 +150,14 @@ env.
 
 The format is selected in this priority order:
 
-1. **`RUUTER_LOG_FORMAT=text|json`** env var — highest. Operator
-   flips a running container without touching the config file.
+1. **`RUUTER_LOG_FORMAT=text|pretty|json`** env var — highest.
+   Operator flips a running container without touching the config
+   file.
 2. **`logging.format`** in `ruuter.yaml`.
 3. **Default: `text`**.
 
-Any value other than `text` or `json` in the env var is ignored
-(config value wins in that case).
+Any value other than `text` / `pretty` / `json` in the env var is
+ignored (config value wins in that case).
 
 ## Why not both?
 
@@ -109,13 +176,14 @@ retention), do the fan-out at ingest, not in Ruuter.
 
 | Situation | Format | Why |
 |---|---|---|
-| Local dev, terminal tailing | `text` | Human-readable, colorised by the terminal |
-| CI test logs | `text` | Fits the CI runner's log viewer |
+| Local dev, interactive terminal | `pretty` | ANSI colours + Unicode markers, easiest to scan |
+| Local dev, tailing a file | `text` | Same compact layout, no colour escapes |
+| CI test logs | `text` | Fits the CI runner's log viewer; no colour |
 | Docker Compose stack, dev | `text` | `docker compose logs` is grep-friendly |
 | Kubernetes / Cloud Run / any log aggregator | `json` | Field-based indexing beats regex |
 | Loki, Elastic, OpenSearch, Datadog, CloudWatch, Splunk | `json` | Native structured ingest |
-| Bare-metal with logrotate / journalctl | either | Both roll fine; text is easier to grep in one file, JSON is easier once you pipe through `jq` |
-| Ephemeral one-shot debug | `text` | You are the reader |
+| Bare-metal with logrotate / journalctl | `text` or `json` | `text` grepable in one file, `json` easier once piped through `jq` |
+| Ephemeral one-shot debug | `pretty` | You are the reader |
 
 The env-var override means you can leave `logging.format: text` in
 the checked-in `ruuter.yaml` for local dev and flip to JSON in the
@@ -129,7 +197,7 @@ what levels are emitted at all. Format is what the emitted lines
 look like. Common recipes:
 
 ```bash
-RUST_LOG=info                                          # default — access log + boot + DSL log:
+RUST_LOG=info                                          # default — boot + access log + per-step Executed + DSL log:
 RUST_LOG=ruuter_on_rust=debug,reqwest=warn             # step_timing + outbound bodies, upstream chatter quiet
 RUST_LOG=warn                                          # only warnings + errors
 RUST_LOG=ruuter_on_rust::steps::engine=debug,info      # engine DEBUG, everything else INFO

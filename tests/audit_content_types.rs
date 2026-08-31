@@ -48,7 +48,11 @@ async fn post(router: Arc<DslRouter>, path: &str, ct: &str, body: Vec<u8>) -> (u
         .header("content-type", ct)
         .body(Body::from(body))
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())
@@ -78,8 +82,14 @@ reply:
     )
     .await;
     assert_eq!(status, 200);
-    assert!(body.contains("\"userId\":\"42\""), "urlencoded parsed: {body}");
-    assert!(body.contains("\"tag\":\"alpha\""), "urlencoded parsed: {body}");
+    assert!(
+        body.contains("\"userId\":\"42\""),
+        "urlencoded parsed: {body}"
+    );
+    assert!(
+        body.contains("\"tag\":\"alpha\""),
+        "urlencoded parsed: {body}"
+    );
 }
 
 #[tokio::test]
@@ -141,7 +151,10 @@ async fn outbound_content_type_plaintext_sends_text_plain() {
     let mut server = mockito::Server::new_async().await;
     let m = server
         .mock("POST", "/echo")
-        .match_header("content-type", mockito::Matcher::Regex("^text/plain".into()))
+        .match_header(
+            "content-type",
+            mockito::Matcher::Regex("^text/plain".into()),
+        )
         .match_body(mockito::Matcher::Exact("greetings".to_string()))
         .with_status(200)
         .with_body(r#"{"ok":true}"#)

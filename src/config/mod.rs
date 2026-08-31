@@ -395,9 +395,23 @@ pub struct DslConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
+    /// Default. Compact one-line-per-event text output tuned for
+    /// terminal readability: `HH:MM:SS.mmm LEVEL [t=<8hex> <project>]
+    /// <message> <fields>`. Span noise (Rust module target, OTel span
+    /// fields duplicated on children) is filtered out; OTLP span
+    /// export (when enabled) still sees the full field set.
     #[default]
     Text,
+    /// One JSON object per event. Recommended for production ingest
+    /// (Loki / Elastic / CloudWatch / Datadog); field-indexed at ingest
+    /// without regex parsing. Full span field set preserved.
     Json,
+    /// Terminal-first output for interactive local dev: ANSI-coloured
+    /// (level, step type, duration) with visual step markers.
+    /// Otherwise identical schema to `text`. Colours are unconditional
+    /// — enable only when the terminal will render them (avoid
+    /// piping to files or log aggregators).
+    Pretty,
 }
 
 fn default_max_body_bytes() -> usize {
@@ -481,6 +495,31 @@ pub struct LoggingConfig {
     #[serde(default)]
     pub step_timing: bool,
 
+    /// Emit one INFO `Executed` line per DSL step with step name,
+    /// step type, elapsed time, next-step target, and per-step-type
+    /// context (HTTP: URL + upstream status; switch: matched branch;
+    /// return: final status; state: op + key; log: message; iterate:
+    /// item count). ON by default — this is the DSL-execution trail
+    /// Java Ruuter's `LoggingUtils.logStep()` emitted at INFO. Turn
+    /// off for very high-QPS DSLs where the per-step line becomes
+    /// noise; DEBUG-level `step_timing` remains a finer-grained
+    /// alternative. Corresponds to issue #37 (per-step visibility).
+    #[serde(default = "default_true")]
+    pub log_step_executions: bool,
+
+    /// Emit one INFO line at the start and end of every DSL run
+    /// (dsl.project + total_steps / duration_ms / terminated_by).
+    /// OFF by default — the request span already brackets each run
+    /// via `trace_id`, and the access log carries the same wall-
+    /// clock duration + response status, so the bracket lines are
+    /// largely redundant for a single-step DSL. Turn on when you
+    /// want an explicit `terminated_by` label (`return` /
+    /// `end_of_steps` / `iteration_cap` / `error`) in the log stream
+    /// without walking the per-step trail — useful for grep-based
+    /// triage of long DSLs.
+    #[serde(default)]
+    pub log_dsl_runs: bool,
+
     /// Cap on any body content included in a log line. Defaults to
     /// 2 KiB — enough to identify the shape without shipping full
     /// payloads to the log store.
@@ -510,6 +549,8 @@ impl Default for LoggingConfig {
             format: LogFormat::default(),
             access_log: true,
             step_timing: false,
+            log_step_executions: true,
+            log_dsl_runs: false,
             max_body_bytes: default_max_body_bytes(),
             redact_headers: default_redact_headers(),
             redact_body_fields: default_redact_body_fields(),
@@ -756,10 +797,8 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // allowed_filetypes vs processed_filetypes — pre-fix Rust only
     // reads processed_filetypes. Warn when they differ so operators
     // know allowed_filetypes was silently the same list.
-    let allowed: std::collections::HashSet<_> =
-        config.dsl.allowed_filetypes.iter().collect();
-    let processed: std::collections::HashSet<_> =
-        config.dsl.processed_filetypes.iter().collect();
+    let allowed: std::collections::HashSet<_> = config.dsl.allowed_filetypes.iter().collect();
+    let processed: std::collections::HashSet<_> = config.dsl.processed_filetypes.iter().collect();
     if allowed != processed {
         tracing::warn!(
             "config: dsl.allowed_filetypes differs from dsl.processed_filetypes — \

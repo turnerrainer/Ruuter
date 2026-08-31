@@ -71,16 +71,11 @@ fn nested_object_with_undefined_property_is_walked() {
     let engine = ScriptEngine::new();
     let out = engine
         .evaluate(
-            &Value::String(
-                "${ ({ outer: { keep: 1, drop: undefined }, sibling: 'ok' }) }".into(),
-            ),
+            &Value::String("${ ({ outer: { keep: 1, drop: undefined }, sibling: 'ok' }) }".into()),
             &empty_ctx(),
         )
         .expect("must not panic on nested undefined");
-    assert_eq!(
-        out,
-        json!({ "outer": { "keep": 1 }, "sibling": "ok" })
-    );
+    assert_eq!(out, json!({ "outer": { "keep": 1 }, "sibling": "ok" }));
 }
 
 #[test]
@@ -104,10 +99,7 @@ fn top_level_undefined_still_maps_to_null() {
     // `null` in the outer context.
     let engine = ScriptEngine::new();
     let out = engine
-        .evaluate(
-            &Value::String("${ undefined }".into()),
-            &empty_ctx(),
-        )
+        .evaluate(&Value::String("${ undefined }".into()), &empty_ctx())
         .expect("undefined at top-level must not panic");
     assert_eq!(out, Value::Null);
 }
@@ -179,9 +171,7 @@ respond:
         resp.status().as_u16(),
         200,
         "missing-header merge must not crash the request; got body: {}",
-        String::from_utf8_lossy(
-            &to_bytes(resp.into_body(), 1024 * 1024).await.unwrap()
-        )
+        String::from_utf8_lossy(&to_bytes(resp.into_body(), 1024 * 1024).await.unwrap())
     );
 }
 

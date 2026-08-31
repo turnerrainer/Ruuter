@@ -52,7 +52,11 @@ async fn post_json(router: Arc<DslRouter>, path: &str, body: serde_json::Value) 
         .header("content-type", "application/json")
         .body(Body::from(body_bytes))
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())
@@ -85,7 +89,10 @@ reply:
     assert_eq!(status, 200);
     assert!(body.contains("userId"));
     assert!(body.contains("amount"));
-    assert!(!body.contains("attacker"), "extra field must be stripped: {body}");
+    assert!(
+        !body.contains("attacker"),
+        "extra field must be stripped: {body}"
+    );
 }
 
 /// checkFields fires on POST — missing declared field is a hard 500.
@@ -143,5 +150,8 @@ reply:
     )
     .await;
     assert_eq!(status, 200);
-    assert!(!body.contains("attacker"), "extra field must be stripped: {body}");
+    assert!(
+        !body.contains("attacker"),
+        "extra field must be stripped: {body}"
+    );
 }

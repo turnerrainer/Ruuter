@@ -35,30 +35,28 @@ pub fn load_all(app: &AppConfig) -> Result<Vec<(String, String, SourceConfig)>> 
         // Legacy layout: <project>/sources/
         let legacy_sources_dir = project_path.join("sources");
 
-        let (dir_to_load, legacy_in_use) = match (
-            ws_outbound_dir.exists(),
-            legacy_sources_dir.exists(),
-        ) {
-            (true, true) => {
-                tracing::warn!(
-                    project = %project_name,
-                    "both WS/outbound/ and sources/ present; using WS/outbound/ \
-                     and ignoring sources/ (rename or delete sources/ to \
-                     silence)"
-                );
-                (Some(ws_outbound_dir), false)
-            }
-            (true, false) => (Some(ws_outbound_dir), false),
-            (false, true) => {
-                tracing::warn!(
-                    project = %project_name,
-                    "sources/ layout is deprecated; rename to WS/outbound/ \
-                     to match the inbound WS/inbound/ layout"
-                );
-                (Some(legacy_sources_dir), true)
-            }
-            (false, false) => (None, false),
-        };
+        let (dir_to_load, legacy_in_use) =
+            match (ws_outbound_dir.exists(), legacy_sources_dir.exists()) {
+                (true, true) => {
+                    tracing::warn!(
+                        project = %project_name,
+                        "both WS/outbound/ and sources/ present; using WS/outbound/ \
+                         and ignoring sources/ (rename or delete sources/ to \
+                         silence)"
+                    );
+                    (Some(ws_outbound_dir), false)
+                }
+                (true, false) => (Some(ws_outbound_dir), false),
+                (false, true) => {
+                    tracing::warn!(
+                        project = %project_name,
+                        "sources/ layout is deprecated; rename to WS/outbound/ \
+                         to match the inbound WS/inbound/ layout"
+                    );
+                    (Some(legacy_sources_dir), true)
+                }
+                (false, false) => (None, false),
+            };
 
         let _ = legacy_in_use;
         if let Some(dir) = dir_to_load {

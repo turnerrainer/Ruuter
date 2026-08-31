@@ -1,7 +1,7 @@
 use crate::context::ExecutionContext;
 use crate::logging::sanitize_log_value;
 use crate::scripting::ScriptEngine;
-use crate::steps::{LogStep, StepExecutor, StepResult};
+use crate::steps::{LogStep, StepExecutor, StepLogExtras, StepResult};
 use crate::Result;
 use tracing::info;
 
@@ -40,8 +40,24 @@ impl StepExecutor for LogStepExecutor {
             "dsl log step"
         );
 
+        // Also surface the evaluated message on the engine's
+        // per-step "Executed" line (issue #37) so a reader scanning
+        // the DSL trail sees WHAT was logged without correlating two
+        // lines. Capped to keep the trail line bounded.
+        let for_extras = if rendered.len() > 256 {
+            let mut cut = 256;
+            while cut > 0 && !rendered.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let mut s = rendered[..cut].to_string();
+            s.push('…');
+            s
+        } else {
+            rendered
+        };
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: StepLogExtras::new().push("msg", for_extras),
             ..StepResult::new()
         })
     }

@@ -38,7 +38,12 @@ fn build(dsl_root: &Path, allow_reload: bool) -> Arc<DslRouter> {
         .with_ws_registry(ws.clone())
         .with_dsls_shared(http.clone());
     let router = Arc::new(DslRouter::from_shared(
-        http, guards, cfg.clone(), state, ws, engine.clone(),
+        http,
+        guards,
+        cfg.clone(),
+        state,
+        ws,
+        engine.clone(),
     ));
     engine.set_reload_handler(Arc::new(StepReloadHandler::new(
         cfg.clone(),
@@ -195,5 +200,9 @@ respond:
         )
         .await
         .unwrap();
-    assert_eq!(r.value.unwrap(), serde_json::json!("v1"), "reload was gated off, tree unchanged");
+    assert_eq!(
+        r.value.unwrap(),
+        serde_json::json!("v1"),
+        "reload was gated off, tree unchanged"
+    );
 }

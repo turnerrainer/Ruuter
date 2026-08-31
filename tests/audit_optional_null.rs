@@ -33,9 +33,7 @@ fn build_router(dsl_root: &Path) -> Arc<DslRouter> {
     let engine = StepEngine::new(HttpClient::new(&cfg))
         .with_ws_registry(ws.clone())
         .with_dsls_shared(http.clone());
-    Arc::new(DslRouter::from_shared(
-        http, guards, cfg, state, ws, engine,
-    ))
+    Arc::new(DslRouter::from_shared(http, guards, cfg, state, ws, engine))
 }
 
 async fn run(router: Arc<DslRouter>, method: &str, path: &str) -> serde_json::Value {
@@ -78,7 +76,11 @@ respond:
 "#,
     );
     let out = run(build_router(tmp.path()), "GET", "tag").await;
-    assert_eq!(out, serde_json::json!("tag="), "optional-null coerced to empty: got {out}");
+    assert_eq!(
+        out,
+        serde_json::json!("tag="),
+        "optional-null coerced to empty: got {out}"
+    );
 }
 
 /// Whole-string `.optional.<name>` returns "" natively (single-
@@ -99,7 +101,11 @@ respond:
 "#,
     );
     let out = run(build_router(tmp.path()), "GET", "tag").await;
-    assert_eq!(out, serde_json::json!(""), "whole-string optional-null → empty: got {out}");
+    assert_eq!(
+        out,
+        serde_json::json!(""),
+        "whole-string optional-null → empty: got {out}"
+    );
 }
 
 /// Without `.optional.` in the expression text, null is preserved.
@@ -121,5 +127,9 @@ respond:
 "#,
     );
     let out = run(build_router(tmp.path()), "GET", "tag").await;
-    assert_eq!(out, serde_json::Value::Null, "non-optional null preserved: got {out}");
+    assert_eq!(
+        out,
+        serde_json::Value::Null,
+        "non-optional null preserved: got {out}"
+    );
 }

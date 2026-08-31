@@ -2,24 +2,31 @@
 //!
 //! Two independent axes:
 //!
-//! 1. **Log output format** — either the default `tracing` text
-//!    layer or a JSON layer emitting one OTel-log-compatible JSON
-//!    object per event. Driven by `logging.format` in `AppConfig`;
-//!    the env var `RUUTER_LOG_FORMAT=text|json` overrides so an
-//!    operator can flip a running container without editing the
-//!    config file.
+//! 1. **Log output format** — one of three renderers, driven by
+//!    `logging.format` in `AppConfig`; the env var
+//!    `RUUTER_LOG_FORMAT=text|json|pretty` overrides so an operator
+//!    can flip a running container without editing the config file.
+//!
+//!    - `text` (default): compact one-line-per-event terminal-first
+//!      layout, span noise stripped. See `logging::fmt`.
+//!    - `pretty`: `text` + ANSI colours + Unicode markers for
+//!      interactive local dev.
+//!    - `json`: one OTel-log-compatible JSON object per event —
+//!      full field set, recommended for production ingest.
 //!
 //! 2. **Distributed tracing (OTel spans)** — when
 //!    `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the subscriber additionally
-//!    exports every `tracing::info_span!` as an OTLP span. W3C
-//!    tracecontext propagation is always installed so downstream
-//!    calls get the right `traceparent` regardless of whether an
-//!    exporter is wired.
+//!    exports every `tracing::info_span!` as an OTLP span with the
+//!    full field set (span noise trimmed from text rendering does NOT
+//!    reach spans — OTLP sees everything). W3C tracecontext
+//!    propagation is always installed so downstream calls get the
+//!    right `traceparent` regardless of whether an exporter is wired.
 //!
 //! Reference: `book/src/logging/` (operator-facing chapter) and
 //! `book/src/framework/tracing.md`.
 
 use crate::config::{AppConfig, LogFormat};
+use crate::logging::fmt::{AllowlistSpanCapture, RuuterPrettyFormat, RuuterTextFormat};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
@@ -38,6 +45,7 @@ fn resolve_format(config_format: LogFormat) -> LogFormat {
     {
         Some("json") => LogFormat::Json,
         Some("text") => LogFormat::Text,
+        Some("pretty") => LogFormat::Pretty,
         _ => config_format,
     }
 }
@@ -73,6 +81,33 @@ fn try_build_otel(endpoint: &str) -> Option<TracerProvider> {
     )
 }
 
+/// Build the fmt layer for the compact terminal formatter (text or
+/// pretty variant). Both need the same span-field capture layer
+/// installed alongside so span fields survive into event rendering.
+fn compact_fmt_layer<S>(
+    ansi: bool,
+) -> tracing_subscriber::fmt::Layer<
+    S,
+    tracing_subscriber::fmt::format::DefaultFields,
+    RuuterTextFormat,
+>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    tracing_subscriber::fmt::layer().event_format(RuuterTextFormat { ansi })
+}
+
+fn pretty_fmt_layer<S>() -> tracing_subscriber::fmt::Layer<
+    S,
+    tracing_subscriber::fmt::format::DefaultFields,
+    RuuterPrettyFormat,
+>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    tracing_subscriber::fmt::layer().event_format(RuuterPrettyFormat::new())
+}
+
 /// Initialize tracing. Called from main.rs AFTER config load so the
 /// format toggle is honoured. Returns `Some(TracerProvider)` if OTLP
 /// export was wired (caller keeps it alive and shuts it down on exit);
@@ -97,13 +132,15 @@ pub fn init(config: &AppConfig) -> Option<TracerProvider> {
                 let tracer = p.tracer(service);
                 tracing_subscriber::registry()
                     .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer())
+                    .with(AllowlistSpanCapture)
+                    .with(compact_fmt_layer(false))
                     .with(tracing_opentelemetry::layer().with_tracer(tracer))
                     .init();
             } else {
                 tracing_subscriber::registry()
                     .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer())
+                    .with(AllowlistSpanCapture)
+                    .with(compact_fmt_layer(false))
                     .init();
             }
             provider
@@ -111,7 +148,37 @@ pub fn init(config: &AppConfig) -> Option<TracerProvider> {
         (LogFormat::Text, None) => {
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(tracing_subscriber::fmt::layer())
+                .with(AllowlistSpanCapture)
+                .with(compact_fmt_layer(false))
+                .init();
+            None
+        }
+        (LogFormat::Pretty, Some(url)) => {
+            let provider = try_build_otel(url);
+            if let Some(ref p) = provider {
+                let service = std::env::var("OTEL_SERVICE_NAME")
+                    .unwrap_or_else(|_| SERVICE_NAME_DEFAULT.to_string());
+                let tracer = p.tracer(service);
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(AllowlistSpanCapture)
+                    .with(pretty_fmt_layer())
+                    .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(AllowlistSpanCapture)
+                    .with(pretty_fmt_layer())
+                    .init();
+            }
+            provider
+        }
+        (LogFormat::Pretty, None) => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(AllowlistSpanCapture)
+                .with(pretty_fmt_layer())
                 .init();
             None
         }

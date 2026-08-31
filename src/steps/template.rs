@@ -1,9 +1,10 @@
 use crate::context::ExecutionContext;
+use crate::logging::preview_body_for_log;
 use crate::scripting::ScriptEngine;
 use crate::state::StateStore;
 use crate::steps::engine::StepEngine;
 use crate::steps::http::evaluate_map_arg;
-use crate::steps::{StepExecutor, StepResult, TemplateStep};
+use crate::steps::{StepExecutor, StepLogExtras, StepResult, TemplateStep};
 use crate::{Result, RuuterError};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -138,8 +139,19 @@ impl StepExecutor for TemplateStepExecutor {
 
         // Finding 03 fix: return `next` as-is (None → engine falls
         // through to source-order next). Never force `"end"`.
+        let mut extras = StepLogExtras::new()
+            .push("dsl", dsl_key)
+            .push("status", result.status);
+        // Surface a redacted preview of what the callee DSL returned
+        // so the parent's trail explains WHAT it just embedded.
+        // Uses the engine's logging config so redact_body_fields is
+        // honoured; falls back to defaults when unset.
+        if let Some(preview) = preview_body_for_log(result.value.as_ref(), &self.engine.logging()) {
+            extras = extras.push_preformatted("body", preview);
+        }
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: extras,
             ..StepResult::new()
         })
     }

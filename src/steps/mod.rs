@@ -443,6 +443,99 @@ pub struct StepResult {
     /// response serialisation to decide whether to wrap in
     /// `{"response": <value>}`.
     pub return_wrapper: Option<bool>,
+    /// Issue #37 — per-step-type diagnostics the engine folds into
+    /// the "Executed" INFO line. Each executor pushes the small set
+    /// of fields that make its outcome self-describing (HTTP: URL +
+    /// upstream status; switch: matched branch; return: final status;
+    /// state: op + key; log: message; iterate: item count). Empty for
+    /// steps whose type alone tells the whole story. Rendered by
+    /// [`StepLogExtras::Display`] into the `attrs` field of the log
+    /// line, sanitised for log-line safety.
+    pub log_extras: StepLogExtras,
+}
+
+/// One entry in [`StepLogExtras`]. The distinction lets Display
+/// know whether to add `"…"` quoting: [`StepLogEntry::Value`]
+/// wraps string values in quotes so `foo bar` round-trips as a
+/// single value, while [`StepLogEntry::Preformatted`] emits the
+/// text verbatim (used for values that are already self-quoting,
+/// e.g. a JSON preview like `{"a":1}`).
+#[derive(Debug, Clone)]
+pub enum StepLogEntry {
+    Value(Value),
+    Preformatted(String),
+}
+
+/// Ordered `(name, entry)` pairs a step executor exposes to the
+/// engine's per-step INFO log line (issue #37). Preserves push order
+/// so the rendered `attrs=` field is stable across runs. Keys are
+/// `&'static str` (semantic-convention field names) to keep the
+/// enrichment site zero-allocation for the common case.
+#[derive(Debug, Clone, Default)]
+pub struct StepLogExtras(pub Vec<(&'static str, StepLogEntry)>);
+
+impl StepLogExtras {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Push a `(key, value)` pair. Fluent to keep executor call sites
+    /// terse: `StepLogExtras::new().push("k1", v1).push("k2", v2)`.
+    /// String values get wrapped in `"..."` by Display so values with
+    /// embedded spaces round-trip. Use [`Self::push_preformatted`]
+    /// when the value is already self-quoting (e.g. a JSON preview) —
+    /// otherwise the reader sees `body=""pong""` (JSON's own quotes
+    /// plus the StepLogExtras wrapping).
+    pub fn push(mut self, key: &'static str, value: impl Into<Value>) -> Self {
+        self.0.push((key, StepLogEntry::Value(value.into())));
+        self
+    }
+
+    /// Push a `(key, value)` pair whose value is already a
+    /// self-describing textual form (e.g. JSON preview from
+    /// `crate::logging::preview_body_for_log`). Bypasses the string
+    /// quoting Display would otherwise apply, so the reader sees
+    /// `return.body={"items":[…]}` instead of the double-quoted
+    /// `return.body="{\"items\":[…]}"`. Sanitisation (CR/LF strip)
+    /// still applies at Display time.
+    pub fn push_preformatted(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.0.push((key, StepLogEntry::Preformatted(value.into())));
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Display for StepLogExtras {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `k1=v1 k2=v2` — space-separated so a text-format log line
+        // stays readable, string values quoted (and CR/LF stripped)
+        // so an attacker-controlled URL or message can't splice a
+        // fake log line into the stream. JSON-format consumers see
+        // the same compact rendering under `attrs`.
+        let mut first = true;
+        for (k, entry) in &self.0 {
+            if !first {
+                f.write_str(" ")?;
+            }
+            first = false;
+            match entry {
+                StepLogEntry::Value(Value::String(s)) => {
+                    let cleaned = crate::logging::sanitize_log_value(s);
+                    write!(f, "{}=\"{}\"", k, cleaned)?;
+                }
+                StepLogEntry::Value(Value::Null) => write!(f, "{}=null", k)?,
+                StepLogEntry::Value(v) => write!(f, "{}={}", k, v)?,
+                StepLogEntry::Preformatted(s) => {
+                    let cleaned = crate::logging::sanitize_log_value(s);
+                    write!(f, "{}={}", k, cleaned)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl StepResult {
@@ -469,5 +562,81 @@ impl StepResult {
             return_headers: headers,
             ..Self::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod log_extras_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn display_empty_renders_nothing() {
+        let extras = StepLogExtras::new();
+        assert_eq!(extras.to_string(), "");
+        assert!(extras.is_empty());
+    }
+
+    #[test]
+    fn display_string_values_are_quoted() {
+        let extras = StepLogExtras::new()
+            .push("url.full", "https://example.com/x")
+            .push("http.response.status_code", 200u16);
+        // Order-preserving, strings quoted, non-strings bare.
+        assert_eq!(
+            extras.to_string(),
+            r#"url.full="https://example.com/x" http.response.status_code=200"#
+        );
+    }
+
+    #[test]
+    fn display_strips_crlf_from_string_values() {
+        // Attacker-controlled newline in a URL / log message must
+        // NOT splice a fake log line into the stream.
+        let extras = StepLogExtras::new().push("url.full", "legit\ninjected");
+        let rendered = extras.to_string();
+        assert!(!rendered.contains('\n'), "no raw CR/LF: {}", rendered);
+        assert!(
+            rendered.contains(' '),
+            "CRLF replaced by space: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn display_preformatted_values_are_not_double_quoted() {
+        // Regression: prior version wrapped every string value in
+        // "…", including preview values that were already JSON-
+        // encoded, giving `body=""pong""` (JSON's quotes + our
+        // wrapping). push_preformatted skips the outer wrap.
+        let extras = StepLogExtras::new()
+            .push_preformatted("return.body", "\"pong\"")
+            .push_preformatted("state.value", "{\"a\":1}");
+        assert_eq!(
+            extras.to_string(),
+            "return.body=\"pong\" state.value={\"a\":1}"
+        );
+    }
+
+    #[test]
+    fn display_preformatted_strips_crlf() {
+        // Even preformatted values must not splice log lines via
+        // an embedded newline.
+        let extras = StepLogExtras::new().push_preformatted("return.body", "legit\ninjected");
+        assert!(!extras.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn display_handles_null_and_object_values() {
+        let extras = StepLogExtras::new()
+            .push("state.hit", Value::Null)
+            .push("state.key", json!("counter"));
+        let rendered = extras.to_string();
+        assert!(
+            rendered.contains("state.hit=null"),
+            "null literal: {}",
+            rendered
+        );
+        assert!(rendered.contains("state.key=\"counter\""));
     }
 }

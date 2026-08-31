@@ -275,10 +275,7 @@ fn execute_js<'js>(
         }
         None => {
             // Not registered — synthesised script. Compile inline.
-            let wrapped = format!(
-                "(function(){{ return ({}); }}).call(globalThis)",
-                script
-            );
+            let wrapped = format!("(function(){{ return ({}); }}).call(globalThis)", script);
             ctx.eval(wrapped.as_bytes())
                 .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
         }

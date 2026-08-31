@@ -96,10 +96,7 @@ fn header_redaction_case_insensitive() {
     h.insert("Authorization".to_string(), "Bearer xyz".to_string());
     h.insert("Cookie".to_string(), "session=abc".to_string());
     h.insert("X-Custom".to_string(), "keep".to_string());
-    let out = redact::redact_headers(
-        &h,
-        &["authorization".into(), "cookie".into()],
-    );
+    let out = redact::redact_headers(&h, &["authorization".into(), "cookie".into()]);
     assert_eq!(out.get("Authorization").unwrap(), "[REDACTED]");
     assert_eq!(out.get("Cookie").unwrap(), "[REDACTED]");
     assert_eq!(out.get("X-Custom").unwrap(), "keep");
@@ -139,8 +136,14 @@ fn error_chain_bounded_to_five_hops() {
     }
     // 20 nested errors — chain rendering must bound and mark truncation.
     let deep = (0..20).fold(
-        E { msg: "leaf", src: None },
-        |acc, _| E { msg: "wrap", src: Some(Box::new(acc)) },
+        E {
+            msg: "leaf",
+            src: None,
+        },
+        |acc, _| E {
+            msg: "wrap",
+            src: Some(Box::new(acc)),
+        },
     );
     let rendered = error_chain(&deep);
     // Bounded rendering: 5 "caused by" hops + a truncation marker.

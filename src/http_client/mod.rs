@@ -516,9 +516,7 @@ impl HttpClient {
                     } else {
                         serde_json::to_string(b).unwrap_or_default()
                     };
-                    request = request
-                        .header("content-type", "text/plain")
-                        .body(text);
+                    request = request.header("content-type", "text/plain").body(text);
                 }
                 Some("formdata") => {
                     let map = match b {
@@ -536,17 +534,16 @@ impl HttpClient {
                         for (k, v) in map {
                             if let Some(rest) = k.strip_prefix("file:") {
                                 // Java shape: file:<fieldname>:<filename>
-                                let (fieldname, filename) =
-                                    match rest.split_once(':') {
-                                        Some((f, n)) => (f.to_string(), n.to_string()),
-                                        None => (rest.to_string(), rest.to_string()),
-                                    };
+                                let (fieldname, filename) = match rest.split_once(':') {
+                                    Some((f, n)) => (f.to_string(), n.to_string()),
+                                    None => (rest.to_string(), rest.to_string()),
+                                };
                                 let bytes = v
                                     .as_str()
                                     .map(|s| s.as_bytes().to_vec())
                                     .unwrap_or_default();
-                                let part = reqwest::multipart::Part::bytes(bytes)
-                                    .file_name(filename);
+                                let part =
+                                    reqwest::multipart::Part::bytes(bytes).file_name(filename);
                                 form = form.part(fieldname, part);
                             } else {
                                 let s = v
@@ -664,9 +661,7 @@ impl HttpClient {
         } else {
             match serde_json::from_slice::<Value>(&bytes) {
                 Ok(v) => Some(v),
-                Err(_) => Some(Value::String(
-                    String::from_utf8_lossy(&bytes).into_owned(),
-                )),
+                Err(_) => Some(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
             }
         };
 

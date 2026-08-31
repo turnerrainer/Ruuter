@@ -9,7 +9,13 @@ No `ruuter.yaml` needed.
 
 ```bash
 cargo run --bin ruuter-on-rust
-# → text-format INFO on stderr with access log
+# → compact text-format INFO on stderr with access log + per-step Executed trail
+```
+
+Prefer coloured output in the terminal:
+
+```bash
+RUUTER_LOG_FORMAT=pretty cargo run --bin ruuter-on-rust
 ```
 
 To make it noisier:
@@ -91,9 +97,14 @@ x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736
 $ kubectl logs -f deploy/ruuter | jq -c 'select(.fields.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736")'
 ```
 
-Every event inside that request — access log, step DEBUG lines
-(if `step_timing` is on), any DSL `log:` fires, any errors —
-comes back stamped with that id.
+Every event inside that request — one `Executed` INFO line per
+step (with step-type-specific `attrs`), the access log, any DSL
+`log:` fires, any errors — comes back stamped with that id. The
+DSL execution sequence is on the trail at default INFO level
+(issue #37); no `step_timing` needed. Add
+`logging.log_dsl_runs: true` if you also want explicit
+`DSL run started` / `DSL run completed` bracket lines with a
+`terminated_by` label.
 
 For a trace initiated by the client:
 
@@ -106,25 +117,42 @@ $ kubectl logs deploy/ruuter | jq -c ". | select(.fields.trace_id == \"$TID\")"
 
 ## Debugging one flaky DSL
 
-Turn on step timing and both content flags; narrow `RUST_LOG` so
-the noise stays scoped:
+The default INFO trail (issue #37) already tells you what step
+ran, in what order, and what its per-type outcome was — one
+`Executed` line per step with an `attrs` field (HTTP URL +
+upstream status, switch matched branch, state op/key/hit, return
+status, etc.). Start by filtering the default output before
+adding verbosity:
+
+```bash
+docker compose logs ruuter | jq -c '. |
+  select(.fields."dsl.project" == "checkout") |
+  select(.fields.message == "Executed")'
+```
+
+If you need outbound HTTP request/response bodies too (the
+default trail names URL + status but not payload), add the two
+content flags. The redundant DEBUG-level `step_timing` is only
+worth turning on when you also want DEBUG-level chatter from
+other modules already suppressed at INFO:
 
 ```yaml
 # ruuter.yaml (or via env for the container)
 logging:
   format: json
-  step_timing: true
-  display_request_content: true
-  display_response_content: true
-  meaningful_errors: true
-  print_stack_trace: true
+  display_request_content: true    # opt-in: outbound bodies
+  display_response_content: true   # opt-in: upstream bodies
+  meaningful_errors: true          # opt-in: second WARN with underlying cause
+  print_stack_trace: true          # opt-in: cause chain on ERROR line
+  # log_step_executions is on by default — leave it as-is
+  # step_timing: true              # rarely needed; INFO trail is usually enough
 ```
 
 ```bash
-RUST_LOG=ruuter_on_rust::steps=debug,ruuter_on_rust=info
+RUST_LOG=ruuter_on_rust=info
 ```
 
-Then filter by `dsl.project` + step name:
+Filter by `dsl.project` + step name to focus:
 
 ```bash
 docker compose logs ruuter | jq -c '. |
@@ -132,8 +160,26 @@ docker compose logs ruuter | jq -c '. |
   select(.fields."dsl.step" == "fetch_inventory")'
 ```
 
-Turn back off after the postmortem — high-QPS deployments will
-drown in per-step lines if this stays on.
+Turn the content flags back off after the postmortem — request
+and response bodies stay small only because of `max_body_bytes`,
+and shipping full payloads to the log store has cost.
+
+### Silencing the per-step trail on high-QPS DSLs
+
+If a specific deployment measures the per-step INFO lines as too
+chatty (rare — one INFO per step at 1k RPS is ~10× the access-log
+volume, well inside modern log-store budgets), the trail is
+independently toggleable:
+
+```yaml
+logging:
+  log_step_executions: false   # silences per-step Executed lines
+  # log_dsl_runs is already off by default; set true only if you
+  # want bracket lines and can afford them.
+```
+
+The access log and OTel spans stay on independently — you keep
+per-request observability, just lose the intra-request breakdown.
 
 ## Hardening — extend redaction
 

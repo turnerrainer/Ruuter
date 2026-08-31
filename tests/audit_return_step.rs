@@ -48,7 +48,11 @@ async fn hit(router: Arc<DslRouter>, path: &str) -> (u16, String, Vec<(String, S
         .uri(path)
         .body(Body::empty())
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     let headers: Vec<(String, String)> = resp
         .headers()
@@ -56,7 +60,11 @@ async fn hit(router: Arc<DslRouter>, path: &str) -> (u16, String, Vec<(String, S
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-    (status, String::from_utf8_lossy(&bytes).into_owned(), headers)
+    (
+        status,
+        String::from_utf8_lossy(&bytes).into_owned(),
+        headers,
+    )
 }
 
 // ── finding 05: Set-Cookie hardening ─────────────────────────────
@@ -82,7 +90,11 @@ respond:
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
         .expect("Set-Cookie header present");
-    assert!(cookie.1.starts_with("session=abc"), "kept DSL string: {}", cookie.1);
+    assert!(
+        cookie.1.starts_with("session=abc"),
+        "kept DSL string: {}",
+        cookie.1
+    );
 }
 
 #[tokio::test]
@@ -139,7 +151,10 @@ respond:
     let v = &cookie.1;
     assert!(v.contains("Max-Age=60"), "kept DSL Max-Age: {v}");
     assert!(!v.contains("Max-Age=28800"));
-    assert!(!v.contains("HttpOnly"), "dropped explicit-false HttpOnly: {v}");
+    assert!(
+        !v.contains("HttpOnly"),
+        "dropped explicit-false HttpOnly: {v}"
+    );
 }
 
 // ── finding 12: response wrapper ─────────────────────────────────
@@ -241,7 +256,10 @@ respond:
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(body, "{\"response\":\"hi\"}", "step wrapper: true overrides config false");
+    assert_eq!(
+        body, "{\"response\":\"hi\"}",
+        "step wrapper: true overrides config false"
+    );
 }
 
 // ── finding 13: finalResponse status codes ───────────────────────

@@ -83,7 +83,10 @@ mod tests {
     fn redacts_nested() {
         let v = json!({ "outer": { "token": "abc", "keep": 1 } });
         let out = redact_json(&v, &["token".into()]);
-        assert_eq!(out, json!({ "outer": { "token": "[REDACTED]", "keep": 1 } }));
+        assert_eq!(
+            out,
+            json!({ "outer": { "token": "[REDACTED]", "keep": 1 } })
+        );
     }
 
     #[test]
