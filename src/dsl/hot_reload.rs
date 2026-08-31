@@ -258,9 +258,9 @@ pub fn spawn(
 /// fire on `chmod`, `touch`, and (crucially) `atime` updates on
 /// `strictatime` mounts. That closes the reload loop from finding 02.
 fn batch_warrants_reload(events: &[DebouncedEvent], dsl_root: &Path) -> bool {
-    events
-        .iter()
-        .any(|ev| event_kind_matters(&ev.event.kind) && event_paths_relevant(&ev.event.paths, dsl_root))
+    events.iter().any(|ev| {
+        event_kind_matters(&ev.event.kind) && event_paths_relevant(&ev.event.paths, dsl_root)
+    })
 }
 
 fn event_kind_matters(kind: &EventKind) -> bool {
@@ -332,7 +332,11 @@ fn is_under_reserved_subdir(path: &Path, dsl_root: &Path) -> bool {
     false
 }
 
-pub(crate) fn reload_once(config: &AppConfig, constants: &HashMap<String, String>, router: &DslRouter) {
+pub(crate) fn reload_once(
+    config: &AppConfig,
+    constants: &HashMap<String, String>,
+    router: &DslRouter,
+) {
     debug!("hot-reload: re-scanning DSL tree");
     let loader = DslLoader::new(config.clone(), constants.clone());
     match loader.load_everything() {

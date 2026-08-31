@@ -104,8 +104,7 @@ respond:
     );
     // The response body MUST include the underlying script error.
     assert!(
-        body.to_lowercase().contains("script")
-            || body.to_lowercase().contains("evaluation"),
+        body.to_lowercase().contains("script") || body.to_lowercase().contains("evaluation"),
         "response must include the underlying script/evaluation diagnostic, got: {body}"
     );
     // And the "caused by" chain must be present (StepContext + Script eval hops).
@@ -138,7 +137,10 @@ respond:
         body.contains("(assign)"),
         "response must include the step type, got: {body}"
     );
-    assert!(body.contains("compute"), "response must name the failing step, got: {body}");
+    assert!(
+        body.contains("compute"),
+        "response must name the failing step, got: {body}"
+    );
 }
 
 // ============================================================================
@@ -182,9 +184,15 @@ reply:
     // "actively refused" on Windows, etc.) — match on any of the
     // common signatures.
     let lower = body.to_lowercase();
-    let has_cause = ["refused", "unreachable", "timed out", "no route", "os error"]
-        .iter()
-        .any(|needle| lower.contains(needle));
+    let has_cause = [
+        "refused",
+        "unreachable",
+        "timed out",
+        "no route",
+        "os error",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
     assert!(
         has_cause,
         "response must include the underlying connect failure cause, got: {body}"
@@ -216,7 +224,10 @@ respond:
     let (status, body) = get(router, "/svc/ok").await;
     assert_eq!(status, 200);
     // No cause chain nonsense in a happy-path response.
-    assert!(!body.contains("caused by"), "healthy body must be pristine, got: {body}");
+    assert!(
+        !body.contains("caused by"),
+        "healthy body must be pristine, got: {body}"
+    );
     // The default wrapper still applies.
     assert!(
         body.contains("response") && body.contains("hello"),

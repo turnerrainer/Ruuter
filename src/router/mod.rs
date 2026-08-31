@@ -214,9 +214,7 @@ impl DslRouter {
         // innermost ancestor) — matches Java's DslService.getGuard
         // recursive strip-and-lookup.
         match self.config.guards.mode {
-            crate::config::GuardMode::Stack => {
-                matches.into_iter().map(|(_, d)| d).collect()
-            }
+            crate::config::GuardMode::Stack => matches.into_iter().map(|(_, d)| d).collect(),
             crate::config::GuardMode::ClosestOnly => matches
                 .into_iter()
                 .last()
@@ -459,10 +457,7 @@ async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoRespo
     Json((**router.openapi_spec.load()).clone())
 }
 
-async fn handle_request(
-    State(router): State<Arc<DslRouter>>,
-    mut request: Request,
-) -> Response {
+async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Request) -> Response {
     use tracing::Instrument;
     let start = std::time::Instant::now();
     let method_str = request.method().as_str().to_string();
@@ -525,7 +520,7 @@ async fn handle_request(
 
     if router_for_log.config.logging.access_log {
         let status = response.status().as_u16();
-        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let duration_ms = crate::logging::duration_ms(start.elapsed());
         let _guard = span_for_log.enter();
         tracing::info!(
             http.request.method = %method_str,
@@ -700,11 +695,7 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         .map(|mime| mime.eq_ignore_ascii_case("application/json") || mime.ends_with("+json"))
         .unwrap_or(false);
 
-    let mime = content_type
-        .split(';')
-        .next()
-        .map(str::trim)
-        .unwrap_or("");
+    let mime = content_type.split(';').next().map(str::trim).unwrap_or("");
 
     // Audit finding 11 — Java-parity inbound content-type dispatch.
     // Pre-fix, only application/json was parsed; everything else
@@ -879,7 +870,10 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                 })
                 .unwrap_or(false);
             let raw_string: Option<String> = if !wrap && dsl_wants_non_json {
-                result.value.as_ref().and_then(|v| v.as_str().map(String::from))
+                result
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_str().map(String::from))
             } else {
                 None
             };
@@ -1229,11 +1223,7 @@ async fn parse_multipart_body(
     let stream = stream::iter(vec![Ok::<_, std::io::Error>(stream_body)]);
     let mut multipart = multer::Multipart::new(stream, boundary.to_string());
     let mut out = HashMap::new();
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| e.to_string())?
-    {
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| e.to_string())? {
         let filename = field.file_name().map(|s| s.to_string());
         let name = field.name().map(|s| s.to_string());
         let mut bytes = Vec::new();
@@ -1260,8 +1250,7 @@ fn is_override_guard(dsl: &Dsl) -> bool {
 /// Generic over the value type so we can filter body/query/headers
 /// with one implementation. Java's `DslService.filterFields`.
 fn filter_str_keyed<V>(map: &mut HashMap<String, V>, allowed: &[String]) {
-    let allowed_set: std::collections::HashSet<&str> =
-        allowed.iter().map(String::as_str).collect();
+    let allowed_set: std::collections::HashSet<&str> = allowed.iter().map(String::as_str).collect();
     map.retain(|k, _| allowed_set.contains(k.as_str()));
 }
 
@@ -1275,8 +1264,7 @@ fn reject_unknown_str_keyed<V>(
     allowed: &[String],
     section: &str,
 ) -> Result<()> {
-    let allowed_set: std::collections::HashSet<&str> =
-        allowed.iter().map(String::as_str).collect();
+    let allowed_set: std::collections::HashSet<&str> = allowed.iter().map(String::as_str).collect();
     for k in map.keys() {
         if !allowed_set.contains(k.as_str()) {
             return Err(RuuterError::BadRequest(format!(

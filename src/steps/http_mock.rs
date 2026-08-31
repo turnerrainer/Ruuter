@@ -12,7 +12,7 @@
 
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
-use crate::steps::{HttpMockStep, StepExecutor, StepResult};
+use crate::steps::{HttpMockStep, StepExecutor, StepLogExtras, StepResult};
 use crate::Result;
 use serde_json::json;
 
@@ -34,7 +34,9 @@ impl StepExecutor for HttpMockStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
         // Evaluate response body against context so mocks can reflect
         // DSL variables (matches Java's evaluateScripts pattern).
-        let body = self.script_engine.evaluate(&self.step.args.response, context)?;
+        let body = self
+            .script_engine
+            .evaluate(&self.step.args.response, context)?;
         let status = self.step.args.status.unwrap_or(200);
 
         if let Some(result_name) = &self.step.result {
@@ -56,6 +58,7 @@ impl StepExecutor for HttpMockStepExecutor {
         // through to source-order next). Never force `"end"`.
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: StepLogExtras::new().push("status", status),
             ..StepResult::new()
         })
     }

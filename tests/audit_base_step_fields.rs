@@ -53,7 +53,11 @@ async fn hit(router: Arc<DslRouter>, path: &str) -> (u16, String) {
         .uri(path)
         .body(Body::empty())
         .unwrap();
-    let resp = router.build_axum_router_from_arc().oneshot(req).await.unwrap();
+    let resp = router
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())

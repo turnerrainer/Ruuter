@@ -147,7 +147,7 @@ Every string value that would enter a log field is stripped of
 - Outbound URLs.
 - Inbound / outbound header values.
 - JSON body values (when they render as strings in body dumps).
-- The interpolated `dsl.log` field on the DSL `log:` step.
+- The interpolated `attrs.msg` value on the DSL `log:` step.
 - Error `Display` output.
 - Every `cause_chain` hop.
 

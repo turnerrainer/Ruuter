@@ -206,9 +206,7 @@ fn is_source_file(p: &Path) -> bool {
     if comps.iter().any(|c| c == "sources") {
         return true;
     }
-    comps
-        .windows(2)
-        .any(|w| w[0] == "WS" && w[1] == "outbound")
+    comps.windows(2).any(|w| w[0] == "WS" && w[1] == "outbound")
 }
 
 fn is_cron_job_file(p: &Path) -> bool {

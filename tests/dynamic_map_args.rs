@@ -283,8 +283,7 @@ reply:
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body = String::from_utf8_lossy(&bytes);
     assert!(
-        body.contains("must evaluate to an object")
-            && body.contains("string"),
+        body.contains("must evaluate to an object") && body.contains("string"),
         "expected diagnostic mentioning non-object kind, got: {body}"
     );
 }

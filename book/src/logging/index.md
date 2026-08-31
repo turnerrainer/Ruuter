@@ -12,7 +12,9 @@ field is documented here, dashboards and alerts can rely on it. If
 a knob is documented here, flipping it does what the row says — the
 four Java-parity `logging.*` flags have been wired end-to-end (they
 were previously accepted-but-inert; that regression closed with
-this section).
+this section), and the per-step INFO execution trail matches Java
+Ruuter's `LoggingUtils.logStep()` behaviour by default (issue #37 —
+see [Java Ruuter parity](./java-parity.md#per-step-execution-trail-issue-37)).
 
 ## What's in this section
 
@@ -53,11 +55,19 @@ this section).
   DSL project name, not the concrete request path with dynamic
   segments interpolated. Java Ruuter used the wildcard path,
   which was already the safe choice; Ruuter-on-Rust matches.
-- **Boring on the happy path.** Default configuration emits one
-  INFO line per request plus one INFO per DSL `log:` step. Every
-  extra verbosity axis is opt-in via a single config field.
+- **Legible on the happy path.** Default configuration emits one
+  INFO access-log line per request and one `Executed` INFO line
+  per DSL step (with step-type-specific `attrs`) — the Java-
+  parity execution trail (issue #37). The request span already
+  frames each run via `trace_id`, so explicit `DSL run started` /
+  `DSL run completed` bracket lines are opt-in via `log_dsl_runs`.
+  Every additional verbosity axis (per-step DEBUG, outbound
+  request/response bodies, error cause chains) is opt-in via a
+  single config field. High-QPS DSLs can turn off
+  `log_step_executions` to drop the per-step trail entirely; the
+  access log and OTel spans remain independent.
 
-## The five log event families
+## The six log event families
 
 Every log line Ruuter emits falls into one of these buckets:
 
@@ -65,11 +75,12 @@ Every log line Ruuter emits falls into one of these buckets:
 |---|---|---|---|
 | **Boot / lifecycle** | INFO / ERROR | Startup, DSL load, config resolution, listener bind, shutdown | free-form message (no request context) |
 | **Access log** | INFO | Once per completed HTTP request | `http.request.method`, `http.route`, `http.response.status_code`, `duration_ms`, `dsl.project`, `client.address`, `trace_id` |
-| **DSL step** | INFO (`log:` step) / DEBUG (`step_timing`) | DSL `log:` step fires, or every step when `step_timing` is on | `dsl.log` (INFO) / `dsl.step`, `dsl.step.type`, `duration_ms`, `skipped` (DEBUG) |
+| **DSL run bracket** | INFO | Start and end of every DSL invocation (gated by `logging.log_dsl_runs`, opt-in) | `dsl.project`, `dsl.total_steps`, `dsl.first_step` (start); `dsl.steps_ran`, `duration_ms`, `terminated_by` (`return` / `end_of_steps` / `iteration_cap` / `error`), plus `terminating_step` + `http.response.status_code` on `return`, `failed_step` on `error` (end) |
+| **DSL step** | INFO `Executed` (gated by `logging.log_step_executions`, on by default) / DEBUG (`step_timing`) | Every completed step for the INFO trail | `dsl.step`, `dsl.step.type`, `duration_ms`, `dsl.next.step`, plus a rendered `attrs` field with step-type-specific context (see [Configuration reference](./configuration.md#log_step_executions)); `log:` step payload appears as `attrs.msg` on this same line |
 | **Outbound HTTP** | DEBUG | Only when `display_request_content` / `display_response_content` is on | `http.request.method`, `url.full`, `http.request.body`, `http.request.headers`, `http.response.status_code`, `http.response.body`, `http.response.headers` (redacted, capped) |
 | **Error** | ERROR / WARN | Step or DSL fails | `dsl.step`, `dsl.step.type`, `duration_ms`, `error`, `cause_chain` (with `print_stack_trace`), second WARN `cause` line (with `meaningful_errors`) |
 
-All five families are wrapped in the request span when they fire
+All six families are wrapped in the request span when they fire
 inside a request, so any of them can be filtered by `trace_id`.
 
 ## Where to look next

@@ -206,11 +206,23 @@ impl SingleFlightStepExecutor {
 
         let (entry, is_leader) = self.registry.claim(&key);
 
-        if is_leader {
+        let mut result = if is_leader {
             self.run_as_leader(&entry, &key, context).await
         } else {
             self.run_as_follower(&entry, &key, context).await
+        };
+        // Issue #37 — annotate the "Executed" INFO line with role
+        // (leader vs follower) + key so single_flight collisions are
+        // visible in the DSL trail. Preserves any log_extras a
+        // Return step inside the leader body populated.
+        if let Ok(r) = &mut result {
+            let mut extras = std::mem::take(&mut r.log_extras);
+            extras = extras
+                .push("role", if is_leader { "leader" } else { "follower" })
+                .push("key", key.clone());
+            r.log_extras = extras;
         }
+        result
     }
 
     async fn run_as_leader(

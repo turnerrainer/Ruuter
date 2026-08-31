@@ -249,7 +249,10 @@ async fn idempotency_key_has_no_framework_effect() {
         "framework must not emit Idempotency-Replayed"
     );
     let body: serde_json::Value = second.json().await.unwrap();
-    assert_eq!(body["response"]["echo"]["who"], "b", "second call runs its own DSL");
+    assert_eq!(
+        body["response"]["echo"]["who"], "b",
+        "second call runs its own DSL"
+    );
 }
 
 // ── SSRF: outbound allowlist bypasses ──────────────────────────────

@@ -3,7 +3,7 @@ use crate::http_client::HttpClient;
 use crate::logging::{cap_and_sanitize, redact, render_body_for_log};
 use crate::scripting::ScriptEngine;
 use crate::steps::engine::StepEngine;
-use crate::steps::{HttpStep, StepExecutor, StepResult};
+use crate::steps::{HttpStep, StepExecutor, StepLogExtras, StepResult};
 use crate::{Result, RuuterError};
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -110,10 +110,8 @@ impl StepExecutor for HttpStepExecutor {
                 let headers_rendered = headers
                     .as_ref()
                     .map(|h| {
-                        let sh: HashMap<String, String> = h
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.to_string()))
-                            .collect();
+                        let sh: HashMap<String, String> =
+                            h.iter().map(|(k, v)| (k.clone(), v.to_string())).collect();
                         redact::redact_headers(&sh, &cfg.redact_headers)
                     })
                     .unwrap_or_default();
@@ -186,8 +184,13 @@ impl StepExecutor for HttpStepExecutor {
         // `error:` and a `next:`, `error:` wins on failure.
         if !self.http_client.is_status_allowed(response.status) {
             if let Some(err_step) = &self.step.error {
+                // Enrich the engine's "Executed" INFO line so a
+                // reader sees WHY the branch to `error:` fired
+                // (upstream status + URL) without cross-referencing
+                // the outbound-http DEBUG line, which may be off.
                 return Ok(StepResult {
                     next_step: Some(err_step.clone()),
+                    log_extras: http_extras(&method, &url_str, response.status, true),
                     ..StepResult::new()
                 });
             }
@@ -229,8 +232,35 @@ impl StepExecutor for HttpStepExecutor {
 
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: http_extras(&method, &url_str, response.status, false),
             ..StepResult::new()
         })
+    }
+}
+
+/// Issue #37 — the fields Java Ruuter's `HttpStep.logStep` pushed
+/// into MDC for every completed HTTP step. Rendered by the engine
+/// into the `attrs=` field of the per-step "Executed" INFO line so a
+/// reader sees the request/response summary without cross-referencing
+/// the (optional, DEBUG-gated) outbound-http log line.
+///
+/// `error_route` is set when the step is about to branch to its
+/// `error:` handler — surfaces the reason (upstream status was
+/// outside the allow-list) at INFO instead of forcing the reader to
+/// correlate two log lines.
+fn http_extras(method: &Method, url: &str, status: u16, error_route: bool) -> StepLogExtras {
+    let e = StepLogExtras::new()
+        .push("method", method.as_str().to_string())
+        // URL cap matches the DEBUG line above (512 bytes) so an
+        // attacker-controlled query-string can't blow up log-line
+        // size. `sanitize_log_value` via StepLogExtras::Display
+        // strips CR/LF.
+        .push("url", cap_and_sanitize(url, 512))
+        .push("status", status);
+    if error_route {
+        e.push("error_route", true)
+    } else {
+        e
     }
 }
 

@@ -69,7 +69,11 @@ async fn get(router: Arc<DslRouter>, path: &str) -> (u16, HashMap<String, String
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-    (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 // ============================================================================
@@ -278,7 +282,10 @@ respond:
     // The XML string must arrive verbatim — before the fix this
     // came out as `null` because JSON parse failed silently.
     assert_eq!(body, "<root><item>hello</item></root>");
-    assert_eq!(headers.get("content-type").map(String::as_str), Some("text/xml"));
+    assert_eq!(
+        headers.get("content-type").map(String::as_str),
+        Some("text/xml")
+    );
 }
 
 #[tokio::test]

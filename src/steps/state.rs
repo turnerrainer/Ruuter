@@ -1,19 +1,32 @@
+use crate::config::LoggingConfig;
 use crate::context::ExecutionContext;
+use crate::logging::preview_body_for_log;
 use crate::scripting::ScriptEngine;
-use crate::steps::{StateOp, StateStep, StepExecutor, StepResult};
+use crate::steps::{StateOp, StateStep, StepExecutor, StepLogExtras, StepResult};
 use crate::Result;
 use serde_json::Value;
+use std::sync::Arc;
 
 pub struct StateStepExecutor {
     step: StateStep,
     script_engine: ScriptEngine,
+    /// Threaded through so `state.value` on set ops honours the
+    /// framework-configured `redact_body_fields` — a project that
+    /// adds project-specific PII / secret names must see them
+    /// redacted here too. Falls back to defaults when unset.
+    logging: Arc<LoggingConfig>,
 }
 
 impl StateStepExecutor {
     pub fn new(step: StateStep) -> Self {
+        Self::with_logging(step, Arc::new(LoggingConfig::default()))
+    }
+
+    pub fn with_logging(step: StateStep, logging: Arc<LoggingConfig>) -> Self {
         Self {
             step,
             script_engine: ScriptEngine::new(),
+            logging,
         }
     }
 }
@@ -23,25 +36,46 @@ impl StepExecutor for StateStepExecutor {
         let project = context.project();
         let store = context.state();
 
-        match &self.step.state {
+        // Issue #37 — extras captured so the engine's "Executed" INFO
+        // line records the op + key. `hit` reports whether a Get
+        // resolved to a present key (`true`) or fell back to null
+        // (`false`) — the single most-asked question when a DSL
+        // reading state produces "unexpected null". On sets we also
+        // surface a redacted preview of the value written, so the
+        // log line answers "what did I actually store?" without a
+        // second trip through the state store.
+        let (op, extras_key, hit, set_preview) = match &self.step.state {
             StateOp::Get { key, into } => {
                 let key = self.evaluate_string(key, context)?;
-                let value = store.get(project, &key).unwrap_or(Value::Null);
-                context.set_variable(into.clone(), value);
+                let value = store.get(project, &key);
+                let hit = value.is_some();
+                context.set_variable(into.clone(), value.unwrap_or(Value::Null));
+                ("get", key, Some(hit), None)
             }
             StateOp::Set { key, value } => {
                 let key = self.evaluate_string(key, context)?;
                 let evaluated = self.script_engine.evaluate(value, context)?;
+                let preview = preview_body_for_log(Some(&evaluated), &self.logging);
                 store.set(project, &key, evaluated);
+                ("set", key, None, preview)
             }
             StateOp::Delete { key } => {
                 let key = self.evaluate_string(key, context)?;
                 store.delete(project, &key);
+                ("delete", key, None, None)
             }
-        }
+        };
 
+        let mut extras = StepLogExtras::new().push("op", op).push("key", extras_key);
+        if let Some(hit) = hit {
+            extras = extras.push("hit", hit);
+        }
+        if let Some(preview) = set_preview {
+            extras = extras.push_preformatted("value", preview);
+        }
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: extras,
             ..StepResult::new()
         })
     }

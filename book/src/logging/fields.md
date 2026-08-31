@@ -41,8 +41,15 @@ dashboards can group / filter by prefix.
 |---|---|---|
 | `dsl.project` | string | First URL path segment; cardinality-safe |
 | `dsl.step` | string | Step name from the YAML (e.g. `log_start`, `fetch_user`) |
-| `dsl.step.type` | string | Step type — one of `assign`, `http`, `return`, `log`, `switch`, `template`, `state`, `iterate`, `ws_send`, `single_flight`, `http_mock`, `declaration` |
-| `dsl.log` | string | Interpolated message body from the `log:` DSL step |
+| `dsl.step.type` | string | Step type — one of `assign`, `http`, `return`, `log`, `switch`, `template`, `state`, `iterate`, `ws_send`, `single_flight`, `http_mock`, `declaration`; `skip` when `skip: true` fired |
+| `dsl.next.step` | string | Next step target (`-` when the engine falls through to source-order next) |
+| `dsl.total_steps` | integer | On `DSL run started` bracket line |
+| `dsl.first_step` | string | On `DSL run started` bracket line |
+| `dsl.steps_ran` | integer | On `DSL run completed` bracket line |
+| `terminated_by` | string | On `DSL run completed`: one of `return`, `end_of_steps`, `iteration_cap`, `error` |
+| `terminating_step` | string | On `DSL run completed`, `terminated_by=return` |
+| `failed_step` | string | On `DSL run completed`, `terminated_by=error` |
+| `attrs` | rendered `k=v` pairs | Per-step-type context on `Executed` INFO lines (issue #37). See per-type field list in [Configuration](./configuration.md#log_step_executions). The `log:` step's interpolated message appears here as `attrs.msg` — no separate event. |
 
 ## Outbound HTTP fields
 

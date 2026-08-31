@@ -39,10 +39,47 @@ Additional Rust-side knobs with no Java equivalent:
 
 - `logging.format: text|json`
 - `logging.access_log`
-- `logging.step_timing`
+- `logging.log_step_executions` — INFO-level per-step trail
+  (Java parity for `LoggingUtils.logStep()`, on by default).
+- `logging.log_dsl_runs` — INFO-level DSL-run bracket lines
+  (Rust-only enrichment; **off by default**, opt-in). The request
+  span already frames each run via `trace_id`; the brackets exist
+  for grep-based triage when the span framing isn't enough.
+- `logging.step_timing` — DEBUG-level per-step timing (superset
+  of `log_step_executions` for local debugging).
 - `logging.max_body_bytes`
 - `logging.redact_headers` (Java had no framework-level redaction)
 - `logging.redact_body_fields` (ditto)
+
+## Per-step execution trail (issue #37)
+
+Java Ruuter emitted one INFO `Executed: <step-name>` line per
+step at default log level via `LoggingUtils.logStep()`, giving
+operators a complete DSL-execution trail without needing DEBUG:
+
+```
+[traceId,spanId] INFO [http] https://x.example 200 12  Executed: fetch_user
+```
+
+Ruuter-on-Rust matches this at default INFO level. Every step
+emits:
+
+```
+INFO Executed dsl.step="fetch_user" dsl.step.type="http" duration_ms=12.4 dsl.next.step="format" attrs=http.request.method="GET" url.full="https://x.example/users/1" http.response.status_code=200
+```
+
+The `attrs` field carries step-type-specific context that Java
+Ruuter's polymorphic `logStep` overrides emitted. Rust unifies
+this into a single structured field so both text and JSON log
+formats stay readable. See the
+[Configuration reference](./configuration.md#log_step_executions)
+for the full per-type field vocabulary.
+
+Bracket lines (`DSL run started` / `DSL run completed`) are
+Rust-only enrichment, off by default and controlled by
+`log_dsl_runs`. The request span already frames each run for
+trace-id-based filtering; the brackets add an explicit
+`terminated_by` label useful for grep-based triage.
 
 ## Output format translation
 

@@ -8,7 +8,7 @@ use crate::context::ExecutionContext;
 use crate::dsl::loader::{HttpDsls, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
-use crate::logging::error_chain;
+use crate::logging::{duration_ms, error_chain};
 use crate::scripting::ExpressionRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
@@ -23,7 +23,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Wired by the framework (usually the router) so the engine can
 /// honour Java-parity `reloadDsl: true` step field (audit finding 01).
@@ -134,10 +134,7 @@ impl StepEngine {
     /// Audit finding 13 — attach the default exception DSL config.
     /// HttpStepExecutor invokes it when an upstream call errors and
     /// the step has no local error: handler.
-    pub fn with_default_exception_dsl(
-        mut self,
-        cfg: crate::config::DefaultHttpDslConfig,
-    ) -> Self {
+    pub fn with_default_exception_dsl(mut self, cfg: crate::config::DefaultHttpDslConfig) -> Self {
         self.default_exception_dsl = Some(cfg);
         self
     }
@@ -293,6 +290,22 @@ impl StepEngine {
         let mut current_step_idx = 0;
         let mut budget = self.max_iterations;
 
+        // Issue #37 — DSL-run bracket. Emit at INFO so the per-step
+        // "Executed" lines fired below have a scoped frame in the log
+        // stream even when the request span isn't rendered (e.g. text
+        // format, no otel exporter). Instant captured once so start &
+        // end lines can share the same clock reading.
+        let run_started = Instant::now();
+        let mut steps_ran: u32 = 0;
+        if self.logging.log_dsl_runs {
+            info!(
+                dsl.project = %context.project(),
+                dsl.total_steps = step_names.len(),
+                dsl.first_step = %step_names.first().map(String::as_str).unwrap_or("-"),
+                "DSL run started"
+            );
+        }
+
         // Audit finding 08: per-step recursion counter (Java-parity).
         // Cap = min(step.max_recursions, self.max_iterations). When
         // exhausted for a specific step, we ADVANCE past it (matches
@@ -330,14 +343,16 @@ impl StepEngine {
                 tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
             }
 
-            // Per-step timing / error-chain instrumentation. Wall-
-            // clock is captured only when at least one of the two
-            // knobs is on — cheap check, avoids a `now()` syscall
-            // per step for the default config.
+            // Per-step timing / error-chain / execution-log
+            // instrumentation. Wall-clock is captured whenever any of
+            // the three knobs is on. `log_step_executions` is on by
+            // default (issue #37) so in the default config we ALWAYS
+            // pay one `Instant::now()` per step — the cost is a few
+            // nanoseconds and buys the Java-parity execution trail.
             let want_timing = self.logging.step_timing;
-            let want_error_chain =
-                self.logging.print_stack_trace || self.logging.meaningful_errors;
-            let step_started = if want_timing || want_error_chain {
+            let want_execution_log = self.logging.log_step_executions;
+            let want_error_chain = self.logging.print_stack_trace || self.logging.meaningful_errors;
+            let step_started = if want_timing || want_execution_log || want_error_chain {
                 Some(Instant::now())
             } else {
                 None
@@ -355,9 +370,31 @@ impl StepEngine {
 
             let result = match step_outcome {
                 Ok(r) => {
+                    let elapsed_ms = step_started
+                        .map(|t| duration_ms(t.elapsed()))
+                        .unwrap_or(0.0);
+                    // Issue #37 — Java-parity per-step INFO line. One
+                    // line per completed step with the fields Java's
+                    // `LoggingUtils.logStep` emitted (dsl.step,
+                    // dsl.step.type, duration_ms, skipped) plus a
+                    // rendered `attrs` field carrying step-type-
+                    // specific context the executor pushed onto
+                    // `StepResult.log_extras` (HTTP URL + status,
+                    // switch match, return status, etc.). Rendered as
+                    // `k1=v1 k2=v2` in text format; JSON format
+                    // consumers see the same string under `attrs`.
+                    if want_execution_log {
+                        let step_type_effective = if skipped { "skip" } else { step.type_name() };
+                        info!(
+                            dsl.step = %step_name,
+                            dsl.step.type = %step_type_effective,
+                            duration_ms = elapsed_ms,
+                            dsl.next.step = %r.next_step.as_deref().unwrap_or("-"),
+                            attrs = %r.log_extras,
+                            "Executed"
+                        );
+                    }
                     if want_timing {
-                        let elapsed_ms =
-                            step_started.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
                         debug!(
                             dsl.step = %step_name,
                             dsl.step.type = %step.type_name(),
@@ -366,6 +403,7 @@ impl StepEngine {
                             "step completed"
                         );
                     }
+                    steps_ran += 1;
                     r
                 }
                 Err(e) => {
@@ -374,7 +412,7 @@ impl StepEngine {
                     // second WARN line with just the underlying
                     // message (`meaningful_errors`, Java parity).
                     let elapsed_ms = step_started
-                        .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                        .map(|t| duration_ms(t.elapsed()))
                         .unwrap_or(0.0);
                     let chain = if self.logging.print_stack_trace {
                         error_chain(&e)
@@ -398,6 +436,17 @@ impl StepEngine {
                             );
                         }
                     }
+                    if self.logging.log_dsl_runs {
+                        let total_ms = duration_ms(run_started.elapsed());
+                        info!(
+                            dsl.project = %context.project(),
+                            dsl.steps_ran = steps_ran,
+                            duration_ms = total_ms,
+                            terminated_by = "error",
+                            failed_step = %step_name,
+                            "DSL run completed"
+                        );
+                    }
                     // Issue #28 — wrap the raw step error with the
                     // step + project context that the response
                     // builder will render. Without this, a caller
@@ -418,6 +467,18 @@ impl StepEngine {
             };
 
             if result.should_return {
+                if self.logging.log_dsl_runs {
+                    let total_ms = duration_ms(run_started.elapsed());
+                    info!(
+                        dsl.project = %context.project(),
+                        dsl.steps_ran = steps_ran,
+                        duration_ms = total_ms,
+                        terminated_by = "return",
+                        terminating_step = %step_name,
+                        http.response.status_code = result.return_status.unwrap_or(200),
+                        "DSL run completed"
+                    );
+                }
                 return Ok(DslExecutionResult {
                     value: result.return_value,
                     status: result.return_status.unwrap_or(200),
@@ -461,8 +522,27 @@ impl StepEngine {
             }
         }
 
-        if budget == 0 {
-            warn!("DSL run exceeded global max_iterations cap ({}); returning empty response", self.max_iterations);
+        let terminated_by = if budget == 0 {
+            warn!(
+                "DSL run exceeded global max_iterations cap ({}); returning empty response",
+                self.max_iterations
+            );
+            "iteration_cap"
+        } else {
+            // Loop fell off the end (source-order walk completed
+            // without a Return step or an explicit `next: end`) — Java
+            // Ruuter's implicit "done" terminus.
+            "end_of_steps"
+        };
+        if self.logging.log_dsl_runs {
+            let total_ms = duration_ms(run_started.elapsed());
+            info!(
+                dsl.project = %context.project(),
+                dsl.steps_ran = steps_ran,
+                duration_ms = total_ms,
+                terminated_by = terminated_by,
+                "DSL run completed"
+            );
         }
 
         Ok(DslExecutionResult {
@@ -502,7 +582,7 @@ impl StepEngine {
                     .await
             }
             DslStep::Return(s) => {
-                return_step::ReturnStepExecutor::new(s.clone())
+                return_step::ReturnStepExecutor::with_logging(s.clone(), self.logging.clone())
                     .execute(context)
                     .await
             }
@@ -535,7 +615,7 @@ impl StepEngine {
                     .await
             }
             DslStep::State(s) => {
-                state::StateStepExecutor::new(s.clone())
+                state::StateStepExecutor::with_logging(s.clone(), self.logging.clone())
                     .execute(context)
                     .await
             }

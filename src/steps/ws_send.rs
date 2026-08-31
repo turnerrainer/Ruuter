@@ -10,7 +10,7 @@
 
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
-use crate::steps::{StepExecutor, StepResult, WsSendStep};
+use crate::steps::{StepExecutor, StepLogExtras, StepResult, WsSendStep};
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
 use serde_json::Value;
@@ -37,11 +37,15 @@ impl StepExecutor for WsSendStepExecutor {
             .script_engine
             .evaluate(&self.step.ws_send.payload, context)?;
 
-        if let Some(prefix) = &self.step.ws_send.broadcast_prefix {
+        let extras = if let Some(prefix) = &self.step.ws_send.broadcast_prefix {
             let delivered = self
                 .registry
                 .broadcast(|id| id.starts_with(prefix), payload);
             tracing::debug!(prefix, delivered, "ws_send broadcast");
+            StepLogExtras::new()
+                .push("mode", "broadcast")
+                .push("prefix", prefix.clone())
+                .push("delivered", delivered as u64)
         } else {
             let target_value = match &self.step.ws_send.to {
                 Some(expr) => Some(self.script_engine.evaluate(expr, context)?),
@@ -60,17 +64,29 @@ impl StepExecutor for WsSendStepExecutor {
             match target {
                 Value::String(id) => {
                     self.registry.send(&id, payload)?;
+                    StepLogExtras::new()
+                        .push("mode", "unicast")
+                        .push("delivered", 1u64)
                 }
                 Value::Array(ids) => {
+                    let mut delivered: u64 = 0;
+                    let attempted = ids.len() as u64;
                     for id in ids {
                         let id_str = match id {
                             Value::String(s) => s,
                             other => other.to_string(),
                         };
-                        if let Err(e) = self.registry.send(&id_str, payload.clone()) {
-                            tracing::warn!(target = %id_str, error = %e, "ws_send: skipping");
+                        match self.registry.send(&id_str, payload.clone()) {
+                            Ok(()) => delivered += 1,
+                            Err(e) => {
+                                tracing::warn!(target = %id_str, error = %e, "ws_send: skipping");
+                            }
                         }
                     }
+                    StepLogExtras::new()
+                        .push("mode", "fan-out")
+                        .push("attempted", attempted)
+                        .push("delivered", delivered)
                 }
                 other => {
                     return Err(RuuterError::InvalidStep(format!(
@@ -79,10 +95,11 @@ impl StepExecutor for WsSendStepExecutor {
                     )));
                 }
             }
-        }
+        };
 
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: extras,
             ..StepResult::new()
         })
     }

@@ -37,7 +37,14 @@ fn build(mode: GuardMode, files: &[(&str, &str)]) -> DslRouter {
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
     let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws.clone());
-    DslRouter::new(loaded.http, loaded.guards, cfg, StateStore::new(), ws, engine)
+    DslRouter::new(
+        loaded.http,
+        loaded.guards,
+        cfg,
+        StateStore::new(),
+        ws,
+        engine,
+    )
 }
 
 /// With `mode: stack` (default), a broad outer guard AND a narrow
@@ -158,6 +165,9 @@ serve:
         )
         .await
         .unwrap();
-    assert_eq!(r.status, 200, "closest_only should skip the outer 401 guard");
+    assert_eq!(
+        r.status, 200,
+        "closest_only should skip the outer 401 guard"
+    );
     assert_eq!(r.value.unwrap()["data"], "ok");
 }

@@ -1,7 +1,7 @@
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
 use crate::steps::engine::StepEngine;
-use crate::steps::{IterateStep, StepExecutor, StepResult};
+use crate::steps::{IterateStep, StepExecutor, StepLogExtras, StepResult};
 use crate::{Result, RuuterError};
 use serde_json::Value;
 
@@ -49,7 +49,8 @@ impl StepExecutor for IterateStepExecutor {
             )));
         }
 
-        let mut collected: Vec<Value> = Vec::with_capacity(items.len());
+        let item_count = items.len();
+        let mut collected: Vec<Value> = Vec::with_capacity(item_count);
 
         for item in items {
             // Bind the item under `body.item_var`.
@@ -79,8 +80,12 @@ impl StepExecutor for IterateStepExecutor {
             context.set_variable(into.clone(), Value::Array(collected));
         }
 
+        let extras = StepLogExtras::new()
+            .push("count", item_count as u64)
+            .push("as", body.item_var.clone());
         Ok(StepResult {
             next_step: self.step.next.clone(),
+            log_extras: extras,
             ..StepResult::new()
         })
     }

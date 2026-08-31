@@ -132,23 +132,32 @@ impl DeclarationStep {
     /// Effective body-field allowlist: legacy flat field wins; else
     /// derived from `allowlist.body`; else None (no allowlist).
     pub fn effective_allowed_body(&self) -> Option<Vec<String>> {
-        self.allowed_body
-            .clone()
-            .or_else(|| self.allowlist.as_ref().and_then(|a| a.body.as_ref()).map(|v| v.iter().map(|f| f.field.clone()).collect()))
+        self.allowed_body.clone().or_else(|| {
+            self.allowlist
+                .as_ref()
+                .and_then(|a| a.body.as_ref())
+                .map(|v| v.iter().map(|f| f.field.clone()).collect())
+        })
     }
 
     /// Effective header allowlist. Same precedence as body.
     pub fn effective_allowed_header(&self) -> Option<Vec<String>> {
-        self.allowed_header
-            .clone()
-            .or_else(|| self.allowlist.as_ref().and_then(|a| a.headers.as_ref()).map(|v| v.iter().map(|f| f.field.clone()).collect()))
+        self.allowed_header.clone().or_else(|| {
+            self.allowlist
+                .as_ref()
+                .and_then(|a| a.headers.as_ref())
+                .map(|v| v.iter().map(|f| f.field.clone()).collect())
+        })
     }
 
     /// Effective query-params allowlist. Same precedence as body.
     pub fn effective_allowed_params(&self) -> Option<Vec<String>> {
-        self.allowed_params
-            .clone()
-            .or_else(|| self.allowlist.as_ref().and_then(|a| a.params.as_ref()).map(|v| v.iter().map(|f| f.field.clone()).collect()))
+        self.allowed_params.clone().or_else(|| {
+            self.allowlist
+                .as_ref()
+                .and_then(|a| a.params.as_ref())
+                .map(|v| v.iter().map(|f| f.field.clone()).collect())
+        })
     }
 
     /// Task 070 — whether strict-unknown-keys posture is on for

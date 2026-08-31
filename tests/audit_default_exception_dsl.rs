@@ -138,7 +138,11 @@ call:
         .uri("/framework/inspect")
         .body(Body::empty())
         .unwrap();
-    let resp2 = router.build_axum_router_from_arc().oneshot(req2).await.unwrap();
+    let resp2 = router
+        .build_axum_router_from_arc()
+        .oneshot(req2)
+        .await
+        .unwrap();
     assert_eq!(resp2.status().as_u16(), 200);
     let bytes = to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
     let body = String::from_utf8_lossy(&bytes);
@@ -237,9 +241,16 @@ handle:
         .uri("/framework/inspect")
         .body(Body::empty())
         .unwrap();
-    let resp2 = router.build_axum_router_from_arc().oneshot(req2).await.unwrap();
+    let resp2 = router
+        .build_axum_router_from_arc()
+        .oneshot(req2)
+        .await
+        .unwrap();
     let bytes = to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
     let body = String::from_utf8_lossy(&bytes);
-    assert!(body.contains("\"seen\":\"unset\""), "fallback should NOT have fired: {body}");
+    assert!(
+        body.contains("\"seen\":\"unset\""),
+        "fallback should NOT have fired: {body}"
+    );
     m_upstream.assert_async().await;
 }
