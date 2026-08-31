@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Duplicate log-step line removed.** Every `log:` DSL step used to
+  emit both a `dsl log step` INFO event with a `dsl.log=…` field
+  AND the per-step `▸ … (log) …  msg="…"` Executed line — same
+  message, two lines. The `dsl log step` event is gone; the
+  interpolated message now rides only as `attrs.msg` on the
+  `Executed` line. JSON consumers that keyed on `dsl.log` should
+  read `attrs.msg` on the `Executed` event instead.
+
+### Documentation
+
+- **New `Recipes → Reading a live trail` section** in the mdbook
+  ([`book/src/logging/recipes.md`](book/src/logging/recipes.md#reading-a-live-trail))
+  with verbatim per-step-type output for every representative
+  sample DSL: `GET /samples/ping`, `variables/assign-simple`,
+  `things` (all three switch outcomes), `state/inc`,
+  `advanced/logging-demo`, `advanced/iterate-batch`. Format
+  examples in `formats.md` refreshed against the post-#37 short
+  attrs field names. Link to be added on issue #37 when shipped.
+
 ### Changed
 
 - **Compact one-line-per-event text formatter (terminal readability).**

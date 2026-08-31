@@ -2,6 +2,150 @@
 
 Ready-to-copy configuration for common scenarios.
 
+## Reading a live trail
+
+The per-step INFO trail (issue #37) is easiest to grasp against real
+output. Every example below was captured with:
+
+```yaml
+logging:
+  format: pretty         # ANSI colours + Unicode markers
+  log_step_executions: true   # default
+  log_dsl_runs: true          # opt-in — brackets the run
+```
+
+against the checked-in `DSL/samples/` tree. Rerun any of them via
+the imported Postman collection (`postman/ruuter.postman_collection.json`)
+or a raw `curl` — every line below is verbatim server output with
+ANSI dropped for print.
+
+### `GET /samples/ping` — smallest possible trail
+
+One step. Return only. The four lines are: run start / step / run
+end / access log.
+
+```
+14:37:50.445 INFO [t=5561e7fc samples] DSL run started  dsl.total_steps=1 dsl.first_step=response
+14:37:50.445 INFO [t=5561e7fc samples] ▸ response (return) 36µs → -  status=202 body="pong"
+14:37:50.445 INFO [t=5561e7fc samples] DSL run completed  took=196µs dsl.steps_ran=1 terminated_by=return terminating_step=response
+14:37:50.445 INFO [t=5561e7fc samples] ⏹ GET /samples/ping 202 598µs  from 127.0.0.1
+```
+
+Shared `t=5561e7fc` prefix ties the four lines. For a 1-step DSL
+in production, flip `log_dsl_runs: false` — the request span already
+frames the run and the brackets triple the volume without new signal.
+
+### `GET /samples/variables/assign-simple` — `assign` + `return`
+
+```
+14:39:12.709 INFO [t=c5b65e53 samples] DSL run started  dsl.total_steps=2 dsl.first_step=assign_vars
+14:39:12.709 INFO [t=c5b65e53 samples] ▸ assign_vars (assign) 23µs → return_result  keys="age,city,name"
+14:39:12.715 INFO [t=c5b65e53 samples] ▸ return_result (return) 5.6ms → -  status=200 body={"user":{"age":30,"city":"Tallinn","name":"John Doe"}}
+14:39:12.715 INFO [t=c5b65e53 samples] DSL run completed  took=5.9ms dsl.steps_ran=2 terminated_by=return terminating_step=return_result
+14:39:12.715 INFO [t=c5b65e53 samples] ⏹ GET /samples/variables/assign-simple 200 6.4ms  from 127.0.0.1
+```
+
+- `keys="age,city,name"` — sorted, comma-joined for deterministic
+  grep. Values are not emitted (they can be large or sensitive).
+- `body={…}` — return payload preview (redacted per
+  `redact_body_fields`, capped at 80 bytes).
+
+### `GET /samples/things` — `switch` with three outcomes
+
+Same DSL, three URL shapes drive three switch branches:
+
+```
+▸ route (switch) 5.0ms → list    condition=0 expr="${incoming.params.pathParams.length === 0}"
+▸ route (switch) 10.1ms → detail condition=1 expr="${incoming.params.pathParams.length === 1}"
+▸ route (switch) 7.7ms → sub     condition=undefined
+```
+
+- `condition=<n>` — 0-indexed slot in the DSL's `switch:` list.
+- `expr="..."` — raw JS at that slot, so a reader locates the
+  branch in the DSL file without opening it.
+- `condition=undefined` — no-match case fell through to the
+  step-level `next:`. `undefined` (unquoted, JS-native sentinel)
+  means a single `condition=` filter catches both matched and
+  unmatched runs.
+
+Note the `dsl.total_steps=4` vs `dsl.steps_ran=2` gap in the run
+bracket — `total_steps` is what's declared in the DSL, `steps_ran`
+is what actually executed. On a switch DSL, that gap is the
+value of the brackets.
+
+### `POST /samples/state/inc` — `state.get` + `state.set`
+
+First hit (cold):
+
+```
+▸ read_counter  (state)  49µs → bump           op="get" key="counter" hit=false
+▸ bump          (assign) 4.8ms → write_counter keys="next_value"
+▸ write_counter (state)  3.8ms → respond       op="set" key="counter" value=1
+▸ respond       (return) 4.1ms → -             status=200 body={"counter":1}
+```
+
+Second hit (warm):
+
+```
+▸ read_counter  (state)  40µs → bump           op="get" key="counter" hit=true
+▸ bump          (assign) 3.2ms → write_counter keys="next_value"
+▸ write_counter (state)  2.9ms → respond       op="set" key="counter" value=2
+▸ respond       (return) 3.6ms → -             status=200 body={"counter":2}
+```
+
+- `hit=true|false` — appears only on `op=get`; the single most-
+  asked question when a DSL reads state and gets an unexpected null.
+- `value=<preview>` — appears only on `op=set`; redacted per
+  `redact_body_fields` and capped so the log line answers "what did
+  I actually store?" without a second trip to the store.
+
+### `GET /samples/advanced/logging-demo?userId=42` — `log` + `assign` + `return`
+
+The `log:` DSL step surfaces its payload as `attrs.msg` on the
+same `Executed` line — no separate event. Renders the interpolated
+message alongside the step timing.
+
+```
+▸ log_start     (log)    25.1ms → process         msg="Request processing started for user: 42"
+▸ process       (assign) 6.8ms  → log_processing  keys="timestamp,user_id"
+▸ log_processing (log)   5.6ms  → complete        msg="Processing user ID: 42 at 1788187016293"
+▸ complete      (assign) 4.2ms  → log_complete    keys="result"
+▸ log_complete  (log)    44µs   → respond         msg="Request processing completed successfully"
+▸ respond       (return) 5.4ms  → -               status=200 body={"processedAt":1788187016293,"status":"completed","userId":42}
+```
+
+CR/LF are stripped from `msg` before emission (log-injection
+defence). Message is capped at 256 bytes with a `…` marker if
+longer.
+
+### `POST /samples/advanced/iterate-batch` — `iterate`
+
+Body: `{"orders":[{"id":"a","qty":2,"price":10},{"id":"b","qty":3,"price":5}]}`
+
+```
+▸ setup (assign)  110µs → work   keys="orders"
+▸ work  (iterate) 8.1ms → reply  count=2 as=order
+▸ reply (return)  4.7ms → -      status=200 body={"count":2,"totals":[{"id":"a","net":20},{"id":"b","net":15}]}
+```
+
+- `count=2` — number of iterations actually run.
+- `as=order` — binding name from the DSL, so a reader knows which
+  variable each iteration wrote into.
+- Inner `do:` steps are NOT emitted per iteration (would explode
+  the log). Use `step_timing: true` at DEBUG if you need per-
+  iteration timing.
+
+### Where the fields come from
+
+Every `attrs=…` field name maps 1:1 to a
+[Configuration reference § `log_step_executions`](./configuration.md#log_step_executions)
+entry. The short names inside `attrs` are deliberately terse — the
+step type is already on the line (`(state)`, `(switch)`), so
+prefixing every field with its type would duplicate. Full OTel
+semantic-convention names still appear on the access-log line and
+on the OTel span for dashboard portability — see
+[Field vocabulary](./fields.md).
+
 ## Local dev — human-readable
 
 Default. Just `docker compose up` or `cargo run --bin ruuter-on-rust`.

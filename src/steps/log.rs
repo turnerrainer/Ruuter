@@ -3,7 +3,6 @@ use crate::logging::sanitize_log_value;
 use crate::scripting::ScriptEngine;
 use crate::steps::{LogStep, StepExecutor, StepLogExtras, StepResult};
 use crate::Result;
-use tracing::info;
 
 pub struct LogStepExecutor {
     step: LogStep,
@@ -25,25 +24,18 @@ impl StepExecutor for LogStepExecutor {
             .script_engine
             .evaluate(&serde_json::Value::String(self.step.log.clone()), context)?;
 
-        // Emit as a structured event so JSON-formatter deployments
-        // get a proper field (`dsl.log`) instead of an interpolated
-        // "LOG: …" string blob. Text-formatter renders it as
-        // `dsl.log=<message>` on the same line — visually similar to
-        // Java's `LOG: <message>` but attacker-controlled newlines
-        // are stripped to prevent log-line splicing.
+        // Attacker-controlled CR/LF stripped to prevent log-line
+        // splicing before the message reaches any log sink.
         let rendered = message.as_str().map(sanitize_log_value).unwrap_or_else(|| {
             sanitize_log_value(&serde_json::to_string(&message).unwrap_or_default())
         });
-        info!(
-            dsl.project = %context.project(),
-            dsl.log = %rendered,
-            "dsl log step"
-        );
 
-        // Also surface the evaluated message on the engine's
-        // per-step "Executed" line (issue #37) so a reader scanning
-        // the DSL trail sees WHAT was logged without correlating two
-        // lines. Capped to keep the trail line bounded.
+        // Surface the evaluated message on the engine's per-step
+        // "Executed" line (issue #37) via `attrs.msg` — that line is
+        // the single carrier for the log-step payload in both text
+        // and JSON output. A separate `dsl log step` event used to
+        // fire here too; removed because it doubled every log step
+        // in the trail without adding a new signal.
         let for_extras = if rendered.len() > 256 {
             let mut cut = 256;
             while cut > 0 && !rendered.is_char_boundary(cut) {

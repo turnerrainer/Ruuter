@@ -49,8 +49,7 @@ dashboards can group / filter by prefix.
 | `terminated_by` | string | On `DSL run completed`: one of `return`, `end_of_steps`, `iteration_cap`, `error` |
 | `terminating_step` | string | On `DSL run completed`, `terminated_by=return` |
 | `failed_step` | string | On `DSL run completed`, `terminated_by=error` |
-| `dsl.log` | string | Interpolated message body from the `log:` DSL step |
-| `attrs` | rendered `k=v` pairs | Per-step-type context on `Executed` INFO lines (issue #37). See per-type field list in [Configuration](./configuration.md#log_step_executions). |
+| `attrs` | rendered `k=v` pairs | Per-step-type context on `Executed` INFO lines (issue #37). See per-type field list in [Configuration](./configuration.md#log_step_executions). The `log:` step's interpolated message appears here as `attrs.msg` — no separate event. |
 
 ## Outbound HTTP fields
 

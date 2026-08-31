@@ -8,10 +8,10 @@ Compact one-line-per-event terminal-first layout. Each line looks
 like this — no wrapping on any terminal ≥ 120 columns:
 
 ```
-10:34:59.099 INFO  [t=2b380de4 samples] ▸ read_counter (state) 49µs → bump  state.op="get" state.key="counter" state.hit=false
-10:34:59.103 INFO  [t=2b380de4 samples] ▸ bump (assign) 4.8ms → write_counter  assign.keys="next_value"
-10:34:59.107 INFO  [t=2b380de4 samples] ▸ write_counter (state) 3.8ms → respond  state.op="set" state.key="counter"
-10:34:59.112 INFO  [t=2b380de4 samples] ▸ respond (return) 4.1ms → -  http.response.status_code=200
+10:34:59.099 INFO  [t=2b380de4 samples] ▸ read_counter (state) 49µs → bump  op="get" key="counter" hit=false
+10:34:59.103 INFO  [t=2b380de4 samples] ▸ bump (assign) 4.8ms → write_counter  keys="next_value"
+10:34:59.107 INFO  [t=2b380de4 samples] ▸ write_counter (state) 3.8ms → respond  op="set" key="counter" value=1
+10:34:59.112 INFO  [t=2b380de4 samples] ▸ respond (return) 4.1ms → -  status=200 body={"counter":1}
 10:34:59.112 INFO  [t=2b380de4 samples] ⏹ POST /samples/state/inc 200 13.6ms  from 127.0.0.1
 ```
 
@@ -70,11 +70,13 @@ for those.
 
 The `attrs=…` field on each `Executed` line carries step-type-
 specific context that Java Ruuter's polymorphic `logStep` emitted
-into MDC (issue #37). For a `switch`, it's the matched-branch
-index + next target; for `http`, the URL + upstream status; for
-`state`, the op + key + hit; and so on. See the
-[Configuration reference](./configuration.md#log_step_executions)
-for the full per-type vocabulary.
+into MDC (issue #37). For a `switch`, it's `condition=<n>` (matched
+slot) or `condition=undefined` (no-match) + `expr=…`; for `http`,
+the URL + upstream status; for `state`, the op + key + hit; and so
+on. See the [Configuration reference](./configuration.md#log_step_executions)
+for the full per-type vocabulary, or [Recipes → Reading a live
+trail](./recipes.md#reading-a-live-trail) for annotated end-to-end
+examples per step type.
 
 ## JSON
 
@@ -101,7 +103,7 @@ elided on the second for brevity:
     "dsl.step.type": "return",
     "duration_ms": 0.032,
     "dsl.next.step": "-",
-    "attrs": "http.response.status_code=200"
+    "attrs": "status=200 body=\"hello\""
   },
   "span": {
     "name": "http_request",
