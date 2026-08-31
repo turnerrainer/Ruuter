@@ -2,7 +2,7 @@
 
 Pre-execution DSLs that run before the main route. A guard returning HTTP status ≥ 400 short-circuits — its response becomes the response.
 
-## Two file conventions
+## Three file conventions
 
 ### Sibling — `<stem>.guard.yml`
 
@@ -18,7 +18,24 @@ DSL/svc/GET/vault/.guard.yml        # guards every DSL under vault/
 DSL/svc/GET/vault/secret.yml        # ← protected
 ```
 
-Both conventions produce the same guard key (`GET/protected` / `GET/vault`). Use whichever fits your tree layout. Bare `.guard` (no extension) is also accepted for strict Java-Ruuter parity.
+Both of the above produce the same guard key (`GET/protected` / `GET/vault`). Use whichever fits your tree layout. Bare `.guard` (no extension) is also accepted for strict Java-Ruuter parity.
+
+### Project-level — `.guard.yml` at the project root (issue #39)
+
+```
+DSL/svc/.guard.yml                  # guards every DSL in svc, every method
+DSL/svc/GET/ping.yml                # ← protected
+DSL/svc/POST/orders.yml             # ← protected
+DSL/svc/WS/inbound/subscribe.yml    # ← protected
+```
+
+Applies to every HTTP method (and WS inbound frame handler) in the project. Use this for cross-method authorisation logic that would otherwise duplicate across `GET/.guard.yml`, `POST/.guard.yml`, etc.
+
+Runs as the outermost guard: project → method-root → path-ancestor → target. A nested guard with `declaration.override_ancestors: true` still bypasses the project-level guard for its subtree (see [Override](#override--replace-ancestors) below) — that's your escape hatch for public endpoints under an otherwise-protected project.
+
+Only one project-level guard per project. Having both `.guard.yml` and `.guard.yaml` (or `.guard` and `.guard.yml`) at the project root is a load-time error; the message names both files so you can remove one.
+
+`override_ancestors: true` on a project-level guard has no meaning (nothing outside it to override) — the loader WARNs and ignores the flag.
 
 ## Guard DSL
 
@@ -42,6 +59,103 @@ deny:
   return:
     error: "missing token"
   next: end
+```
+
+## Runnable example — project-level guard (issue #39)
+
+Three files ship under `DSL/guarded-demo/`. One `.guard.yml` at the
+project root protects both a GET and a POST endpoint — no per-method
+duplication.
+
+`DSL/guarded-demo/.guard.yml`:
+
+```yaml
+check:
+  switch:
+    - condition: "${incoming.headers['x-api-key'] !== 'demo-secret'}"
+      next: deny
+  next: allow
+
+allow:
+  return:
+    passed: true
+  next: end
+
+deny:
+  status: 401
+  return:
+    error: "guarded-demo: missing or invalid X-Api-Key header"
+  next: end
+```
+
+`DSL/guarded-demo/GET/status.yml`:
+
+```yaml
+respond:
+  return:
+    status: ok
+    method: GET
+  next: end
+```
+
+`DSL/guarded-demo/POST/echo.yml`:
+
+```yaml
+respond:
+  return:
+    method: POST
+    echoed: "${incoming.body}"
+  next: end
+```
+
+Request — GET without the header, project guard rejects:
+
+```bash
+curl -si http://localhost:8080/guarded-demo/status
+```
+
+Response:
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error":"guarded-demo: missing or invalid X-Api-Key header"}
+```
+
+Request — POST without the header, same guard fires (no duplicate
+per-method file):
+
+```bash
+curl -si -X POST http://localhost:8080/guarded-demo/echo \
+     -H 'Content-Type: application/json' -d '{"n":1}'
+```
+
+Response:
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error":"guarded-demo: missing or invalid X-Api-Key header"}
+```
+
+Request — GET with the header, guard passes:
+
+```bash
+curl -si -H 'X-Api-Key: demo-secret' http://localhost:8080/guarded-demo/status
+```
+
+Response:
+
+```
+HTTP/1.1 200 OK
+```
+
+```json
+{"method":"GET","status":"ok"}
 ```
 
 ## Runnable example — in-folder guard
@@ -115,9 +229,10 @@ HTTP/1.1 200 OK
 Multiple ancestor guards on the same path stack. **All** must pass. Outermost runs first.
 
 ```
-POST/api.guard.yml            # runs first
-POST/api/admin.guard.yml      # runs second
-POST/api/admin/users.yml      # main DSL, runs if both guards passed
+.guard.yml                    # project-level, runs first (issue #39)
+POST/api.guard.yml            # runs second
+POST/api/admin.guard.yml      # runs third
+POST/api/admin/users.yml      # main DSL, runs if every guard passed
 ```
 
 ## Passing variables to the main DSL

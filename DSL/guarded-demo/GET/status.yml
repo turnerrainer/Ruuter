@@ -1,0 +1,5 @@
+respond:
+  return:
+    status: ok
+    method: GET
+  next: end

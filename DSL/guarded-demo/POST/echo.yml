@@ -1,0 +1,5 @@
+respond:
+  return:
+    method: POST
+    echoed: "${incoming.body}"
+  next: end
