@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4-rc] - 2026-08-31
+
+Feature-and-polish release cycled on top of 0.9.0-rc.3. Ships PR #38
+end-to-end: Java-parity per-step INFO trail (issue #37), a compact
+terminal-first text formatter, a new opt-in `pretty` format for
+interactive dev, and follow-up cleanups (duplicate `dsl log step`
+event removed, per-step `attrs` field names shortened, `return` /
+`state.set` / `template` gained content previews on the trail).
+
+Version numbering: skips 0.9.0/1/2/3 (never cut as stable) in favour
+of `0.9.4-rc` — pre-release marker for a target 0.9.4 stable rather
+than continuing the `0.9.0-rc.N` counter.
+
 ### Fixed
 
 - **Duplicate log-step line removed.** Every `log:` DSL step used to

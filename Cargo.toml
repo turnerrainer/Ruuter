@@ -1,6 +1,6 @@
 [package]
 name = "ruuter-on-rust"
-version = "0.9.0-rc.3"
+version = "0.9.4-rc"
 edition = "2021"
 authors = ["Rainer Türner"]
 license = "Apache-2.0"
