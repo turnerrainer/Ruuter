@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::context::ExecutionContext;
-use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls};
+use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls, PROJECT_GUARD_KEY};
 use crate::dsl::Dsl;
 use crate::http_client::{HttpResponse, SelfCallHandler};
 use crate::logging::{error_chain, sanitize_log_value, trace_id_from_traceparent};
@@ -186,7 +186,19 @@ impl DslRouter {
             None => return Vec::new(),
         };
         let mut matches: Vec<(usize, Dsl)> = Vec::new();
+        // Issue #39 — project-level guard is keyed by the reserved
+        // `PROJECT_GUARD_KEY` sentinel (never a `<METHOD>/...` prefix).
+        // Applies to every DSL in the project; runs as the outermost
+        // guard unless a nested `override_ancestors: true` guard fires
+        // (in which case the nested override replaces every ancestor,
+        // project-level included, matching the "override kicks out
+        // everything above me" semantic).
+        let mut project_guard: Option<Dsl> = None;
         for (guard_key, guard_dsl) in project_guards {
+            if guard_key == PROJECT_GUARD_KEY {
+                project_guard = Some(guard_dsl.clone());
+                continue;
+            }
             let prefix_with_slash = format!("{}/", guard_key);
             if dsl_key.starts_with(&prefix_with_slash) {
                 matches.push((guard_key.len(), guard_dsl.clone()));
@@ -197,7 +209,10 @@ impl DslRouter {
 
         // Override handling: if any matching guard declares
         // `override_ancestors: true`, keep ONLY the longest-key override
-        // guard. Multiple overrides → most-specific wins.
+        // guard. Multiple overrides → most-specific wins. Project-level
+        // guard is dropped by the override too — an `override_ancestors`
+        // guard in the tree is the DSL author's escape hatch from every
+        // outer guard, project-level included.
         let has_override = matches.iter().any(|(_, d)| is_override_guard(d));
         if has_override {
             let longest_override = matches
@@ -213,14 +228,27 @@ impl DslRouter {
         // `ClosestOnly` keeps only the LAST entry (longest key,
         // innermost ancestor) — matches Java's DslService.getGuard
         // recursive strip-and-lookup.
-        match self.config.guards.mode {
+        let method_scoped: Vec<Dsl> = match self.config.guards.mode {
             crate::config::GuardMode::Stack => matches.into_iter().map(|(_, d)| d).collect(),
             crate::config::GuardMode::ClosestOnly => matches
                 .into_iter()
                 .last()
                 .map(|(_, d)| vec![d])
                 .unwrap_or_default(),
+        };
+
+        // Project-level guard prepends (outermost) regardless of
+        // `guards.mode`: `ClosestOnly` narrows *method-scoped* ancestor
+        // guards to the innermost, but the project guard is orthogonal
+        // to that — a "runs before anything in the project" contract.
+        // Silently dropping it under `ClosestOnly` would break the
+        // "add auth once, protects everything" promise.
+        let mut out = Vec::with_capacity(1 + method_scoped.len());
+        if let Some(pg) = project_guard {
+            out.push(pg);
         }
+        out.extend(method_scoped);
+        out
     }
 
     pub fn build_axum_router(self) -> Router {

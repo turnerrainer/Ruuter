@@ -38,6 +38,20 @@ finer-grained guards live below it. Operators porting from Java pick
 Guards that set `override_ancestors: true` are the escape hatch in
 either mode.
 
+## Interaction with project-level guards (issue #39)
+
+`guards.mode` narrows *method-scoped* guards only. A project-level
+`<project>/.guard.yml` (issue #39) always runs as the outermost guard
+regardless of the mode — silently dropping it under `closest_only`
+would break the "add auth once, protects everything" contract that
+the project-level convention exists for.
+
+If a nested method-scoped guard sets `override_ancestors: true`, the
+project-level guard is still bypassed for that subtree — the escape
+hatch replaces *every* ancestor, project-level included. That's the
+mechanism for carving out a public endpoint under an otherwise-
+protected project.
+
 ## What breaks if you set it wrong
 
 - Setting `closest_only` when your DSL tree assumes stacking → the

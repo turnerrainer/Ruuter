@@ -9,7 +9,7 @@ Order of framework checks per HTTP request. Each stage can short-circuit with th
 5. **Body read + JSON parse**. Body over 16 MiB → `400`. `Content-Type: application/json` + malformed body → `400 Bad Request`. Non-JSON content types produce empty `incoming.body`.
 6. **Origin resolution**. `X-Forwarded-For` (or `X-Real-IP`) is promoted into `incoming.origin` only when the direct TCP peer's IP is in `proxy.trusted`; otherwise `origin` reflects the socket peer. Raw headers remain visible in `incoming.headers`.
 7. **Route resolution**. Exact `<METHOD>/<path>` lookup. On miss: path-param stripping. No match → `404 Not Found`.
-8. **Guard chain**. All applicable guards (outermost-first, unless an override guard matches). Any guard returning status ≥ 400 → that response, skip stage 9.
+8. **Guard chain**. All applicable guards (outermost-first, unless an override guard matches). Order: project-level `.guard.yml` (issue #39, if present) → method-scoped ancestors (outermost-first) → target. Any guard returning status ≥ 400 → that response, skip stage 9.
 9. **Main DSL execution**.
 10. **Response assembly**:
     - DSL-set headers merged first.

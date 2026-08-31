@@ -39,6 +39,8 @@ Guards can appear at any depth:
 - Sibling: `<method>/<path>/<stem>.guard.yml` → protects `<method>/<path>/<stem>/*`
 - In-folder: `<method>/<path>/<dir>/.guard.yml` → protects `<method>/<path>/<dir>/*`
 - Bare extension-less: `<method>/<path>/<dir>/.guard` — also accepted (strict Java parity).
+- **Project-level (issue #39): `<project>/.guard.yml` → protects every DSL in the project across every HTTP method.** Only one per project; two variants at the project root (`.guard.yml` alongside `.guard.yaml`, etc.) is a load-time error naming both offending files.
 
 See [Guards mode](../config/guards-mode.md) for stacked vs closest-only
-evaluation.
+evaluation and [Guards DSL reference](../dsl/guards.md) for the file
+conventions and the `override_ancestors` escape hatch.

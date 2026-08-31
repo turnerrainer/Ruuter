@@ -11,10 +11,26 @@ use std::sync::Arc;
 pub type HttpDsls = HashMap<String, HashMap<String, HashMap<String, Dsl>>>;
 /// (project, channel) → trigger-key → Dsl (event-trigger pipelines).
 pub type TriggerDsls = HashMap<(String, String), HashMap<String, Dsl>>;
-/// Project-name → guard-key (`<METHOD>/<dir-stem>`) → guard DSL.
-/// A guard at key `<METHOD>/<stem>` protects every DSL whose key
-/// starts with `<METHOD>/<stem>/`. Multiple ancestor guards stack.
+/// Project-name → guard-key → guard DSL.
+///
+/// Guard keys take two shapes:
+///
+/// - **Method-scoped** (`<METHOD>/<dir-stem>`) — a guard at key
+///   `<METHOD>/<stem>` protects every DSL whose key starts with
+///   `<METHOD>/<stem>/`. Multiple ancestor guards stack.
+/// - **Project-level** (`*`) — a guard at the reserved key `*` protects
+///   every DSL in the project, regardless of HTTP method. Loaded from
+///   `<project>/.guard[.yml|.yaml]` (issue #39). Runs as the outermost
+///   guard in `applicable_guards`, before any method-scoped guards. Only
+///   one project-level guard per project.
 pub type GuardDsls = HashMap<String, HashMap<String, Dsl>>;
+
+/// Reserved guard key: the project-level guard applies to every DSL in
+/// the project regardless of HTTP method (issue #39). Loaded from
+/// `<project>/.guard[.yml|.yaml]`. Distinct from method-scoped keys
+/// (`GET/...`, `POST/...`) so `applicable_guards` recognises it and
+/// runs it as the outermost guard.
+pub const PROJECT_GUARD_KEY: &str = "*";
 
 /// Atomically-swappable handle to the loaded HTTP DSL tree. Held by
 /// `DslRouter` and `StepEngine` so the hot-reload watcher can swap the
@@ -146,6 +162,59 @@ impl DslLoader {
         let mut methods = HashMap::new();
         let mut triggers: TriggerDsls = HashMap::new();
         let mut guards: HashMap<String, Dsl> = HashMap::new();
+
+        // Issue #39 — optional project-level guard at
+        // `<project>/.guard[.yml|.yaml]`. Applies to every HTTP method
+        // in the project; stored under the reserved key `PROJECT_GUARD_KEY`
+        // (`*`) so `applicable_guards` can distinguish it from
+        // method-scoped keys (`GET/...`) and always prepend it.
+        //
+        // Ambiguity guard: at most one of the three filename variants
+        // may exist. Two would leave load ordering to file-system iteration
+        // order — surface as a load error naming the offending paths so
+        // the operator resolves it explicitly rather than getting a
+        // silently-picked variant.
+        let project_guard_candidates: Vec<_> = [".guard", ".guard.yml", ".guard.yaml"]
+            .iter()
+            .map(|name| project_path.join(name))
+            .filter(|p| p.is_file())
+            .collect();
+        if project_guard_candidates.len() > 1 {
+            let names: Vec<String> = project_guard_candidates
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+                .collect();
+            return Err(RuuterError::FileNotFound(format!(
+                "project '{}' has {} project-level guard files ({}); keep only one",
+                project_name,
+                names.len(),
+                names.join(", ")
+            )));
+        }
+        if let Some(guard_path) = project_guard_candidates.into_iter().next() {
+            let parser = DslParser::new(self.constants.clone());
+            let dsl = parser.parse_file(&guard_path)?;
+            // `override_ancestors: true` on a project-level guard has
+            // no meaning — there's no outer ancestor to override. WARN
+            // so a misconfigured DSL author gets pointed at the mistake;
+            // proceed with the guard active (silently ignoring the flag
+            // matches Java-Ruuter permissive posture).
+            if dsl
+                .declaration
+                .as_ref()
+                .and_then(|d| d.override_ancestors)
+                .unwrap_or(false)
+            {
+                tracing::warn!(
+                    project = %project_name,
+                    guard = %guard_path.display(),
+                    "project-level guard sets `declaration.override_ancestors: true`; \
+                     ignored — the project-level guard is already the outermost, there \
+                     is nothing to override. Remove the flag to silence this WARN."
+                );
+            }
+            guards.insert(PROJECT_GUARD_KEY.to_string(), dsl);
+        }
 
         for entry in fs::read_dir(project_path)? {
             let entry = entry?;

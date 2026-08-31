@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **#39 — Project-level `.guard.yml`.** A single `<project>/.guard.yml`
+  (or `.guard` / `.guard.yaml`) at the project root now applies to
+  every HTTP method in the project. Removes the boilerplate of copying
+  the same auth check into `GET/.guard.yml`, `POST/.guard.yml`,
+  `PUT/.guard.yml`, and so on. Runs as the outermost guard: project →
+  method-root → path-ancestor → target. Stacks with method-scoped
+  guards; a nested guard with `declaration.override_ancestors: true`
+  still replaces every ancestor including the project-level one — the
+  escape hatch for a public endpoint under an otherwise-protected
+  project remains intact. Stored under the reserved guard key `*`
+  (a value no valid `<METHOD>/<path>` key can produce), so the change
+  threads through the existing `SharedGuards` / hot-reload plumbing
+  without a new type. `override_ancestors: true` on the project-level
+  guard itself is meaningless (nothing outside it to override) — the
+  loader WARNs and ignores the flag. Two conflicting variants at the
+  project root (`.guard.yml` alongside `.guard.yaml`, etc.) is a
+  load-time error naming both offending files rather than a silent
+  fs-iteration-order pick. New runnable example under
+  `DSL/guarded-demo/` demonstrates one guard protecting both a GET
+  and a POST endpoint. Docs: new "Three file conventions" section in
+  `book/src/dsl/guards.md`, plus a runnable-example walkthrough.
+  5 integration tests in `tests/project_level_guard.rs` cover
+  cross-method coverage, stacking with a method-scoped guard, the
+  override bypass, no-guard sanity, and the two-file load-error.
+
 ## [0.9.4-rc] - 2026-08-31
 
 Feature-and-polish release cycled on top of 0.9.0-rc.3. Ships PR #38

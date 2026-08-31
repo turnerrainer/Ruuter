@@ -1,0 +1,26 @@
+# Project-level guard (issue #39). This one .guard.yml protects
+# EVERY endpoint in the `guarded-demo` project regardless of HTTP
+# method — GET, POST, PATCH, DELETE all go through the same auth
+# check without a per-method .guard.yml duplicate.
+#
+# Reject requests without `X-Api-Key: demo-secret`; let them through
+# otherwise. In a real deployment this is where you'd verify a JWT,
+# hit an auth service, or check a session cookie against your state
+# store — the pattern is the same, only the check body changes.
+
+check:
+  switch:
+    - condition: "${incoming.headers['x-api-key'] !== 'demo-secret'}"
+      next: deny
+  next: allow
+
+allow:
+  return:
+    passed: true
+  next: end
+
+deny:
+  status: 401
+  return:
+    error: "guarded-demo: missing or invalid X-Api-Key header"
+  next: end
