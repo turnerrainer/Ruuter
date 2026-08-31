@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5-rc] - 2026-09-01
+
+Ships PR #42 end-to-end: cross-method authorisation without per-method
+guard duplication (issue #39). One `.guard.yml` at the project root
+now protects every HTTP endpoint in the project. Removes the
+copy-paste guard-file boilerplate that operators porting from Java
+Ruuter kept hitting.
+
 ### Added
 
 - **#39 — Project-level `.guard.yml`.** A single `<project>/.guard.yml`
