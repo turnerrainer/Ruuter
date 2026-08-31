@@ -23,13 +23,15 @@ Both of the above produce the same guard key (`GET/protected` / `GET/vault`). Us
 ### Project-level — `.guard.yml` at the project root (issue #39)
 
 ```
-DSL/svc/.guard.yml                  # guards every DSL in svc, every method
+DSL/svc/.guard.yml                  # guards every HTTP DSL in svc
 DSL/svc/GET/ping.yml                # ← protected
 DSL/svc/POST/orders.yml             # ← protected
-DSL/svc/WS/inbound/subscribe.yml    # ← protected
+DSL/svc/DELETE/things.yml           # ← protected
 ```
 
-Applies to every HTTP method (and WS inbound frame handler) in the project. Use this for cross-method authorisation logic that would otherwise duplicate across `GET/.guard.yml`, `POST/.guard.yml`, etc.
+Applies to every HTTP method in the project. Use this for cross-method authorisation logic that would otherwise duplicate across `GET/.guard.yml`, `POST/.guard.yml`, etc.
+
+WebSocket inbound handlers (`WS/inbound/...`) are **not** currently gated by guards — the guard chain fires on the HTTP `execute_dsl` path only. Guarding a WS upgrade is a separate concern and lives on its future roadmap; do not rely on `<project>/.guard.yml` to authorise WS connections.
 
 Runs as the outermost guard: project → method-root → path-ancestor → target. A nested guard with `declaration.override_ancestors: true` still bypasses the project-level guard for its subtree (see [Override](#override--replace-ancestors) below) — that's your escape hatch for public endpoints under an otherwise-protected project.
 
