@@ -10,6 +10,7 @@ dsl-lint --dsl DSL                             # explicit root
 dsl-lint --dsl DSL --constants constants.ini   # explicit constants
 dsl-lint --dsl DSL --include-disabled          # also validate *.yml.disabled
 dsl-lint --json                                # machine-readable output
+dsl-lint --require-guard                       # error on any HTTP route with zero guards (issue #45)
 ```
 
 ## What it checks
@@ -56,6 +57,29 @@ dsl-lint: 54 file(s) scanned, 53 ok, 1 error(s), 1 warning(s)
     { "severity": "warning", "path": "DSL/samples/...", "message": "..." }
   ]
 }
+```
+
+## `--require-guard` (issue #45)
+
+Opt-in audit mode. Loads the DSL tree via the same loader the runtime uses, walks every HTTP route, resolves its applicable guards through the shared audit helper, and emits **one error per route with zero applicable guards**. Complements the `GET /_/unguarded` admin endpoint (which reports the same data at runtime).
+
+```bash
+$ dsl-lint --dsl DSL --require-guard
+error  api/POST/is_this_unguarded: no applicable guard — add a project-level, method-scoped, or per-endpoint guard, or drop --require-guard for this route
+error  api/GET/health: no applicable guard — add a project-level, method-scoped, or per-endpoint guard, or drop --require-guard for this route
+
+dsl-lint: 15 file(s) scanned, 15 ok, 2 error(s), 0 warning(s)
+```
+
+- **Default off** — public endpoints legitimately exist.
+- **Path shown** — `<project>/<METHOD>/<route>` (synthetic path, not a filesystem path — matches the format `GET /_/unguarded` emits).
+- **Applies to HTTP routes only.** WS/inbound handlers are excluded (the guard chain doesn't fire on the WS path today; see [Guards](../dsl/guards.md)).
+- **Ordering matches the runtime**. Uses the same `guard_keys_for_dsl` helper `DslRouter::applicable_guards` uses at request time — no drift between "would this route pass in prod" vs "does the audit see it as guarded".
+
+Combine with `--json` for CI parsing:
+
+```bash
+dsl-lint --require-guard --json | jq '.items[] | select(.message | startswith("no applicable guard"))'
 ```
 
 ## When to run

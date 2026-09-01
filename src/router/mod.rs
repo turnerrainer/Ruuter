@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::context::ExecutionContext;
-use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls, PROJECT_GUARD_KEY};
+use crate::dsl::loader::{GuardDsls, SharedGuards, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::{HttpResponse, SelfCallHandler};
 use crate::logging::{error_chain, sanitize_log_value, trace_id_from_traceparent};
@@ -180,86 +180,44 @@ impl DslRouter {
     /// runs. Non-override guards stack normally when no override is
     /// present anywhere on the path.
     fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<Dsl> {
+        // Delegate the matching rules to the shared audit helper
+        // (issue #45) so this hot-path resolver, `dsl-lint
+        // --require-guard`, and `GET /_/unguarded` all agree on which
+        // guards apply. If the rules ever change (fourth convention,
+        // new precedence, override tweak), edit ONE function.
         let snapshot = self.guards.load();
-        let project_guards = match snapshot.get(project) {
-            Some(g) => g,
-            None => return Vec::new(),
+        let keys = crate::dsl::guard_audit::guard_keys_for_dsl(
+            project,
+            dsl_key,
+            &snapshot,
+            self.config.guards.mode,
+        );
+        let Some(project_guards) = snapshot.get(project) else {
+            return Vec::new();
         };
-        let mut matches: Vec<(usize, Dsl)> = Vec::new();
-        // Issue #39 — project-level guard is keyed by the reserved
-        // `PROJECT_GUARD_KEY` sentinel (never a `<METHOD>/...` prefix).
-        // Applies to every DSL in the project; runs as the outermost
-        // guard unless a nested `override_ancestors: true` guard fires
-        // (in which case the nested override replaces every ancestor,
-        // project-level included, matching the "override kicks out
-        // everything above me" semantic).
-        let mut project_guard: Option<Dsl> = None;
-        for (guard_key, guard_dsl) in project_guards {
-            if guard_key == PROJECT_GUARD_KEY {
-                project_guard = Some(guard_dsl.clone());
-                continue;
-            }
-            // Issue #41 — accept exact-match too so a sibling
-            // `<stem>.guard.yml` next to `<stem>.yml` in the SAME
-            // directory actually gates the route. Both keys are
-            // `<METHOD>/path/<stem>` and the trailing-slash prefix
-            // check alone silently skipped the guard, leaving the
-            // route unguarded. The prefix branch still handles
-            // ancestor guards over child DSLs.
-            let prefix_with_slash = format!("{}/", guard_key);
-            if dsl_key == guard_key.as_str() || dsl_key.starts_with(&prefix_with_slash) {
-                matches.push((guard_key.len(), guard_dsl.clone()));
-            }
-        }
-        // Outer-first: shorter key (= broader scope) runs before nested.
-        matches.sort_by_key(|(len, _)| *len);
-
-        // Override handling: if any matching guard declares
-        // `override_ancestors: true`, keep ONLY the longest-key override
-        // guard. Multiple overrides → most-specific wins. Project-level
-        // guard is dropped by the override too — an `override_ancestors`
-        // guard in the tree is the DSL author's escape hatch from every
-        // outer guard, project-level included.
-        let has_override = matches.iter().any(|(_, d)| is_override_guard(d));
-        if has_override {
-            let longest_override = matches
-                .iter()
-                .filter(|(_, d)| is_override_guard(d))
-                .max_by_key(|(len, _)| *len)
-                .map(|(_, d)| d.clone());
-            return longest_override.into_iter().collect();
-        }
-
-        // Audit finding 14: guard mode. Default `Stack` returns
-        // every ancestor guard (outer-first, already sorted).
-        // `ClosestOnly` keeps only the LAST entry (longest key,
-        // innermost ancestor) — matches Java's DslService.getGuard
-        // recursive strip-and-lookup.
-        let method_scoped: Vec<Dsl> = match self.config.guards.mode {
-            crate::config::GuardMode::Stack => matches.into_iter().map(|(_, d)| d).collect(),
-            crate::config::GuardMode::ClosestOnly => matches
-                .into_iter()
-                .last()
-                .map(|(_, d)| vec![d])
-                .unwrap_or_default(),
-        };
-
-        // Project-level guard prepends (outermost) regardless of
-        // `guards.mode`: `ClosestOnly` narrows *method-scoped* ancestor
-        // guards to the innermost, but the project guard is orthogonal
-        // to that — a "runs before anything in the project" contract.
-        // Silently dropping it under `ClosestOnly` would break the
-        // "add auth once, protects everything" promise.
-        let mut out = Vec::with_capacity(1 + method_scoped.len());
-        if let Some(pg) = project_guard {
-            out.push(pg);
-        }
-        out.extend(method_scoped);
-        out
+        // Look up each matched key back to its Dsl body for execution.
+        // Guard maps are small (per-project, one entry per file) and
+        // the average request has 1-3 applicable guards — HashMap
+        // reads are negligible next to the guard's own DSL run.
+        keys.into_iter()
+            .filter_map(|k| project_guards.get(&k).cloned())
+            .collect()
     }
 
     pub fn build_axum_router(self) -> Router {
         Arc::new(self).build_axum_router_from_arc()
+    }
+
+    /// Issue #45 — admin-scoped audit endpoints. Currently mounts
+    /// `GET /_/unguarded`, a runtime overview of guarded vs unguarded
+    /// HTTP routes across the loaded tree. Caller decides whether to
+    /// mount it (config-gated in `main.rs` via
+    /// `supervisor::admin_enabled`) — mirrors the pattern
+    /// `SourceSupervisor::admin_router` uses for `/_/sources`.
+    pub fn admin_router(self: Arc<Self>) -> Router {
+        Router::new()
+            .route("/_/unguarded", get(handle_unguarded))
+            .with_state(self)
     }
 
     /// Task 044 wiring: build the axum router from a pre-existing
@@ -490,6 +448,52 @@ async fn health_check() -> impl IntoResponse {
 /// per-request work.
 async fn openapi_handler(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
     Json((**router.openapi_spec.load()).clone())
+}
+
+/// Issue #45 — full audit of guarded vs unguarded HTTP routes across
+/// every loaded project. Admin-gated (mounted only when
+/// `RUUTER_ADMIN_ENABLED=true`, same as `/_/sources`). Groups by
+/// project → { unguarded, guarded }. Each guarded entry names the
+/// applicable guard keys in outer-first execution order. Totals at
+/// the top so a dashboard panel can key on a single number.
+async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
+    let http = router.dsls.load();
+    let guards = router.guards.load();
+    let audit =
+        crate::dsl::guard_audit::audit_all_routes(&http, &guards, router.config.guards.mode);
+
+    let mut projects: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    let mut total_unguarded = 0usize;
+    let mut total_guarded = 0usize;
+    for route in &audit {
+        let entry = projects
+            .entry(route.project.clone())
+            .or_insert_with(|| json!({ "unguarded": [], "guarded": [] }));
+        if route.is_unguarded() {
+            total_unguarded += 1;
+            entry["unguarded"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "method": route.method, "path": route.path }));
+        } else {
+            total_guarded += 1;
+            entry["guarded"].as_array_mut().unwrap().push(json!({
+                "method": route.method,
+                "path": route.path,
+                "guards": route.guards,
+            }));
+        }
+    }
+
+    Json(json!({
+        "totals": {
+            "guarded": total_guarded,
+            "unguarded": total_unguarded,
+            "routes": total_guarded + total_unguarded,
+        },
+        "projects": projects,
+    }))
 }
 
 async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Request) -> Response {
@@ -1272,13 +1276,6 @@ async fn parse_multipart_body(
         out.insert(key, Value::String(content));
     }
     Ok(out)
-}
-
-fn is_override_guard(dsl: &Dsl) -> bool {
-    dsl.declaration
-        .as_ref()
-        .and_then(|d| d.override_ancestors)
-        .unwrap_or(false)
 }
 
 /// Audit finding 10 helper — restrict `map` to keys in `allowed`.

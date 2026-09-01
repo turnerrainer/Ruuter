@@ -256,12 +256,13 @@ async fn main() {
         }
     }
 
-    let mut app = router.build_axum_router_from_arc();
+    let mut app = router.clone().build_axum_router_from_arc();
 
     // Merge in admin routes when enabled.
     if supervisor::admin_enabled(&config) {
-        info!("Admin endpoint enabled at /_/sources");
+        info!("Admin endpoints enabled: /_/sources, /_/unguarded");
         app = app.merge(supervisor_arc.clone().admin_router());
+        app = app.merge(router.admin_router());
     }
 
     // Task 043 — start server(s). When `config.listeners` is empty,

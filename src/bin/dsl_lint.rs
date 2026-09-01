@@ -101,11 +101,56 @@ fn main() -> ExitCode {
         check_dsl(path, pf, &constants, &dsl_keys, &mut report);
     }
 
+    // Issue #45 — --require-guard: audit the loaded HTTP tree via the
+    // same loader the runtime uses, then emit one error per route with
+    // zero applicable guards. Runs AFTER per-file checks so obvious
+    // parse/schema failures surface first and the audit output stays
+    // clean of load noise.
+    if args.require_guard {
+        run_require_guard_audit(&args, &constants, &mut report);
+    }
+
     report.emit();
     if report.errors > 0 {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn run_require_guard_audit(args: &Args, constants: &HashMap<String, String>, report: &mut Report) {
+    use ruuter_on_rust::config::AppConfig;
+    use ruuter_on_rust::dsl::guard_audit::audit_all_routes;
+    use ruuter_on_rust::dsl::loader::DslLoader;
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = args.dsl_root.clone();
+    let loader = DslLoader::new(cfg.clone(), constants.clone());
+    let loaded = match loader.load_everything() {
+        Ok(l) => l,
+        Err(e) => {
+            report.file_error(
+                &args.dsl_root,
+                format!("--require-guard: DSL load failed, cannot audit: {}", e),
+            );
+            return;
+        }
+    };
+    let audit = audit_all_routes(&loaded.http, &loaded.guards, cfg.guards.mode);
+    for route in &audit {
+        if route.is_unguarded() {
+            // Report against a synthetic path that's greppable and
+            // unambiguous. Not a real filesystem path — `dsl-lint`'s
+            // `--json` output preserves the same string in the `path`
+            // field, so downstream tooling keys on it directly.
+            let synthetic = PathBuf::from(format!("{}/{}", route.project, route.dsl_key));
+            report.file_error(
+                &synthetic,
+                "no applicable guard — add a project-level, method-scoped, \
+                 or per-endpoint guard, or drop --require-guard for this route"
+                    .to_string(),
+            );
+        }
     }
 }
 
@@ -115,6 +160,11 @@ struct Args {
     constants: String,
     include_disabled: bool,
     json: bool,
+    /// Issue #45 — audit every loaded HTTP route and emit one error per
+    /// route with zero applicable guards. Opt-in because public
+    /// endpoints legitimately exist; use in CI on projects with a "no
+    /// unguarded routes ever" policy.
+    require_guard: bool,
 }
 
 impl Args {
@@ -123,6 +173,7 @@ impl Args {
         let mut constants = String::from("./constants.ini");
         let mut include_disabled = false;
         let mut json = false;
+        let mut require_guard = false;
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             match a.as_str() {
@@ -138,10 +189,12 @@ impl Args {
                 }
                 "--include-disabled" => include_disabled = true,
                 "--json" => json = true,
+                "--require-guard" => require_guard = true,
                 "--help" | "-h" => {
                     println!(
                         "dsl-lint — static validator for the Ruuter DSL tree\n\n\
-                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json]"
+                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json] [--require-guard]\n\n\
+                         --require-guard   Error on any HTTP route with zero applicable guards (issue #45)."
                     );
                     std::process::exit(0);
                 }
@@ -156,6 +209,7 @@ impl Args {
             constants,
             include_disabled,
             json,
+            require_guard,
         }
     }
 }
