@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7-rc] - 2026-09-01
+
+Ships PR #48 end-to-end: two safety nets for the "silent unguarded
+route" trap surfaced by the #41 discussion. One goes into CI
+(`dsl-lint --require-guard`), the other into runtime
+(`GET /_/unguarded` admin endpoint). Same underlying audit helper —
+lint and endpoint cannot disagree about which routes are guarded.
+
 ### Added
 
 - **#45 — Guard-audit tooling: `dsl-lint --require-guard` +
