@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6-rc] - 2026-09-01
+
+Ships PR #44 end-to-end: fixes a silent security-shaped bug in the
+sibling guard convention (issue #41). Patch-level RC bump because
+this is a fix-only release with no new features.
+
 ### Fixed
 
 - **#41 — Sibling guard silently skipped when guard and DSL share a
