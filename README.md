@@ -154,8 +154,10 @@ back with `X-Trace-Id`; outbound HTTP calls forward it automatically.
 
 ## Admin endpoint
 
-`GET /_/sources` reports the source supervisor's health. Off by
-default; enable with `RUUTER_ADMIN_ENABLED=true`.
+`GET /_/sources` reports the source supervisor's health.
+`GET /_/unguarded` reports which HTTP routes are guarded vs
+unguarded (issue #45). Both off by default; enable with
+`RUUTER_ADMIN_ENABLED=true`.
 
 ## Buerostack integration
 

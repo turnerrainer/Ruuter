@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **#45 — Guard-audit tooling: `dsl-lint --require-guard` +
+  `GET /_/unguarded`.** Two safety nets for the "silent unguarded
+  route" trap surfaced by the #41 discussion (sibling guards are
+  name-scoped, not directory-scoped — a peer `.yml` file in the same
+  folder as `foo.guard.yml` and `another.guard.yml` can end up
+  unguarded by accident).
+    - **`dsl-lint --require-guard`** — new opt-in flag. Loads the DSL
+      tree via the same loader the runtime uses, walks every HTTP
+      route through the shared audit helper, and emits one error per
+      route with zero applicable guards. Exits non-zero when any
+      unguarded route is found. Default off — public endpoints
+      legitimately exist. Use in CI on projects with a "no unguarded
+      routes ever" policy. HTTP routes only; WS/inbound is excluded
+      because the guard chain doesn't fire on the WS path today.
+    - **`GET /_/unguarded`** — new admin endpoint (gated by
+      `RUUTER_ADMIN_ENABLED=true`, same as `/_/sources`). Runtime
+      inventory of guarded vs unguarded routes across every loaded
+      project. Guarded entries name the applicable guard keys in
+      outer-first execution order (`*` = project-level guard, issue
+      #39; `<METHOD>/<path>` = method-scoped). Totals at the top for
+      dashboard panels. Deterministic sort order for meaningful
+      cross-deploy diffs. Complements the lint — same underlying
+      helper, so a route flagged by one is flagged by both.
+    - **Refactored `DslRouter::applicable_guards` to delegate to the
+      new shared helper** (`crate::dsl::guard_audit::guard_keys_for_dsl`).
+      Single source of truth for guard-matching semantics — the hot-
+      path resolver, the lint, and the admin endpoint cannot drift.
+      21 existing guard tests (across `tests/guards.rs`,
+      `tests/project_level_guard.rs`, `tests/sibling_guard_same_dir.rs`)
+      pass unchanged, confirming the refactor is behaviour-preserving.
+    - **7 integration tests** in `tests/guard_audit.rs` cover:
+      guarded vs unguarded reporting, project-level key surfacing,
+      stacking order, exact-match branch (#41 lock-in),
+      override_ancestors bypass, `GuardMode::ClosestOnly` interaction
+      with the project guard, WS/inbound exclusion.
+
 ## [0.9.6-rc] - 2026-09-01
 
 Ships PR #44 end-to-end: fixes a silent security-shaped bug in the
