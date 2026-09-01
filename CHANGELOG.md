@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **#41 — Sibling guard silently skipped when guard and DSL share a
+  directory.** A `<stem>.guard.yml` next to a `<stem>.yml` file in the
+  same directory produced identical guard and DSL keys
+  (`<METHOD>/path/<stem>`); `applicable_guards` did a trailing-slash
+  prefix check (`starts_with("<METHOD>/path/<stem>/")`) which failed
+  for the same-key case, silently skipping the guard and leaving the
+  route unguarded. `applicable_guards` now accepts exact-match too, so
+  a sibling guard covers both the same-name DSL AND every DSL under a
+  same-name folder. The prefix branch still handles ancestor guards
+  over child DSLs — no regression there. Security-shaped: any
+  deployment relying on a sibling-same-directory guard for auth was
+  previously unguarded and now correctly rejects unauthorised
+  requests. 4 regression tests in `tests/sibling_guard_same_dir.rs`:
+  the exact repro from the issue, prefix-match on children still
+  works, one guard covers both same-key and children, and the
+  peer-with-different-stem case remains correctly unguarded (locking
+  in name-scoped-not-directory-scoped semantics).
+- **Docs — sibling guard semantics.** `book/src/dsl/guards.md`
+  expanded: the sibling convention section now covers the same-key
+  case, the per-endpoint pattern (sibling with no matching folder),
+  and an explicit "sibling guards are name-scoped, not directory-
+  scoped" trap section with the exact `is_this_unguarded.yml` example
+  from the discussion — plus a variant-precedence table for
+  `.guard` / `.guard.yml` / `.guard.yaml`.
+
 ## [0.9.5-rc] - 2026-09-01
 
 Ships PR #42 end-to-end: cross-method authorisation without per-method

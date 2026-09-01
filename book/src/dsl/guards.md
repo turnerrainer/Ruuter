@@ -6,9 +6,19 @@ Pre-execution DSLs that run before the main route. A guard returning HTTP status
 
 ### Sibling — `<stem>.guard.yml`
 
+Protects the same-name DSL AND every DSL under a same-name folder. Both `protected.yml` (same directory) and `protected/*` (child folder) are covered.
+
 ```
-DSL/svc/GET/protected.guard.yml     # guards every DSL under protected/
-DSL/svc/GET/protected/data.yml      # ← protected
+DSL/svc/GET/protected.guard.yml     # guards protected.yml (if any) + everything under protected/
+DSL/svc/GET/protected.yml           # ← protected (same-key DSL, issue #41)
+DSL/svc/GET/protected/data.yml      # ← protected (child)
+```
+
+Special case — **per-endpoint guard**: if no `<stem>/` folder exists alongside, the sibling guard protects just the one same-name DSL:
+
+```
+DSL/svc/POST/v1/consignments.guard.yml   # guards ONLY consignments.yml
+DSL/svc/POST/v1/consignments.yml         # ← protected (no consignments/ folder)
 ```
 
 ### In-folder — `.guard.yml` inside the protected folder
@@ -18,7 +28,35 @@ DSL/svc/GET/vault/.guard.yml        # guards every DSL under vault/
 DSL/svc/GET/vault/secret.yml        # ← protected
 ```
 
-Both of the above produce the same guard key (`GET/protected` / `GET/vault`). Use whichever fits your tree layout. Bare `.guard` (no extension) is also accepted for strict Java-Ruuter parity.
+Both file conventions produce the same guard key (`GET/protected` / `GET/vault`). Use whichever fits your tree layout.
+
+Three filename variants of the in-folder / project-level guard are accepted at runtime:
+
+| Name | When to use |
+|---|---|
+| `.guard.yml` | **Preferred.** Modern default. Editors give YAML syntax highlighting + LSP validation; `dsl-lint` and glob tooling match `*.yml`. |
+| `.guard.yaml` | Same as above but with the `.yaml` extension if that's your project convention. |
+| `.guard` | Bare, no extension. Accepted for strict Java-Ruuter parity. Editors lose YAML syntax highlighting. Use only when porting a Java tree unchanged. |
+
+Same-name variants in the same folder (e.g. both `.guard` and `.guard.yml`, or a sibling `foo.guard.yml` and an in-folder `foo/.guard.yml`) currently produce identical keys and one silently overwrites the other — pick one variant per key. A load-time collision error mirroring the project-level check is on the roadmap.
+
+### Sibling guards are name-scoped, not directory-scoped
+
+Common trap: a `.guard.yml` file protects a **name**, not "everything in this directory". Consider:
+
+```
+DSL/api/POST/foo.guard.yml          # protects foo (same-key + children of foo/)
+DSL/api/POST/foo.yml
+DSL/api/POST/another.guard.yml      # protects another (same-key + children of another/)
+DSL/api/POST/another.yml
+DSL/api/POST/is_this_unguarded.yml  # ← unguarded! No matching guard.
+```
+
+`is_this_unguarded.yml` is genuinely **unguarded** — neither `foo.guard.yml` nor `another.guard.yml` covers it (their keys are `POST/foo` and `POST/another`; the peer's key is `POST/is_this_unguarded`, which matches neither). To guard the peer:
+
+- **Add an in-folder guard**: `DSL/api/POST/.guard.yml` protects every DSL in the folder. `foo.guard.yml` and `another.guard.yml` then stack on top.
+- **Add a per-endpoint sibling**: `DSL/api/POST/is_this_unguarded.guard.yml` protects just that route.
+- **Add a project-level guard** (issue #39): `DSL/api/.guard.yml` protects every route in the project.
 
 ### Project-level — `.guard.yml` at the project root (issue #39)
 
