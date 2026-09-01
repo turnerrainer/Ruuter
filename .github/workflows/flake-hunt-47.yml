@@ -1,0 +1,144 @@
+name: flake-hunt-47
+
+# Issue #47 — characterise the reproduction rate of the intermittent
+# `template_body_from_object_assign_with_undefined_drops_missing_field`
+# failure on the quickjs+ubuntu-latest job. Manual-dispatch only; runs
+# the failing test 100× and reports pass/fail counts.
+#
+# Local investigation (5/5 isolation, 3/3 parallel on this exact
+# platform) could not reproduce. GHA quickjs+ubuntu-latest hit the
+# failure once out of ~10 recent runs. Without a repro rate we can't
+# tell a 1-in-1000 background flake apart from a real 1-in-10 race,
+# so this workflow gathers the number before anyone digs into the
+# QuickJS context pool.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of test runs (default 100). Bump higher if the failure is rare."
+        required: false
+        default: "100"
+        type: string
+      threads:
+        description: "cargo test --test-threads value. Default 1 to isolate the target test; set higher to reproduce parallel-contention hypothesis."
+        required: false
+        default: "1"
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-flake47-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-flake47-
+      # Build the test binary once (release, quickjs backend — same
+      # config as the failing CI job). Every subsequent iteration
+      # reuses the same binary; per-run overhead is a fresh process
+      # spawn only.
+      - name: Build the test binary (quickjs release)
+        run: |
+          cargo test --release --no-default-features --features scripting-quickjs \
+            --test template_dynamic_map_args --no-run
+      - name: Locate the built test binary
+        id: locate
+        run: |
+          set -euo pipefail
+          bin=$(find target/release/deps -maxdepth 1 -name 'template_dynamic_map_args-*' -type f -executable | head -1)
+          if [ -z "$bin" ]; then
+            echo "::error::could not locate template_dynamic_map_args test binary"
+            exit 1
+          fi
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          echo "Located: $bin"
+      # Run the specific failing test N times. Every run is a fresh
+      # process, so any state that persists across `cargo test`
+      # invocations does not leak between iterations — the failure
+      # mode is either within one process's lifetime, or it does not
+      # exist at all. Rely on the test binary's own exit code (0 =
+      # pass, non-zero = fail).
+      - name: Run the failing test N times
+        id: hunt
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          THREADS: ${{ inputs.threads }}
+          BIN: ${{ steps.locate.outputs.bin }}
+        run: |
+          set -euo pipefail
+          passes=0
+          fails=0
+          failed_runs=()
+          echo "flake-hunt: running $ITERATIONS iterations of template_body_from_object_assign_with_undefined_drops_missing_field on --test-threads=$THREADS"
+          for i in $(seq 1 "$ITERATIONS"); do
+            # `--exact` prevents accidental substring-matching.
+            if "$BIN" \
+                --exact \
+                --test-threads="$THREADS" \
+                template_body_from_object_assign_with_undefined_drops_missing_field \
+                >/tmp/run.$i.log 2>&1
+            then
+              passes=$((passes + 1))
+            else
+              fails=$((fails + 1))
+              failed_runs+=("$i")
+              echo "--- iteration $i FAILED ---"
+              cat /tmp/run.$i.log
+              echo "--- end iteration $i ---"
+            fi
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "flake-hunt-47 results"
+          echo "=========================================="
+          echo "iterations : $ITERATIONS"
+          echo "threads    : $THREADS"
+          echo "passed     : $passes"
+          echo "failed     : $fails"
+          if [ "$fails" -gt 0 ]; then
+            echo "failed on iterations: ${failed_runs[*]}"
+            rate=$(awk "BEGIN { printf \"%.2f\", ($fails / $ITERATIONS) * 100 }")
+            echo "failure rate : ${rate}%"
+          else
+            echo "failure rate : 0.00% (no reproduction in $ITERATIONS runs)"
+          fi
+          echo "=========================================="
+
+          # Write a summary to the GitHub Actions summary panel so the
+          # dispatcher sees the answer without opening logs.
+          {
+            echo "## flake-hunt-47 results"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Iterations | \`$ITERATIONS\` |"
+            echo "| --test-threads | \`$THREADS\` |"
+            echo "| Passed | \`$passes\` |"
+            echo "| Failed | \`$fails\` |"
+            if [ "$fails" -gt 0 ]; then
+              rate=$(awk "BEGIN { printf \"%.2f\", ($fails / $ITERATIONS) * 100 }")
+              echo "| Failure rate | **${rate}%** |"
+              echo "| Failed iterations | \`${failed_runs[*]}\` |"
+            else
+              echo "| Failure rate | \`0.00%\` (no reproduction) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # DO NOT fail the workflow on test failures — that would
+          # blur "flaked N times" with "workflow itself broke". The
+          # summary + counts are the payload; the job stays green so
+          # a dispatcher's Actions dashboard doesn't show the run as
+          # a red X for a known-flaky test we're characterising.
+          exit 0
