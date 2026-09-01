@@ -199,8 +199,15 @@ impl DslRouter {
                 project_guard = Some(guard_dsl.clone());
                 continue;
             }
+            // Issue #41 — accept exact-match too so a sibling
+            // `<stem>.guard.yml` next to `<stem>.yml` in the SAME
+            // directory actually gates the route. Both keys are
+            // `<METHOD>/path/<stem>` and the trailing-slash prefix
+            // check alone silently skipped the guard, leaving the
+            // route unguarded. The prefix branch still handles
+            // ancestor guards over child DSLs.
             let prefix_with_slash = format!("{}/", guard_key);
-            if dsl_key.starts_with(&prefix_with_slash) {
+            if dsl_key == guard_key.as_str() || dsl_key.starts_with(&prefix_with_slash) {
                 matches.push((guard_key.len(), guard_dsl.clone()));
             }
         }
