@@ -17,6 +17,7 @@ pub mod state;
 pub mod switch;
 pub mod template;
 pub mod ws_send;
+pub mod ws_tag;
 
 /// Java-Ruuter base step fields shared by every non-Declaration
 /// step. Every executor consults these via [`DslStep::base()`] and
@@ -76,6 +77,7 @@ pub enum DslStep {
     State(StateStep),
     Iterate(IterateStep),
     WsSend(WsSendStep),
+    WsTag(WsTagStep),
     SingleFlight(SingleFlightStep),
     Declaration(DeclarationStep),
 }
@@ -96,6 +98,7 @@ impl DslStep {
             DslStep::State(s) => Some(&s.base),
             DslStep::Iterate(s) => Some(&s.base),
             DslStep::WsSend(s) => Some(&s.base),
+            DslStep::WsTag(s) => Some(&s.base),
             DslStep::SingleFlight(s) => Some(&s.base),
             DslStep::Declaration(d) => Some(&d.base),
         }
@@ -116,6 +119,7 @@ impl DslStep {
             DslStep::State(_) => "state",
             DslStep::Iterate(_) => "iterate",
             DslStep::WsSend(_) => "ws_send",
+            DslStep::WsTag(_) => "ws_tag",
             DslStep::SingleFlight(_) => "single_flight",
             DslStep::Declaration(_) => "declaration",
         }
@@ -136,6 +140,7 @@ impl DslStep {
             DslStep::State(s) => s.next.as_deref(),
             DslStep::Iterate(s) => s.next.as_deref(),
             DslStep::WsSend(s) => s.next.as_deref(),
+            DslStep::WsTag(s) => s.next.as_deref(),
             DslStep::SingleFlight(s) => s.next.as_deref(),
             DslStep::Declaration(_) => None,
         }
@@ -366,6 +371,60 @@ pub struct WsSendArgs {
     /// this prefix. Useful for room-style fan-out (e.g. `client:`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broadcast_prefix: Option<String>,
+    /// Optional tag-based broadcast filter. If set, it takes priority
+    /// over both `to` and `broadcast_prefix`: the payload goes to
+    /// every connection whose tag (set earlier via `ws_tag`) matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broadcast_where: Option<BroadcastWhere>,
+}
+
+/// Tag predicate for `ws_send: { broadcast_where: … }`.
+///
+/// ```yaml
+/// ws_send:
+///   broadcast_where:
+///     tag: "roles"
+///     contains: "admin"        # or: equals: "admin"
+///   payload: { type: "ping" }
+/// ```
+///
+/// `tag`, and the operand of `equals` / `contains`, are all evaluated
+/// through the script engine first, so `${…}` expressions work
+/// (`contains: "${incoming.body.required_role}"`). A connection with
+/// no such tag never matches.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BroadcastWhere {
+    /// Tag key to test.
+    pub tag: Value,
+    /// Exact-match operand. The tag value must equal this string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    /// Substring operand. The tag value must contain this string.
+    /// Store list-valued tags with surrounding delimiters
+    /// (`",admin,ops,"`) and match `",admin,"` for token-exact
+    /// semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contains: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WsTagStep {
+    pub ws_tag: WsTagArgs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WsTagArgs {
+    /// Tag key → value-expression map. Each value is evaluated through
+    /// the script engine against the current context, coerced to a
+    /// string, and stored on the connection this DSL run was
+    /// triggered by (`context.connection_id()`). Only valid inside a
+    /// WS server DSL. Existing tags with the same key are overwritten;
+    /// others are left untouched.
+    pub set: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

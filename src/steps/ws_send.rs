@@ -1,19 +1,24 @@
 //! `ws_send` step — push a JSON frame to one or more WS connections.
 //!
-//! Three addressing modes (priority order):
-//!   1. `broadcast_prefix: "client:"` — fan-out to every registered
+//! Four addressing modes (priority order):
+//!   1. `broadcast_where: { tag: …, equals|contains: … }` — fan-out to
+//!      every connection whose tag (set earlier via `ws_tag`) matches.
+//!   2. `broadcast_prefix: "client:"` — fan-out to every registered
 //!      connection whose id starts with the prefix.
-//!   2. `to: "<expr>"` — single id or array of ids resolved from the
+//!   3. `to: "<expr>"` — single id or array of ids resolved from the
 //!      script engine. Strings are sent verbatim, arrays fan-out.
-//!   3. Neither — use `context.connection_id()` (the originating WS
-//!      client / source). Errors if the context has no connection id.
+//!   4. None of the above — use `context.connection_id()` (the
+//!      originating WS client / source). Errors if the context has no
+//!      connection id.
 
 use crate::context::ExecutionContext;
 use crate::scripting::ScriptEngine;
-use crate::steps::{StepExecutor, StepLogExtras, StepResult, WsSendStep};
+use crate::steps::ws_tag::coerce_tag_value;
+use crate::steps::{BroadcastWhere, StepExecutor, StepLogExtras, StepResult, WsSendStep};
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub struct WsSendStepExecutor {
     step: WsSendStep,
@@ -37,7 +42,18 @@ impl StepExecutor for WsSendStepExecutor {
             .script_engine
             .evaluate(&self.step.ws_send.payload, context)?;
 
-        let extras = if let Some(prefix) = &self.step.ws_send.broadcast_prefix {
+        let extras = if let Some(bw) = &self.step.ws_send.broadcast_where {
+            let matcher = self.resolve_broadcast_where(bw, context)?;
+            let delivered = self.registry.broadcast_where(
+                |_id, tags: &HashMap<String, String>| matcher.matches(tags),
+                payload,
+            );
+            tracing::debug!(tag = %matcher.tag, delivered, "ws_send broadcast_where");
+            StepLogExtras::new()
+                .push("mode", "broadcast_where")
+                .push("tag", matcher.tag.clone())
+                .push("delivered", delivered as u64)
+        } else if let Some(prefix) = &self.step.ws_send.broadcast_prefix {
             let delivered = self
                 .registry
                 .broadcast(|id| id.starts_with(prefix), payload);
@@ -102,5 +118,169 @@ impl StepExecutor for WsSendStepExecutor {
             log_extras: extras,
             ..StepResult::new()
         })
+    }
+}
+
+/// A `broadcast_where` predicate with every `${…}` operand already
+/// resolved against the current context.
+struct ResolvedWhere {
+    tag: String,
+    op: WhereOp,
+}
+
+enum WhereOp {
+    Equals(String),
+    Contains(String),
+}
+
+impl ResolvedWhere {
+    fn matches(&self, tags: &HashMap<String, String>) -> bool {
+        match tags.get(&self.tag) {
+            None => false,
+            Some(v) => match &self.op {
+                WhereOp::Equals(want) => v == want,
+                WhereOp::Contains(needle) => v.contains(needle.as_str()),
+            },
+        }
+    }
+}
+
+impl WsSendStepExecutor {
+    fn resolve_broadcast_where(
+        &self,
+        bw: &BroadcastWhere,
+        context: &ExecutionContext,
+    ) -> Result<ResolvedWhere> {
+        let tag = coerce_tag_value(self.script_engine.evaluate(&bw.tag, context)?);
+        if tag.is_empty() {
+            return Err(RuuterError::InvalidStep(
+                "ws_send: broadcast_where.tag resolved to an empty string".into(),
+            ));
+        }
+        let op = match (&bw.equals, &bw.contains) {
+            (Some(_), Some(_)) => {
+                return Err(RuuterError::InvalidStep(
+                    "ws_send: broadcast_where takes exactly one of `equals` / `contains`".into(),
+                ))
+            }
+            (Some(e), None) => {
+                let want = coerce_tag_value(self.script_engine.evaluate(e, context)?);
+                if want.is_empty() {
+                    return Err(RuuterError::InvalidStep(
+                        "ws_send: broadcast_where.equals resolved to an empty string".into(),
+                    ));
+                }
+                WhereOp::Equals(want)
+            }
+            (None, Some(c)) => {
+                let needle = coerce_tag_value(self.script_engine.evaluate(c, context)?);
+                // Empty `contains` would match every tagged connection —
+                // almost always an unresolved `${…}` operand rather than
+                // an intentional "match anything with this tag" filter.
+                if needle.is_empty() {
+                    return Err(RuuterError::InvalidStep(
+                        "ws_send: broadcast_where.contains resolved to an empty string".into(),
+                    ));
+                }
+                WhereOp::Contains(needle)
+            }
+            (None, None) => {
+                return Err(RuuterError::InvalidStep(
+                    "ws_send: broadcast_where needs one of `equals` / `contains`".into(),
+                ))
+            }
+        };
+        Ok(ResolvedWhere { tag, op })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::steps::{BaseStepFields, WsSendArgs};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn empty_context() -> ExecutionContext {
+        ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), String::new())
+    }
+
+    fn executor(bw: BroadcastWhere) -> WsSendStepExecutor {
+        WsSendStepExecutor::new(
+            WsSendStep {
+                ws_send: WsSendArgs {
+                    to: None,
+                    payload: json!({}),
+                    broadcast_prefix: None,
+                    broadcast_where: Some(bw),
+                },
+                next: None,
+                base: BaseStepFields::default(),
+            },
+            WsRegistry::new(),
+        )
+    }
+
+    async fn run_err(bw: BroadcastWhere) -> String {
+        let err = executor(bw)
+            .execute(&empty_context())
+            .await
+            .expect_err("expected InvalidStep");
+        err.to_string()
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_tag() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!(""),
+            equals: Some(json!("admin")),
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.tag"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_equals() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: Some(json!("")),
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.equals"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: None,
+            contains: Some(json!("")),
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.contains"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_both_equals_and_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: Some(json!("admin")),
+            contains: Some(json!("admin")),
+        })
+        .await;
+        assert!(msg.contains("exactly one"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_neither_equals_nor_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: None,
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("needs one of"), "got: {msg}");
     }
 }

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **#52 — Connection tags for the WebSocket server: `ws_tag` step +
+  `ws_send: { broadcast_where: … }`.** Until now a WS server DSL had
+  two ways to fan a frame out — `broadcast_prefix` (every connection
+  whose id starts with a prefix) or an explicit `to:` list of ids —
+  and no way in between. Any "send this only to the connections that
+  are allowed to see it" delivery forced the DSL author to stand up
+  an external store mapping each `client:<hex>` id to a session, keep
+  it fresh as sockets come and go, and consult it on every send.
+    - **`ws_tag: { set: { <key>: <expr>, … } }`** — new step. Stamps
+      string tags on the connection the current frame arrived on
+      (`context.connection_id()`). Each value is script-evaluated and
+      coerced to a string. Merges with existing tags; errors outside a
+      WS DSL. The intended pattern: authenticate the handshake on the
+      first frame, then `ws_tag` the identity you resolved (`user`,
+      `roles`, `tenant`, …).
+    - **`ws_send: { broadcast_where: { tag: "roles", contains:
+      ",admin," } }`** — new addressing mode, priority above
+      `broadcast_prefix` and `to:`. Fans out to exactly the
+      connections whose tag matches. `equals` (whole value) and
+      `contains` (substring) operands, both script-evaluated so
+      `${…}` works. A connection without the tag never matches.
+      Both operands and the tag key must resolve to a non-empty
+      string; an empty `contains` would match every tagged connection
+      and is almost always an unresolved `${…}`, so it's rejected
+      outright.
+    - Tags are process-local and dropped on unregister. No wire-format
+      change, no new config. `WsRegistry` gains `set_tags`,
+      `tags_of`, `broadcast_where`; the existing `broadcast` and
+      `send` paths are untouched.
+    - Docs: `docs/DSL_REFERENCE.md` §6.1. Tests: `tests/ws_server.rs`
+      (`ws_tag_scopes_broadcast_where_to_matching_connections`) plus
+      unit coverage in `src/ws/mod.rs`.
+
 ## [0.9.7-rc] - 2026-09-01
 
 Ships PR #48 end-to-end: two safety nets for the "silent unguarded

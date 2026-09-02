@@ -251,6 +251,37 @@ broadcast:
 
 DSL runs once per inbound text/binary frame. Handshake headers + query snapshotted at upgrade (identical every frame). Non-JSON text frames arrive as `{value: "<text>"}`.
 
+### 6.1 Connection tags — `ws_tag` + `broadcast_where`
+
+Every connection carries a string→string tag map. A WS server DSL stamps tags on the **originating** connection with `ws_tag`, then any later `ws_send` can fan out to exactly the connections whose tags match — without maintaining an external "which socket belongs to whom" directory.
+
+```yaml
+# On connect: authenticate the handshake cookie, then record who this socket is.
+stamp_identity:
+  ws_tag:
+    set:
+      user:  "${u.personal_code}"
+      roles: "${',' + u.roles.join(',') + ','}"   # delimited → token-exact `contains`
+  next: end
+```
+
+```yaml
+# Elsewhere (any DSL sharing the process, e.g. an internal HTTP route):
+notify_admins:
+  ws_send:
+    broadcast_where:
+      tag: "roles"
+      contains: ",admin,"        # or: equals: "16 chars exactly"
+    payload: { type: "notice" }
+  next: end
+```
+
+- `tag`, and the `equals` / `contains` operand, are evaluated through the script engine — `${…}` works.
+- Exactly one of `equals` (whole-value match) / `contains` (substring) is required. Both `tag` and the operand must resolve to a non-empty string — an empty `contains` would match every tagged connection and is almost always an unresolved `${…}`, so it's rejected outright.
+- A connection missing the tag never matches.
+- `ws_tag` errors outside a WS DSL (no `connection_id`). Tags are process-local and dropped on disconnect.
+- Addressing priority in `ws_send`: `broadcast_where` › `broadcast_prefix` › `to` › originating connection.
+
 ## 7. WebSocket sources (upstream feeds)
 
 `DSL/<project>/sources/<name>.yml` → outbound client to an upstream WS. Each frame dispatches to `DSL/<project>/triggers/<channel>/<key>.yml` (with `_default.yml` fallback).

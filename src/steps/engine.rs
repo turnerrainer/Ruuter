@@ -13,7 +13,7 @@ use crate::scripting::ExpressionRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
     assign, http, http_mock, iterate, log, return_step, single_flight, state, switch, template,
-    ws_send, DslStep, StepExecutor,
+    ws_send, ws_tag, DslStep, StepExecutor,
 };
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
@@ -626,6 +626,11 @@ impl StepEngine {
             }
             DslStep::WsSend(s) => {
                 ws_send::WsSendStepExecutor::new(s.clone(), self.ws_registry.clone())
+                    .execute(context)
+                    .await
+            }
+            DslStep::WsTag(s) => {
+                ws_tag::WsTagStepExecutor::new(s.clone(), self.ws_registry.clone())
                     .execute(context)
                     .await
             }

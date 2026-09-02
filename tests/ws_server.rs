@@ -216,6 +216,267 @@ reply:
     assert_eq!(v["name"], "alice");
 }
 
+#[tokio::test]
+async fn ws_tag_scopes_broadcast_where_to_matching_connections() {
+    // On the first frame each client tags itself with a role taken
+    // from the frame. A later "announce" frame fans out ONLY to
+    // connections whose `roles` tag contains the requested role.
+    let dsl = r#"
+route:
+  switch:
+    - condition: "${incoming.body.type === 'hello'}"
+      next: stamp
+    - condition: "${incoming.body.type === 'announce'}"
+      next: fanout
+  next: end
+
+stamp:
+  ws_tag:
+    set:
+      roles: "${',' + incoming.body.roles + ','}"
+  next: ack
+
+ack:
+  ws_send:
+    payload:
+      type: "tagged"
+  next: end
+
+fanout:
+  ws_send:
+    broadcast_where:
+      tag: "roles"
+      contains: "${',' + incoming.body.role + ','}"
+    payload:
+      type: "announce"
+      text: "${incoming.body.text}"
+  next: end
+"#;
+    let router = build_router(&[("svc/WS/rooms.yml", dsl)]);
+    let port = serve(router).await;
+
+    let (mut admin, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms", port))
+            .await
+            .unwrap();
+    let (mut viewer, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms", port))
+            .await
+            .unwrap();
+
+    admin
+        .send(Message::Text(r#"{"type":"hello","roles":"admin,ops"}"#.into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut admin).await).unwrap()["type"],
+        "tagged"
+    );
+    viewer
+        .send(Message::Text(r#"{"type":"hello","roles":"viewer"}"#.into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut viewer).await).unwrap()["type"],
+        "tagged"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Admin asks to announce to role=admin. Only the admin socket
+    // should receive it.
+    admin
+        .send(Message::Text(
+            r#"{"type":"announce","role":"admin","text":"deploy at 5"}"#.into(),
+        ))
+        .await
+        .unwrap();
+
+    let got = serde_json::from_str::<Value>(&next_text(&mut admin).await).unwrap();
+    assert_eq!(got["type"], "announce");
+    assert_eq!(got["text"], "deploy at 5");
+
+    // The viewer must NOT get it — assert a read times out.
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(300), viewer.next()).await;
+    assert!(
+        quiet.is_err(),
+        "viewer received an announce it was not tagged for"
+    );
+}
+
+#[tokio::test]
+async fn ws_tag_scopes_broadcast_where_equals_to_exact_matches() {
+    // Whole-value matching via `equals` — a substring-similar tag on
+    // a sibling connection must NOT match.
+    let dsl = r#"
+route:
+  switch:
+    - condition: "${incoming.body.type === 'hello'}"
+      next: stamp
+    - condition: "${incoming.body.type === 'announce'}"
+      next: fanout
+  next: end
+
+stamp:
+  ws_tag:
+    set:
+      tenant: "${incoming.body.tenant}"
+  next: ack
+
+ack:
+  ws_send:
+    payload:
+      type: "tagged"
+  next: end
+
+fanout:
+  ws_send:
+    broadcast_where:
+      tag: "tenant"
+      equals: "${incoming.body.tenant}"
+    payload:
+      type: "announce"
+      text: "${incoming.body.text}"
+  next: end
+"#;
+    let router = build_router(&[("svc/WS/tenants.yml", dsl)]);
+    let port = serve(router).await;
+
+    let (mut acme, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/tenants", port))
+            .await
+            .unwrap();
+    let (mut acme_eu, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/tenants", port))
+            .await
+            .unwrap();
+
+    acme.send(Message::Text(r#"{"type":"hello","tenant":"acme"}"#.into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut acme).await).unwrap()["type"],
+        "tagged"
+    );
+    acme_eu
+        .send(Message::Text(
+            r#"{"type":"hello","tenant":"acme-eu"}"#.into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut acme_eu).await).unwrap()["type"],
+        "tagged"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    acme.send(Message::Text(
+        r#"{"type":"announce","tenant":"acme","text":"heads up"}"#.into(),
+    ))
+    .await
+    .unwrap();
+
+    let got = serde_json::from_str::<Value>(&next_text(&mut acme).await).unwrap();
+    assert_eq!(got["type"], "announce");
+    assert_eq!(got["text"], "heads up");
+
+    let quiet =
+        tokio::time::timeout(std::time::Duration::from_millis(300), acme_eu.next()).await;
+    assert!(
+        quiet.is_err(),
+        "acme-eu received an announce meant for tenant=acme only"
+    );
+}
+
+#[tokio::test]
+async fn broadcast_where_skips_untagged_connections() {
+    // Three clients on the same DSL: one tags admin, one tags viewer,
+    // one never sends `hello` and stays untagged. Announce to
+    // role=admin — only the admin-tagged connection receives.
+    let dsl = r#"
+route:
+  switch:
+    - condition: "${incoming.body.type === 'hello'}"
+      next: stamp
+    - condition: "${incoming.body.type === 'announce'}"
+      next: fanout
+  next: end
+
+stamp:
+  ws_tag:
+    set:
+      roles: "${',' + incoming.body.roles + ','}"
+  next: ack
+
+ack:
+  ws_send:
+    payload:
+      type: "tagged"
+  next: end
+
+fanout:
+  ws_send:
+    broadcast_where:
+      tag: "roles"
+      contains: ",admin,"
+    payload:
+      type: "announce"
+  next: end
+"#;
+    let router = build_router(&[("svc/WS/rooms2.yml", dsl)]);
+    let port = serve(router).await;
+
+    let (mut admin, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms2", port))
+            .await
+            .unwrap();
+    let (mut viewer, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms2", port))
+            .await
+            .unwrap();
+    let (mut untagged, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms2", port))
+            .await
+            .unwrap();
+
+    admin
+        .send(Message::Text(r#"{"type":"hello","roles":"admin"}"#.into()))
+        .await
+        .unwrap();
+    let _ = next_text(&mut admin).await;
+    viewer
+        .send(Message::Text(r#"{"type":"hello","roles":"viewer"}"#.into()))
+        .await
+        .unwrap();
+    let _ = next_text(&mut viewer).await;
+    // `untagged` never sends `hello`, so it never runs `ws_tag`.
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    admin
+        .send(Message::Text(r#"{"type":"announce"}"#.into()))
+        .await
+        .unwrap();
+
+    let got = serde_json::from_str::<Value>(&next_text(&mut admin).await).unwrap();
+    assert_eq!(got["type"], "announce");
+
+    let viewer_quiet =
+        tokio::time::timeout(std::time::Duration::from_millis(300), viewer.next()).await;
+    assert!(
+        viewer_quiet.is_err(),
+        "viewer received a role=admin announce"
+    );
+
+    let untagged_quiet =
+        tokio::time::timeout(std::time::Duration::from_millis(300), untagged.next()).await;
+    assert!(
+        untagged_quiet.is_err(),
+        "untagged connection received an announce despite having no `roles` tag"
+    );
+}
+
 async fn next_text<S>(ws: &mut S) -> String
 where
     S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>

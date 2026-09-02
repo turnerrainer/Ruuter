@@ -125,6 +125,8 @@ impl DslParser {
             "iterate"
         } else if key_present("ws_send") {
             "ws_send"
+        } else if key_present("ws_tag") {
+            "ws_tag"
         } else if key_present("single_flight") {
             "single_flight"
         } else if
@@ -225,6 +227,9 @@ impl DslParser {
                 .map_err(|e| Self::parse_err_json(name, e))?,
             "ws_send" => serde_json::from_value::<crate::steps::WsSendStep>(json_value)
                 .map(DslStep::WsSend)
+                .map_err(|e| Self::parse_err_json(name, e))?,
+            "ws_tag" => serde_json::from_value::<crate::steps::WsTagStep>(json_value)
+                .map(DslStep::WsTag)
                 .map_err(|e| Self::parse_err_json(name, e))?,
             "single_flight" => serde_json::from_value::<crate::steps::SingleFlightStep>(json_value)
                 .map(DslStep::SingleFlight)
