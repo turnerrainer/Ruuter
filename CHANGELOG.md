@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8-rc] - 2026-09-02
+
+Ships PR #51 (issue #52) end-to-end: targeted WebSocket fan-out
+without an external session directory. A WS server DSL can now
+stamp identity tags on the originating connection and later
+address broadcasts by tag match — filling the gap between
+`broadcast_prefix` (over-delivers) and explicit `to:` lists
+(needs the id set already known).
+
 ### Added
 
 - **#52 — Connection tags for the WebSocket server: `ws_tag` step +
