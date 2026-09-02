@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       connections whose tag matches. `equals` (whole value) and
       `contains` (substring) operands, both script-evaluated so
       `${…}` works. A connection without the tag never matches.
+      Both operands and the tag key must resolve to a non-empty
+      string; an empty `contains` would match every tagged connection
+      and is almost always an unresolved `${…}`, so it's rejected
+      outright.
     - Tags are process-local and dropped on unregister. No wire-format
       change, no new config. `WsRegistry` gains `set_tags`,
       `tags_of`, `broadcast_where`; the existing `broadcast` and

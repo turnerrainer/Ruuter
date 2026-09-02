@@ -164,10 +164,25 @@ impl WsSendStepExecutor {
                 ))
             }
             (Some(e), None) => {
-                WhereOp::Equals(coerce_tag_value(self.script_engine.evaluate(e, context)?))
+                let want = coerce_tag_value(self.script_engine.evaluate(e, context)?);
+                if want.is_empty() {
+                    return Err(RuuterError::InvalidStep(
+                        "ws_send: broadcast_where.equals resolved to an empty string".into(),
+                    ));
+                }
+                WhereOp::Equals(want)
             }
             (None, Some(c)) => {
-                WhereOp::Contains(coerce_tag_value(self.script_engine.evaluate(c, context)?))
+                let needle = coerce_tag_value(self.script_engine.evaluate(c, context)?);
+                // Empty `contains` would match every tagged connection —
+                // almost always an unresolved `${…}` operand rather than
+                // an intentional "match anything with this tag" filter.
+                if needle.is_empty() {
+                    return Err(RuuterError::InvalidStep(
+                        "ws_send: broadcast_where.contains resolved to an empty string".into(),
+                    ));
+                }
+                WhereOp::Contains(needle)
             }
             (None, None) => {
                 return Err(RuuterError::InvalidStep(
@@ -176,5 +191,96 @@ impl WsSendStepExecutor {
             }
         };
         Ok(ResolvedWhere { tag, op })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::steps::{BaseStepFields, WsSendArgs};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn empty_context() -> ExecutionContext {
+        ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), String::new())
+    }
+
+    fn executor(bw: BroadcastWhere) -> WsSendStepExecutor {
+        WsSendStepExecutor::new(
+            WsSendStep {
+                ws_send: WsSendArgs {
+                    to: None,
+                    payload: json!({}),
+                    broadcast_prefix: None,
+                    broadcast_where: Some(bw),
+                },
+                next: None,
+                base: BaseStepFields::default(),
+            },
+            WsRegistry::new(),
+        )
+    }
+
+    async fn run_err(bw: BroadcastWhere) -> String {
+        let err = executor(bw)
+            .execute(&empty_context())
+            .await
+            .expect_err("expected InvalidStep");
+        err.to_string()
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_tag() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!(""),
+            equals: Some(json!("admin")),
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.tag"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_equals() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: Some(json!("")),
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.equals"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_empty_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: None,
+            contains: Some(json!("")),
+        })
+        .await;
+        assert!(msg.contains("broadcast_where.contains"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_both_equals_and_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: Some(json!("admin")),
+            contains: Some(json!("admin")),
+        })
+        .await;
+        assert!(msg.contains("exactly one"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_where_rejects_neither_equals_nor_contains() {
+        let msg = run_err(BroadcastWhere {
+            tag: json!("roles"),
+            equals: None,
+            contains: None,
+        })
+        .await;
+        assert!(msg.contains("needs one of"), "got: {msg}");
     }
 }

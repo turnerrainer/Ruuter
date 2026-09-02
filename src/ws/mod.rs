@@ -232,4 +232,85 @@ mod tests {
         reg.unregister("client:a");
         assert!(reg.tags_of("client:a").is_none());
     }
+
+    #[test]
+    fn broadcast_where_equals_matches_whole_value_only() {
+        let reg = WsRegistry::new();
+        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), a_tx);
+        reg.register("client:b".into(), b_tx);
+        reg.set_tags("client:a", [("tenant".to_string(), "acme".to_string())])
+            .unwrap();
+        // Substring, not whole match — equals must NOT hit this one.
+        reg.set_tags("client:b", [("tenant".to_string(), "acme-eu".to_string())])
+            .unwrap();
+
+        let delivered = reg.broadcast_where(
+            |_id, t| t.get("tenant").is_some_and(|v| v == "acme"),
+            json!({"type": "ping"}),
+        );
+        assert_eq!(delivered, 1);
+        assert!(matches!(a_rx.try_recv(), Ok(Outbound::Json(_))));
+        assert!(b_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn broadcast_where_skips_connections_missing_the_tag() {
+        // Three connections: one has matching tag, one has a
+        // different value, one has no such tag key at all. Only the
+        // matching one receives.
+        let reg = WsRegistry::new();
+        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        let (c_tx, mut c_rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), a_tx);
+        reg.register("client:b".into(), b_tx);
+        reg.register("client:c".into(), c_tx);
+        reg.set_tags("client:a", [("roles".to_string(), ",admin,".to_string())])
+            .unwrap();
+        reg.set_tags("client:b", [("roles".to_string(), ",viewer,".to_string())])
+            .unwrap();
+        // client:c stays untagged.
+
+        let delivered = reg.broadcast_where(
+            |_id, t| t.get("roles").is_some_and(|v| v.contains(",admin,")),
+            json!({}),
+        );
+        assert_eq!(delivered, 1);
+        assert!(matches!(a_rx.try_recv(), Ok(Outbound::Json(_))));
+        assert!(b_rx.try_recv().is_err());
+        assert!(c_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn broadcast_where_returns_zero_when_no_connections_match() {
+        let reg = WsRegistry::new();
+        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), a_tx);
+        reg.set_tags("client:a", [("roles".to_string(), ",viewer,".to_string())])
+            .unwrap();
+
+        let delivered = reg.broadcast_where(
+            |_id, t| t.get("roles").is_some_and(|v| v.contains(",admin,")),
+            json!({}),
+        );
+        assert_eq!(delivered, 0);
+        assert!(a_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn set_tags_second_call_overwrites_same_key() {
+        let reg = WsRegistry::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), tx);
+        reg.set_tags("client:a", [("roles".to_string(), "viewer".to_string())])
+            .unwrap();
+        reg.set_tags("client:a", [("roles".to_string(), "admin".to_string())])
+            .unwrap();
+        assert_eq!(
+            reg.tags_of("client:a").unwrap().get("roles").map(String::as_str),
+            Some("admin")
+        );
+    }
 }

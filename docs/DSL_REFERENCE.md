@@ -277,7 +277,7 @@ notify_admins:
 ```
 
 - `tag`, and the `equals` / `contains` operand, are evaluated through the script engine — `${…}` works.
-- Exactly one of `equals` (whole-value match) / `contains` (substring) is required.
+- Exactly one of `equals` (whole-value match) / `contains` (substring) is required. Both `tag` and the operand must resolve to a non-empty string — an empty `contains` would match every tagged connection and is almost always an unresolved `${…}`, so it's rejected outright.
 - A connection missing the tag never matches.
 - `ws_tag` errors outside a WS DSL (no `connection_id`). Tags are process-local and dropped on disconnect.
 - Addressing priority in `ws_send`: `broadcast_where` › `broadcast_prefix` › `to` › originating connection.
