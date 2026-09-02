@@ -216,6 +216,94 @@ reply:
     assert_eq!(v["name"], "alice");
 }
 
+#[tokio::test]
+async fn ws_tag_scopes_broadcast_where_to_matching_connections() {
+    // On the first frame each client tags itself with a role taken
+    // from the frame. A later "announce" frame fans out ONLY to
+    // connections whose `roles` tag contains the requested role.
+    let dsl = r#"
+route:
+  switch:
+    - condition: "${incoming.body.type === 'hello'}"
+      next: stamp
+    - condition: "${incoming.body.type === 'announce'}"
+      next: fanout
+  next: end
+
+stamp:
+  ws_tag:
+    set:
+      roles: "${',' + incoming.body.roles + ','}"
+  next: ack
+
+ack:
+  ws_send:
+    payload:
+      type: "tagged"
+  next: end
+
+fanout:
+  ws_send:
+    broadcast_where:
+      tag: "roles"
+      contains: "${',' + incoming.body.role + ','}"
+    payload:
+      type: "announce"
+      text: "${incoming.body.text}"
+  next: end
+"#;
+    let router = build_router(&[("svc/WS/rooms.yml", dsl)]);
+    let port = serve(router).await;
+
+    let (mut admin, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms", port))
+            .await
+            .unwrap();
+    let (mut viewer, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/svc/rooms", port))
+            .await
+            .unwrap();
+
+    admin
+        .send(Message::Text(r#"{"type":"hello","roles":"admin,ops"}"#.into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut admin).await).unwrap()["type"],
+        "tagged"
+    );
+    viewer
+        .send(Message::Text(r#"{"type":"hello","roles":"viewer"}"#.into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&next_text(&mut viewer).await).unwrap()["type"],
+        "tagged"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Admin asks to announce to role=admin. Only the admin socket
+    // should receive it.
+    admin
+        .send(Message::Text(
+            r#"{"type":"announce","role":"admin","text":"deploy at 5"}"#.into(),
+        ))
+        .await
+        .unwrap();
+
+    let got = serde_json::from_str::<Value>(&next_text(&mut admin).await).unwrap();
+    assert_eq!(got["type"], "announce");
+    assert_eq!(got["text"], "deploy at 5");
+
+    // The viewer must NOT get it — assert a read times out.
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(300), viewer.next()).await;
+    assert!(
+        quiet.is_err(),
+        "viewer received an announce it was not tagged for"
+    );
+}
+
 async fn next_text<S>(ws: &mut S) -> String
 where
     S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>

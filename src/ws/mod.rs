@@ -16,12 +16,25 @@
 //!   - `client:<random-hex>` — an inbound server-side WS client
 //!   - `source:<project>:<source_name>` — an outbound source WS
 //!
+//! ## Connection tags
+//!
+//! Every connection also carries a small string→string tag map. A WS
+//! server DSL sets tags on the originating connection with the
+//! `ws_tag` step — typically stamping the authenticated identity
+//! (`user`, `roles`, `tenant`, …) it just resolved on connect. Any
+//! later `ws_send` can then fan out to exactly the connections whose
+//! tags match (`ws_send: { broadcast_where: { tag: "roles",
+//! contains: "admin" }, … }`), without the DSL author standing up an
+//! external directory of "which socket belongs to whom". Tags never
+//! leave the process and are dropped when the connection unregisters.
+//!
 //! The registry is `Clone` (cheap, internally `Arc<DashMap>`), so the
 //! engine, router, and source supervisor can each carry a handle.
 
 use crate::{Result, RuuterError};
 use dashmap::DashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -35,9 +48,17 @@ pub enum Outbound {
     Json(Value),
 }
 
+/// One registered connection: its writer channel plus the mutable
+/// tag map a DSL stamps on it via `ws_tag`.
+#[derive(Debug)]
+struct Connection {
+    tx: mpsc::UnboundedSender<Outbound>,
+    tags: DashMap<String, String>,
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct WsRegistry {
-    inner: Arc<DashMap<ConnectionId, mpsc::UnboundedSender<Outbound>>>,
+    inner: Arc<DashMap<ConnectionId, Connection>>,
 }
 
 impl WsRegistry {
@@ -48,7 +69,13 @@ impl WsRegistry {
     }
 
     pub fn register(&self, id: ConnectionId, sender: mpsc::UnboundedSender<Outbound>) {
-        self.inner.insert(id, sender);
+        self.inner.insert(
+            id,
+            Connection {
+                tx: sender,
+                tags: DashMap::new(),
+            },
+        );
     }
 
     pub fn unregister(&self, id: &str) {
@@ -59,7 +86,7 @@ impl WsRegistry {
         let entry = self.inner.get(id).ok_or_else(|| {
             RuuterError::InvalidStep(format!("ws_send: no such connection '{}'", id))
         })?;
-        entry.send(Outbound::Json(payload)).map_err(|e| {
+        entry.tx.send(Outbound::Json(payload)).map_err(|e| {
             RuuterError::InvalidStep(format!("ws_send: writer dropped for '{}': {}", id, e))
         })?;
         Ok(())
@@ -73,11 +100,62 @@ impl WsRegistry {
     {
         let mut delivered = 0;
         for entry in self.inner.iter() {
-            if pred(entry.key()) && entry.value().send(Outbound::Json(payload.clone())).is_ok() {
+            if pred(entry.key()) && entry.value().tx.send(Outbound::Json(payload.clone())).is_ok() {
                 delivered += 1;
             }
         }
         delivered
+    }
+
+    /// Broadcast to every connection whose `(id, tags)` satisfy `pred`.
+    /// The tag map is snapshotted per connection so the predicate sees
+    /// a stable view. Returns the number of connections that accepted
+    /// the message.
+    pub fn broadcast_where<F>(&self, pred: F, payload: Value) -> usize
+    where
+        F: Fn(&str, &HashMap<String, String>) -> bool,
+    {
+        let mut delivered = 0;
+        for entry in self.inner.iter() {
+            let tags: HashMap<String, String> = entry
+                .value()
+                .tags
+                .iter()
+                .map(|t| (t.key().clone(), t.value().clone()))
+                .collect();
+            if pred(entry.key(), &tags)
+                && entry.value().tx.send(Outbound::Json(payload.clone())).is_ok()
+            {
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
+    /// Merge `entries` into the tag map of connection `id`. Existing
+    /// keys are overwritten; keys not mentioned are left untouched.
+    /// Errors if the connection is not (or no longer) registered.
+    pub fn set_tags<I>(&self, id: &str, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        let entry = self.inner.get(id).ok_or_else(|| {
+            RuuterError::InvalidStep(format!("ws_tag: no such connection '{}'", id))
+        })?;
+        for (k, v) in entries {
+            entry.tags.insert(k, v);
+        }
+        Ok(())
+    }
+
+    /// Snapshot the tags of connection `id`, or `None` if unknown.
+    pub fn tags_of(&self, id: &str) -> Option<HashMap<String, String>> {
+        self.inner.get(id).map(|c| {
+            c.tags
+                .iter()
+                .map(|t| (t.key().clone(), t.value().clone()))
+                .collect()
+        })
     }
 
     pub fn connection_count(&self) -> usize {
@@ -100,4 +178,58 @@ pub fn random_client_id() -> ConnectionId {
 /// Build the conventional source id from a project + source name.
 pub fn source_id(project: &str, source_name: &str) -> ConnectionId {
     format!("source:{}:{}", project, source_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn set_tags_merges_and_broadcast_where_filters() {
+        let reg = WsRegistry::new();
+        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), a_tx);
+        reg.register("client:b".into(), b_tx);
+
+        reg.set_tags("client:a", [("roles".to_string(), ",admin,ops,".to_string())])
+            .unwrap();
+        reg.set_tags("client:b", [("roles".to_string(), ",viewer,".to_string())])
+            .unwrap();
+        // merge, not replace
+        reg.set_tags("client:a", [("tenant".to_string(), "acme".to_string())])
+            .unwrap();
+
+        let tags = reg.tags_of("client:a").unwrap();
+        assert_eq!(tags.get("roles").map(String::as_str), Some(",admin,ops,"));
+        assert_eq!(tags.get("tenant").map(String::as_str), Some("acme"));
+
+        let delivered = reg.broadcast_where(
+            |_id, t| t.get("roles").is_some_and(|v| v.contains(",admin,")),
+            json!({"type": "ping"}),
+        );
+        assert_eq!(delivered, 1);
+        assert!(matches!(a_rx.try_recv(), Ok(Outbound::Json(_))));
+        assert!(b_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn set_tags_errors_for_unknown_connection() {
+        let reg = WsRegistry::new();
+        assert!(reg
+            .set_tags("client:ghost", [("k".to_string(), "v".to_string())])
+            .is_err());
+    }
+
+    #[test]
+    fn tags_dropped_on_unregister() {
+        let reg = WsRegistry::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        reg.register("client:a".into(), tx);
+        reg.set_tags("client:a", [("k".to_string(), "v".to_string())])
+            .unwrap();
+        reg.unregister("client:a");
+        assert!(reg.tags_of("client:a").is_none());
+    }
 }
