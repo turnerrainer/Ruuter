@@ -57,16 +57,16 @@ Same DSL, three URL shapes drive three switch branches:
 ```
 ▸ route (switch) 5.0ms → list    condition=0 expr="${incoming.params.pathParams.length === 0}"
 ▸ route (switch) 10.1ms → detail condition=1 expr="${incoming.params.pathParams.length === 1}"
-▸ route (switch) 7.7ms → sub     condition=undefined
+▸ route (switch) 7.7ms → sub     condition=no_match
 ```
 
 - `condition=<n>` — 0-indexed slot in the DSL's `switch:` list.
 - `expr="..."` — raw JS at that slot, so a reader locates the
   branch in the DSL file without opening it.
-- `condition=undefined` — no-match case fell through to the
-  step-level `next:`. `undefined` (unquoted, JS-native sentinel)
-  means a single `condition=` filter catches both matched and
-  unmatched runs.
+- `condition=no_match` — no branch matched; the switch fell through
+  to the step-level `next:` (or source-order next if omitted).
+  Emitted unquoted so a single `condition=` filter catches both
+  matched (`condition=0`, `1`, …) and unmatched runs uniformly.
 
 Note the `dsl.total_steps=4` vs `dsl.steps_ran=2` gap in the run
 bracket — `total_steps` is what's declared in the DSL, `steps_ran`

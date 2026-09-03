@@ -91,11 +91,11 @@ logging:
   - **switch**: `condition` (0-indexed slot of the matched
     condition in the DSL's `switch:` list) + `expr` (the raw JS
     expression at that slot). When no condition matches, emitted as
-    `condition=undefined` (unquoted, JS-native "no value" sentinel)
-    so a single `condition=` filter catches both matched and
-    unmatched runs. The routed target appears in the top-level
-    `dsl.next.step` column, so no separate `switch.next=…` field
-    is needed.
+    `condition=no_match` (unquoted, snake_case sentinel matching
+    the rest of Ruuter's log-attr casing) so a single `condition=`
+    filter catches both matched and unmatched runs. The routed
+    target appears in the top-level `dsl.next.step` column, so no
+    separate `switch.next=…` field is needed.
   - **return**: `status` + optional `wrapper` + `body` (redacted,
     capped preview of the returned value — 80 chars, JSON preview)
   - **state**: `op` + `key`, `hit` (only on `get`), `value`

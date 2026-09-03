@@ -71,7 +71,8 @@ for those.
 The `attrs=…` field on each `Executed` line carries step-type-
 specific context that Java Ruuter's polymorphic `logStep` emitted
 into MDC (issue #37). For a `switch`, it's `condition=<n>` (matched
-slot) or `condition=undefined` (no-match) + `expr=…`; for `http`,
+slot) or `condition=no_match` (no branch matched, fell through to
+step-level `next:`) + `expr=…`; for `http`,
 the URL + upstream status; for `state`, the op + key + hit; and so
 on. See the [Configuration reference](./configuration.md#log_step_executions)
 for the full per-type vocabulary, or [Recipes → Reading a live

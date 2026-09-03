@@ -48,17 +48,19 @@ impl StepExecutor for SwitchStepExecutor {
         // Finding 03 fix: no condition matched — fall through to
         // `next:` if set, else to source-order next.
         //
-        // `condition=undefined` (unquoted, JS-native "no value"
-        // sentinel) keeps the field name consistent with the match
-        // case: readers filtering on `condition=` catch both branches
-        // and can distinguish match (`condition=<n>`) from no-match
-        // (`condition=undefined`) with the same predicate.
+        // Emitted as `condition=no_match` (unquoted, snake_case
+        // sentinel matching the rest of Ruuter's log-attr casing).
+        // Field name stays `condition=` so a single grep predicate
+        // catches both branches and can distinguish match
+        // (`condition=<n>`) from no-match (`condition=no_match`).
         // `push_preformatted` bypasses the string-quoting Display
-        // would apply — we want `condition=undefined`, not
-        // `condition="undefined"`.
+        // would apply — we want `condition=no_match`, not
+        // `condition="no_match"`. Historic note: an earlier iteration
+        // (#37) used `condition=undefined` for JS-native symmetry,
+        // renamed for readability on the back of #54.
         Ok(StepResult {
             next_step: self.step.next.clone(),
-            log_extras: StepLogExtras::new().push_preformatted("condition", "undefined"),
+            log_extras: StepLogExtras::new().push_preformatted("condition", "no_match"),
             ..StepResult::new()
         })
     }
