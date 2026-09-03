@@ -123,6 +123,14 @@ fn evaluate_string(s: &str, boa: &mut BoaContext) -> Result<Value> {
                 let coerced = maybe_suppress_optional_null(v, inner)?;
                 match coerced {
                     Value::String(s2) => out.push_str(&s2),
+                    // Issue #57 — `null` / `undefined` interpolate as
+                    // empty, not the literal strings "null" / "undefined".
+                    // A DSL that writes `"Hello ${name}"` with `name`
+                    // undeclared should yield `"Hello "`, not
+                    // `"Hello null"`. Matches the same value's fate in
+                    // headers (dropped) and bodies (omitted from
+                    // objects, preserved in arrays as null).
+                    Value::Null => {}
                     other => out.push_str(&other.to_string()),
                 }
             }
@@ -164,7 +172,23 @@ fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
 }
 
 fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
-    let source = Source::from_bytes(script);
+    // Issue #57 — a `${platform?.id}` where `platform` was never
+    // declared should evaluate to `undefined` (→ `Value::Null` at the
+    // JSON boundary), not throw ReferenceError. This makes template
+    // composition tractable: a caller can reference optional bindings
+    // without every DSL author having to `assign` a placeholder first.
+    //
+    // The wrap swallows only `ReferenceError`, so TypeError from
+    // `foo.bar` where `foo` IS declared but is `null`/`undefined`
+    // still surfaces — that's a real bug in the DSL, not a missing
+    // binding. `.call(globalThis)` keeps `this === globalThis` inside
+    // the script body, matching QuickJS and Ruuter's audit finding 16
+    // contract that `${this['foo-bar']}` reads work.
+    let wrapped = format!(
+        "(function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
+        script
+    );
+    let source = Source::from_bytes(wrapped.as_bytes());
     let result = boa
         .eval(source)
         .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;

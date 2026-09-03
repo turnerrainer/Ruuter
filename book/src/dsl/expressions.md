@@ -24,6 +24,8 @@ greeting: "hi ${name}"           # → "hi Ada"
 url:      "https://[#API_HOST]/v1/user/${id}"
 ```
 
+A `${…}` segment inside a mixed string that evaluates to `null` or `undefined` interpolates as empty (never the literal string `"null"`); the same value in a header / query slot drops that header or param entirely. Full nullish-value table + rationale: [JavaScript gotchas → Nullish serialisation](./js-gotchas.md#nullish-serialisation-issue-57).
+
 ## Available JS
 
 Boa engine (ECMAScript 2015+ subset). Standard built-ins that work:
