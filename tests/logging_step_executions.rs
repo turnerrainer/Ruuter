@@ -253,12 +253,15 @@ reply_default:
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn switch_no_match_reports_condition_undefined() {
-    // Regression: previously the no-match case emitted
-    // `matched="no-match"`, inconsistent with the match case's
-    // `condition=<n>`. `condition=undefined` (JS-native "no value"
-    // sentinel, rendered unquoted) keeps a single greppable
-    // predicate across both branches.
+async fn switch_no_match_reports_condition_no_match() {
+    // Regression: the no-match case must use the same `condition=`
+    // field name as the match case so a single grep predicate
+    // catches both branches. Value is `no_match` (unquoted,
+    // snake_case). Two earlier iterations existed: `matched="no-match"`
+    // (Java-parity name — inconsistent field name) and
+    // `condition=undefined` (#37, JS-native sentinel — opaque to
+    // readers who don't know JS); the current shape settled after
+    // #54.
     let buf = SharedBuf::new();
     let _guard = capture(buf.clone());
     let dsl = r#"
@@ -294,16 +297,21 @@ reply_default:
 
     let out = buf.contents();
     assert!(
-        out.contains("condition=undefined"),
-        "expected condition=undefined for no-match case: {}",
+        out.contains("condition=no_match"),
+        "expected condition=no_match for no-match case: {}",
         out
     );
-    // Explicitly guard against the old `matched="no-match"` shape
-    // slipping back — that inconsistency was the whole point of the
-    // rename.
+    // Guard against every prior shape of this field slipping back:
+    //   - `matched="no-match"` (pre-#37, wrong field name)
+    //   - `condition=undefined`  (post-#37, JS-native but opaque)
+    //   - `condition="no_match"` (quoted — Display path, not `push_preformatted`)
+    //   - `branch=…`             (older Rust-only attr name)
     assert!(
-        !out.contains("matched=\"no-match\"") && !out.contains("branch="),
-        "old switch attr names must not appear: {}",
+        !out.contains("matched=\"no-match\"")
+            && !out.contains("condition=undefined")
+            && !out.contains("condition=\"no_match\"")
+            && !out.contains("branch="),
+        "old switch attr shapes must not appear: {}",
         out
     );
 }

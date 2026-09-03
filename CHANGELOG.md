@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **#54 — Switch no-match log value renamed `undefined` → `no_match`.**
+  On a `switch` step whose conditions all evaluate false, the
+  per-step `Executed` INFO line now reads
+  `▸ <step> (switch) … → <next> condition=no_match` instead of
+  `condition=undefined`. Field name (`condition=`) is unchanged, so a
+  single grep predicate still catches both branches
+  (`condition=0`, `condition=1`, …, `condition=no_match`). The
+  earlier value (`undefined`) came from #37, chosen for JS-native
+  symmetry; the reporter of #54 read the log and could not tell that
+  it meant "no branch matched, fell through to `next:`" — the
+  snake_case rename brings the value in line with the rest of
+  Ruuter's log-attr casing (`terminated_by=end_of_steps`,
+  `dsl.steps_ran`, …) and reads unambiguously without JS knowledge.
+  Dashboards / alerts filtering on the literal string
+  `condition=undefined` need updating. Chosen path continues to
+  appear in the `→ <next-step>` positional column on every switch
+  line.
+
 ## [0.9.8-rc] - 2026-09-02
 
 Ships PR #51 (issue #52) end-to-end: targeted WebSocket fan-out
