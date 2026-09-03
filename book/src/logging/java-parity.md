@@ -37,7 +37,7 @@ preserved by name and semantics in Ruuter-on-Rust:
 
 Additional Rust-side knobs with no Java equivalent:
 
-- `logging.format: text|json`
+- `logging.format: text|pretty|json` — `pretty` adds ANSI colours + Unicode markers for interactive local dev; see [Formats](formats.md).
 - `logging.access_log`
 - `logging.log_step_executions` — INFO-level per-step trail
   (Java parity for `LoggingUtils.logStep()`, on by default).

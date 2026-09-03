@@ -100,7 +100,7 @@ dsl:
                                           # run permissive. See dsl/steps/declaration.md.
 
 logging:                                  # full ref: logging/index.md
-  format:                    text         # or `json`. Env: RUUTER_LOG_FORMAT
+  format:                    text         # `text` | `pretty` (ANSI colours + Unicode markers, local dev) | `json`. Env: RUUTER_LOG_FORMAT
   access_log:                true         # one INFO per completed request
   step_timing:               false        # DEBUG line per DSL step
   display_request_content:   false        # DEBUG line with outbound request body
