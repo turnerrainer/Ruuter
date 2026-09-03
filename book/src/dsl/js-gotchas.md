@@ -31,8 +31,8 @@ name: "${incoming.body.name ?? 'anon'}"
 Bare references to an identifier that was never bound resolve to `undefined` (not `ReferenceError`), so template composition can pass optional bindings without every caller having to `assign:` a placeholder first:
 
 ```yaml
-tag:      "${platform?.id}"        # `platform` never bound → null
-audit:    "${caller_id ?? 'anon'}" # `caller_id` never bound → 'anon'
+tag:  "${platform?.id}"            # `platform` never bound → null
+opt:  "${platform}"                # bare read → null too
 ```
 
 The lenient behaviour applies only to *undeclared* identifiers. Dereferencing a *declared-but-null* value still throws (JS-spec `TypeError`), because that is a real DSL bug — the guard against it is exactly what `?.` is for:
@@ -41,6 +41,14 @@ The lenient behaviour applies only to *undeclared* identifiers. Dereferencing a 
 right: "${platform?.id}"           # safe under both undeclared and null-platform
 wrong: "${platform.id}"            # if platform === null → TypeError
 ```
+
+**Interaction with `??` and `||`.** These operators would normally give a fallback for a null/undefined LHS, but only after they've *read* the LHS. On an *undeclared* identifier the read itself is what used to throw, so the whole expression collapses to `undefined` (→ null) rather than reaching the fallback:
+
+```yaml
+audit: "${caller_id ?? 'anon'}"    # `caller_id` undeclared → null, NOT 'anon'
+```
+
+If you want the fallback, bind the identifier first with `assign:` (`caller_id: "${incoming.headers['x-caller-id']}"`) and then use `??` on the bound value, which may legitimately be null/undefined and *will* trigger the fallback.
 
 ## Nullish serialisation (issue #57)
 
