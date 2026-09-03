@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9-rc] - 2026-09-03
+
+Ships PR #59 (issue #57) and PR #58 (issue #54): undeclared
+identifiers in `${…}` now evaluate to `undefined` (making template
+composition tractable), `null`/`undefined` no longer surface as the
+literal string `"null"` in headers/query params/mixed-string
+interpolation, and the switch no-match log field renamed
+`condition=undefined` → `condition=no_match`. Doc-only PR #55
+brought three stale pages in line with `logging.format: pretty`
+along the way.
+
 ### Fixed
 
 - **#57 — Undeclared identifiers in `${…}` no longer fail the DSL;
