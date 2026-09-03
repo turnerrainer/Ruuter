@@ -52,9 +52,15 @@ pub async fn request_over_unix(
             .into(),
         None => Bytes::new(),
     };
+    // Issue #57 — drop null-valued headers so template composition
+    // over UDS matches the TCP path (`http_client/mod.rs`) and
+    // response headers (`return_step.rs`). HTTP has no null-valued
+    // header; a DSL that assigns `${maybe_absent}` to a header means
+    // "don't send it if there's no value."
     let hdr_owned: Vec<(String, String)> = headers
         .map(|h| {
             h.iter()
+                .filter(|(_, v)| !matches!(v, Value::Null))
                 .map(|(k, v)| {
                     let s = match v {
                         Value::String(s) => s.clone(),

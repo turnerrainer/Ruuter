@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **#57 — Undeclared identifiers in `${…}` no longer fail the DSL;
+  `null` / `undefined` no longer surface as literal `"null"` on the
+  wire.** Two independent surprises reported in the same issue,
+  fixed together. **First**, `${platform?.id}` where `platform` was
+  never bound used to throw `ReferenceError: platform is not defined`
+  and 500 the request — even though `?.` is exactly the syntax JS
+  provides for "safe read of a possibly-missing thing." Composition
+  of DSL templates (a caller passes a subset of the fields the
+  callee might consult) was effectively impossible. Both scripting
+  backends (Boa default, QuickJS optional) now wrap each `${…}` in
+  a try/catch that swallows *only* `ReferenceError` — undeclared
+  identifiers evaluate to `undefined` (→ JSON `null`), while
+  TypeError from `foo.bar` on a declared-but-null `foo` still
+  surfaces, because that is a real DSL bug and `?.` is the tool for
+  it. **Second**, deep-dive-hunted the six sibling sites where a
+  script-evaluated `Value::Null` was rendered as the string
+  `"null"`: response headers (`return` step), outbound TCP request
+  headers + query params (`http_client/mod.rs`), outbound UDS
+  headers (`uds.rs`, `uds_pool.rs`), mixed-string interpolation
+  (both engines). All now drop the header/param entirely (HTTP has
+  no null-valued header) or interpolate as empty (`"hi ${absent}"`
+  → `"hi "`, not `"hi null"`). Body semantics unchanged and
+  already spec-compliant per `undefined_in_object.rs`: `undefined`
+  drops from object properties, both become JSON `null` in array
+  slots. Regression suite: `tests/undefined_identifier_57.rs`
+  (9 tests, engine contract + end-to-end). Two prior tests
+  (`error_response_details`, `single_flight_step`) that used
+  undeclared identifiers to *trigger* a JS error switched to
+  `${(null).some_field}` — the diagnostic contracts they cover are
+  unchanged.
+
 ### Changed
 
 - **#54 — Switch no-match log value renamed `undefined` → `no_match`.**

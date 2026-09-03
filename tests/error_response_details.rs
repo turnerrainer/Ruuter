@@ -79,10 +79,15 @@ async fn js_expression_failure_names_the_step_and_project() {
     write_dsl(
         tmp.path(),
         "myproject/GET/oops.yml",
-        // undefined.field triggers TypeError: cannot read properties of null/undefined
+        // TypeError: cannot read properties of null. Historically this
+        // test used an undeclared identifier (`undefined_var.some_field`),
+        // but #57 made undeclared identifiers evaluate to `undefined`
+        // rather than throw ReferenceError — so triggering a diagnostic
+        // now needs a real type-error (deref on a declared-but-null
+        // value). Same diagnostic-surface contract from #28 still holds.
         r#"
 respond:
-  return: "${undefined_var.some_field}"
+  return: "${(null).some_field}"
   status: 200
 "#,
     );
@@ -120,10 +125,12 @@ async fn js_expression_failure_includes_step_type() {
     write_dsl(
         tmp.path(),
         "svc/GET/broken.yml",
+        // TypeError trigger — see the sibling test above for why an
+        // undeclared identifier no longer works post-#57.
         r#"
 compute:
   assign:
-    x: "${undefined_thing.nested}"
+    x: "${(null).nested}"
 respond:
   return: "ok"
   status: 200

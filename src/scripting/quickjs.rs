@@ -200,6 +200,9 @@ fn evaluate_string<'js>(
                 let coerced = maybe_suppress_optional_null(v, inner)?;
                 match coerced {
                     Value::String(s2) => out.push_str(&s2),
+                    // Issue #57 — parity with Boa: `null` / `undefined`
+                    // interpolate as empty, not literal "null".
+                    Value::Null => {}
                     other => out.push_str(&other.to_string()),
                 }
             }
@@ -259,9 +262,16 @@ fn execute_js<'js>(
                 // Combined define+invoke — single eval, no
                 // double-parse. The parenthesised assignment
                 // returns the freshly-defined function; `.call`
-                // invokes it with `this === globalThis`.
+                // invokes it with `this === globalThis`. Issue #57 —
+                // the try/catch swallows ReferenceError so
+                // `${platform?.id}` where `platform` is undeclared
+                // evaluates to `undefined` (→ `null` at the JSON
+                // boundary), enabling template composition without
+                // requiring every DSL to pre-assign every optional
+                // binding. TypeError still bubbles up (`foo.bar` on
+                // a declared-but-null `foo` is a real DSL bug).
                 format!(
-                    "(globalThis.__fn_{} = function(){{ return ({}); }}).call(globalThis)",
+                    "(globalThis.__fn_{} = function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
                     id, script
                 )
             };
@@ -275,7 +285,12 @@ fn execute_js<'js>(
         }
         None => {
             // Not registered — synthesised script. Compile inline.
-            let wrapped = format!("(function(){{ return ({}); }}).call(globalThis)", script);
+            // Same ReferenceError → undefined semantics as the
+            // registered path so behaviour is uniform.
+            let wrapped = format!(
+                "(function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
+                script
+            );
             ctx.eval(wrapped.as_bytes())
                 .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
         }

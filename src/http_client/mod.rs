@@ -478,6 +478,13 @@ impl HttpClient {
 
         if let Some(q) = query {
             for (k, v) in q {
+                // Issue #57 — a `null`/`undefined` query value drops
+                // the parameter, matching the header path and JS
+                // spec (no `?foo=null` on the wire for a missing
+                // binding — the caller wanted "no value").
+                if matches!(v, Value::Null) {
+                    continue;
+                }
                 let s = match v {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
@@ -488,6 +495,13 @@ impl HttpClient {
 
         if let Some(h) = headers {
             for (k, v) in h {
+                // Issue #57 — drop null-valued headers instead of
+                // emitting `X-Foo: null`; HTTP has no null-valued
+                // header and template composition often produces
+                // `${maybe_absent}` bindings.
+                if matches!(v, Value::Null) {
+                    continue;
+                }
                 let s = match v {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),

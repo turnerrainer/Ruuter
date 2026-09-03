@@ -116,6 +116,15 @@ impl StepExecutor for ReturnStepExecutor {
                 // array values resolves against context.
                 let evaluated = self.script_engine.evaluate(&v, context)?;
 
+                // Issue #57 — a `${…}` header value that evaluates to
+                // `null` / `undefined` drops the header entirely
+                // instead of emitting `X-Foo: null`. HTTP has no
+                // null-valued header, and template composition often
+                // produces `${maybe_absent}` bindings.
+                if matches!(evaluated, Value::Null) {
+                    continue;
+                }
+
                 let header_value = if k.eq_ignore_ascii_case(SET_COOKIE_HEADER) {
                     render_set_cookie(&evaluated)
                 } else {

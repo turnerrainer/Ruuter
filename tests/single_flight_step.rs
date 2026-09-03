@@ -381,10 +381,14 @@ async fn no_result_var_body_still_coalesces_and_responds() {
 
 // ── Error propagation ────────────────────────────────────────────
 
-/// DSL whose body always fails — via a `state.get` that succeeds,
-/// then a script expression that references an undefined identifier
-/// to force a ScriptEngine error. Followers must see the error, not
-/// hang forever.
+/// DSL whose body always fails — a TypeError from a null-deref.
+/// Followers must see the error, not hang forever.
+///
+/// Historically this test triggered the failure via an undeclared
+/// identifier (`nonexistent_var.deeper.deeper`), but #57 made
+/// undeclared identifiers evaluate to `undefined` instead of throwing
+/// ReferenceError. `(null).deeper.deeper` still throws (TypeError),
+/// preserving the error-propagation contract this test asserts.
 const FAILING_DSL: &str = r#"
 lead:
   single_flight:
@@ -392,7 +396,7 @@ lead:
     ttl_ms: 2000
     do:
       - assign:
-          x: "${nonexistent_var.deeper.deeper}"
+          x: "${(null).deeper.deeper}"
     result: x
   next: respond
 
