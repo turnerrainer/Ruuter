@@ -5,8 +5,8 @@
 //! `scripting-boa` feature is enabled (default).
 
 use super::{
-    bump_context_created, find_script_segments, has_expressions, ScriptLimits, DEFAULT_LIMITS,
-    LINE_PATTERN,
+    bump_context_created, extract_undeclared_identifier, find_script_segments, has_expressions,
+    ScriptLimits, DEFAULT_LIMITS, LINE_PATTERN, MAX_UNDECLARED_RETRIES,
 };
 use crate::context::ExecutionContext;
 use crate::{Result, RuuterError};
@@ -172,28 +172,59 @@ fn maybe_suppress_optional_null(v: Value, expr: &str) -> Result<Value> {
 }
 
 fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
-    // Issue #57 — a `${platform?.id}` where `platform` was never
-    // declared should evaluate to `undefined` (→ `Value::Null` at the
-    // JSON boundary), not throw ReferenceError. This makes template
-    // composition tractable: a caller can reference optional bindings
-    // without every DSL author having to `assign` a placeholder first.
+    // Issue #57 — `${platform?.id}` where `platform` is undeclared
+    // should evaluate to `undefined`, not throw ReferenceError, so
+    // template composition works without every DSL pre-assigning
+    // every optional binding.
     //
-    // The wrap swallows only `ReferenceError`, so TypeError from
-    // `foo.bar` where `foo` IS declared but is `null`/`undefined`
-    // still surfaces — that's a real bug in the DSL, not a missing
-    // binding. `.call(globalThis)` keeps `this === globalThis` inside
-    // the script body, matching QuickJS and Ruuter's audit finding 16
-    // contract that `${this['foo-bar']}` reads work.
+    // Issue #62 — the earlier fix wrapped the whole expression in a
+    // try/catch that swallowed ReferenceError and returned undefined
+    // for the WHOLE expression. That broke `?.` and `??`:
+    // `${missing_var?.blah ?? '123'}` returned undefined (JSON null)
+    // instead of `'123'`, because catching at the outermost layer
+    // meant `??` never got a chance to see `undefined?.blah` and
+    // pick the fallback.
+    //
+    // Fix: retry-with-declaration. Evaluate the raw expression; if
+    // Boa throws ReferenceError (`X is not defined`), declare
+    // `globalThis[X] = undefined` and retry. Now the retry evaluates
+    // `undefined?.blah ?? '123'` naturally — `?.` shorts to
+    // undefined, `??` picks `'123'`. Bounded by MAX_UNDECLARED_RETRIES
+    // so a legitimately broken expression can't loop forever.
+    //
+    // TypeError from `foo.bar` where `foo` IS declared but is null/
+    // undefined still surfaces — that's a real DSL bug.
+    // `.call(globalThis)` preserves `this === globalThis` inside the
+    // expression body (audit finding 16 contract for
+    // `${this['foo-bar']}` reads).
     let wrapped = format!(
-        "(function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
+        "(function(){{ return ({}); }}).call(globalThis)",
         script
     );
-    let source = Source::from_bytes(wrapped.as_bytes());
-    let result = boa
-        .eval(source)
-        .map_err(|e| RuuterError::ScriptEvaluation(e.to_string()))?;
-    js_value_to_json(&result, boa)
+    let wrapped_bytes = wrapped.as_bytes();
+
+    for _ in 0..=MAX_UNDECLARED_RETRIES {
+        let source = Source::from_bytes(wrapped_bytes);
+        match boa.eval(source) {
+            Ok(result) => return js_value_to_json(&result, boa),
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some(ident) = extract_undeclared_identifier(&msg) {
+                    let decl = format!("globalThis[{}] = undefined;", js_string_literal(&ident));
+                    boa.eval(Source::from_bytes(decl.as_bytes()))
+                        .map_err(|de| RuuterError::ScriptEvaluation(de.to_string()))?;
+                    continue;
+                }
+                return Err(RuuterError::ScriptEvaluation(msg));
+            }
+        }
+    }
+    Err(RuuterError::ScriptEvaluation(format!(
+        "expression exceeded undeclared-identifier retry cap ({}): {}",
+        MAX_UNDECLARED_RETRIES, script
+    )))
 }
+
 
 fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()> {
     let mut incoming = HashMap::new();

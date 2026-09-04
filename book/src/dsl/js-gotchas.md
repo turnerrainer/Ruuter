@@ -42,13 +42,14 @@ right: "${platform?.id}"           # safe under both undeclared and null-platfor
 wrong: "${platform.id}"            # if platform === null → TypeError
 ```
 
-**Interaction with `??` and `||`.** These operators would normally give a fallback for a null/undefined LHS, but only after they've *read* the LHS. On an *undeclared* identifier the read itself is what used to throw, so the whole expression collapses to `undefined` (→ null) rather than reaching the fallback:
+**Interaction with `??` and `||`.** As of issue #62 these fire correctly on undeclared identifiers — the retry-with-declaration pass treats the undeclared identifier as `undefined` *within* the expression, so `?.` and `??` evaluate under standard JS semantics:
 
 ```yaml
-audit: "${caller_id ?? 'anon'}"    # `caller_id` undeclared → null, NOT 'anon'
+audit: "${caller_id ?? 'anon'}"         # `caller_id` undeclared → 'anon'
+tag:   "${missing?.blah ?? 'default'}"  # optional chain + fallback → 'default'
 ```
 
-If you want the fallback, bind the identifier first with `assign:` (`caller_id: "${incoming.headers['x-caller-id']}"`) and then use `??` on the bound value, which may legitimately be null/undefined and *will* trigger the fallback.
+No need to `assign:` a placeholder first. If the LHS resolves to a non-nullish value (including `0`, `false`, `""`), `??` returns it unchanged — that's the JS-spec distinction between `??` (nullish only) and `||` (all falsy).
 
 ## Nullish serialisation (issue #57)
 

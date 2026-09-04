@@ -178,6 +178,96 @@ pub fn install_default_limits(limits: ScriptLimits) {
     let _ = DEFAULT_LIMITS.set(limits);
 }
 
+// ── Issue #62 — ReferenceError → declare-and-retry ──────────────
+
+/// Cap on retry-with-declaration attempts per expression. Bounds
+/// pathological inputs (many undeclared identifiers in one expression)
+/// so we can't loop unbounded. Real DSL expressions rarely exceed 2–3
+/// undeclared identifiers; short-circuit operators (`&&`, `||`, `??`,
+/// `?.`) mean unreachable branches never trigger a retry.
+pub(crate) const MAX_UNDECLARED_RETRIES: usize = 16;
+
+/// Extract the identifier name from a JS-engine ReferenceError
+/// message. Boa and rquickjs both emit human-readable messages that
+/// carry the offending name; we match the common shapes so a single
+/// helper covers both backends. Returns `None` if the message isn't
+/// a ReferenceError (or doesn't match a shape we recognise), so
+/// non-reference errors (TypeError, SyntaxError, runtime limits) fall
+/// through to the caller unmodified.
+pub(crate) fn extract_undeclared_identifier(msg: &str) -> Option<String> {
+    // Guard: only ReferenceError-flavoured messages are candidates.
+    // Both engines emit the word "reference" (case-insensitive) in
+    // their ReferenceError text; other error types don't.
+    if !msg.to_ascii_lowercase().contains("reference") {
+        return None;
+    }
+    static PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+        vec![
+            // Boa: "ReferenceError: X is not defined"
+            // QuickJS: "ReferenceError: 'X' is not defined"
+            //          "ReferenceError: X is not defined"
+            Regex::new(r#"['"`]?([A-Za-z_$][A-Za-z0-9_$]*)['"`]? is not defined"#).unwrap(),
+            // "identifier 'X' does not exist" (older Boa)
+            Regex::new(r#"identifier ['"`]?([A-Za-z_$][A-Za-z0-9_$]*)['"`]?"#).unwrap(),
+            // "missing binding for X"
+            Regex::new(r"missing binding for ([A-Za-z_$][A-Za-z0-9_$]*)").unwrap(),
+        ]
+    });
+    for pattern in PATTERNS.iter() {
+        if let Some(caps) = pattern.captures(msg) {
+            if let Some(m) = caps.get(1) {
+                return Some(m.as_str().to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod extract_ident_tests {
+    use super::extract_undeclared_identifier as extract;
+
+    #[test]
+    fn matches_boa_is_not_defined() {
+        assert_eq!(
+            extract("ReferenceError: platform is not defined").as_deref(),
+            Some("platform")
+        );
+    }
+
+    #[test]
+    fn matches_quickjs_quoted_is_not_defined() {
+        assert_eq!(
+            extract("ReferenceError: 'missing_var' is not defined").as_deref(),
+            Some("missing_var")
+        );
+    }
+
+    #[test]
+    fn matches_identifier_form() {
+        assert_eq!(
+            extract("ReferenceError: identifier `foo` does not exist").as_deref(),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn ignores_non_reference_errors() {
+        // A TypeError or SyntaxError must NOT trip the retry loop —
+        // that would mask real bugs by declaring random identifiers.
+        assert_eq!(extract("TypeError: null has no properties"), None);
+        assert_eq!(extract("SyntaxError: unexpected token"), None);
+    }
+
+    #[test]
+    fn identifier_with_dollar_and_underscore_ok() {
+        assert_eq!(
+            extract("ReferenceError: $_hidden is not defined").as_deref(),
+            Some("$_hidden")
+        );
+    }
+}
+
 // ── Task 045 — pre-parsed expression registry ────────────────────
 
 pub mod registry;
