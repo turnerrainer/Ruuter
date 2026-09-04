@@ -139,8 +139,8 @@ bad:
     );
     let err = try_load(tmp.path()).unwrap_err();
     assert!(
-        err.contains("multiple action keys"),
-        "expected multi-action rejection, got: {err}"
+        err.contains("declares 2 actions in one step"),
+        "expected multi-action rejection with count, got: {err}"
     );
     assert!(err.contains("call") && err.contains("log"), "error must name BOTH offending keys, got: {err}");
 }
@@ -162,8 +162,8 @@ bad:
     );
     let err = try_load(tmp.path()).unwrap_err();
     assert!(
-        err.contains("multiple action keys"),
-        "expected multi-action rejection, got: {err}"
+        err.contains("declares 2 actions in one step"),
+        "expected multi-action rejection with count, got: {err}"
     );
     assert!(err.contains("assign") && err.contains("switch"), "error must name BOTH offending keys, got: {err}");
 }

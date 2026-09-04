@@ -124,12 +124,16 @@ impl DslParser {
             .filter(|k| key_present(k))
             .collect();
         if present.len() > 1 {
+            let quoted: Vec<String> = present.iter().map(|k| format!("`{}:`", k)).collect();
             return Err(RuuterError::DslParse(format!(
-                "step '{}': multiple action keys present ({}). Each step \
-                 must contain exactly one action — split into separate \
-                 steps and chain them with `next:`.",
+                "step '{}' declares {} actions in one step ({}). \
+                 A DSL step must declare exactly one action \
+                 (`call:`, `assign:`, `switch:`, `log:`, `template:`, `state:`, \
+                 `iterate:`, `return:`, `ws_send:`, `ws_tag:`, or `single_flight:`). \
+                 Move each action into its own named step and chain them with `next:`.",
                 name,
-                present.join(", ")
+                present.len(),
+                quoted.join(" and ")
             )));
         }
 
