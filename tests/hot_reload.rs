@@ -204,17 +204,15 @@ async fn publish_dsls_rebuilds_openapi_cache() {
     let loaded = loader.load_everything().unwrap();
     router.publish_dsls(loaded.http, loaded.guards);
 
-    // Fetch /_/openapi.json and confirm the new path is in it
+    // Fetch /_/openapi.json and confirm the new path is in it.
+    // h2ck.me M1 — endpoint lives on `admin_router()` post-fix
+    // (route enumeration is no longer public-by-default).
     let req = Request::builder()
         .method("GET")
         .uri("/_/openapi.json")
         .body(Body::empty())
         .unwrap();
-    let resp = router
-        .build_axum_router_from_arc()
-        .oneshot(req)
-        .await
-        .unwrap();
+    let resp = router.admin_router().oneshot(req).await.unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body = String::from_utf8_lossy(&bytes);

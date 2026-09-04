@@ -47,6 +47,23 @@ async fn main() {
     // no-op at runtime for fields the framework doesn't wire yet.
     ruuter_on_rust::config::warn_on_stale_config_fields(&config);
 
+    // h2ck.me M2 — flag `RUUTER_HTTP_REWRITE` in release builds. The
+    // env var is documented as test-only but the code path is
+    // compiled into the release binary; a stray setting in prod
+    // silently disables SSRF for the rewritten origin. Warn loudly
+    // so a misconfiguration shows up in the same log stream as
+    // "Loaded config from …" and hooks operators before the first
+    // outbound request fires.
+    if ruuter_on_rust::http_client::rewrite_env_is_active_in_release() {
+        tracing::warn!(
+            env = ruuter_on_rust::http_client::RUUTER_HTTP_REWRITE_ENV,
+            "RUUTER_HTTP_REWRITE is set in a release build — every outbound URL \
+             whose origin matches a `from` prefix is silently rewritten BEFORE \
+             SSRF checks (allowlists, block_private_networks). Intended for \
+             test harnesses only. Unset it in production."
+        );
+    }
+
     // Install script-engine limits before any ScriptEngine::new() runs.
     scripting::install_default_limits(ScriptLimits {
         max_loop_iterations: config.scripting.max_loop_iterations,
@@ -160,6 +177,11 @@ async fn main() {
         // hot-reload publish on the router would leave the engine's
         // template-lookup handle pointing at the stale tree.
         .with_dsls_shared(shared_http_dsls.clone())
+        // h2ck.me H1 — share the guards ArcSwap with the engine so
+        // the `template:` step enforces the same guard chain the
+        // HTTP entry path runs. Skipping this would leave a public
+        // DSL free to template into a guarded admin route.
+        .with_guards(shared_guards.clone(), config.guards.mode)
         .with_expr_registry(expr_registry)
         .with_logging(logging_arc.clone());
     if let Some(n) = config.max_step_recursions {

@@ -3,9 +3,9 @@
 //! so DSL semantics are identical regardless of where the request /
 //! event originated.
 
-use crate::config::LoggingConfig;
+use crate::config::{GuardMode, LoggingConfig};
 use crate::context::ExecutionContext;
-use crate::dsl::loader::{HttpDsls, SharedHttpDsls};
+use crate::dsl::loader::{HttpDsls, SharedGuards, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
 use crate::logging::{duration_ms, error_chain};
@@ -80,6 +80,17 @@ pub struct StepEngine {
     /// or the redact lists is a config-file change + process restart,
     /// not a per-clone runtime decision.
     logging: Arc<LoggingConfig>,
+    /// h2ck.me H1 — atomically-swappable handle to the loaded guard
+    /// tree, used by the `template:` step to enforce access control
+    /// on the target DSL before dispatching. `None` = no guard
+    /// enforcement (backward-compat for callers that don't wire the
+    /// handle; also the shape the engine had pre-fix). When
+    /// populated, the template step invokes every applicable guard
+    /// for the callee's `<METHOD>/<path>` key before running the
+    /// callee body — closing the "public DSL templates into guarded
+    /// admin route" bypass path.
+    guards: Option<SharedGuards>,
+    guards_mode: GuardMode,
 }
 
 #[derive(Debug)]
@@ -113,7 +124,43 @@ impl StepEngine {
             reload_handler: Arc::new(once_cell::sync::OnceCell::new()),
             default_exception_dsl: None,
             logging: Arc::new(LoggingConfig::default()),
+            guards: None,
+            guards_mode: GuardMode::default(),
         }
+    }
+
+    /// h2ck.me H1 — install the shared guard tree + mode so the
+    /// `template:` step enforces the same access control on
+    /// template-invoked DSLs that the HTTP entry path enforces.
+    /// Called from `main.rs` after the guards `ArcSwap` is built.
+    pub fn with_guards(mut self, guards: SharedGuards, mode: GuardMode) -> Self {
+        self.guards = Some(guards);
+        self.guards_mode = mode;
+        self
+    }
+
+    /// Return the list of guard DSLs that gate `(project, dsl_key)`,
+    /// outermost first, using the same helper `DslRouter` uses on
+    /// the HTTP path (`guard_audit::guard_keys_for_dsl`) so semantics
+    /// stay consistent across surfaces. Empty when no guard tree is
+    /// wired or nothing applies.
+    pub fn applicable_guards_for(&self, project: &str, dsl_key: &str) -> Vec<Dsl> {
+        let Some(handle) = self.guards.as_ref() else {
+            return Vec::new();
+        };
+        let snapshot = handle.load();
+        let keys = crate::dsl::guard_audit::guard_keys_for_dsl(
+            project,
+            dsl_key,
+            &snapshot,
+            self.guards_mode,
+        );
+        let Some(project_guards) = snapshot.get(project) else {
+            return Vec::new();
+        };
+        keys.into_iter()
+            .filter_map(|k| project_guards.get(&k).cloned())
+            .collect()
     }
 
     /// Attach the framework-wide logging config so this engine (and

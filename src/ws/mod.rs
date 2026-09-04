@@ -4,12 +4,14 @@
 //! connections) register against.
 //!
 //! Every writable WS connection is owned by a single writer task that
-//! drains an `mpsc::UnboundedReceiver<Value>` and serializes each
-//! `Value` as a `Text` frame on its socket. The matching
-//! `UnboundedSender<Value>` is held in this registry keyed by an
+//! drains a bounded `mpsc::Receiver<Outbound>` and serializes each
+//! `Outbound::Json` as a `Text` frame on its socket. The matching
+//! `mpsc::Sender<Outbound>` is held in this registry keyed by an
 //! arbitrary connection id (string). A DSL invokes
 //! `ws_send: { to: "<id>", payload: ... }` and the registry forwards
-//! the payload to the right writer.
+//! the payload to the right writer. Bounded (v0.9.11 / h2ck.me M3):
+//! a slow reader on one connection cannot grow the process's memory
+//! without limit through a `broadcast_where` fan-out.
 //!
 //! Connection id convention (Ruuter does not enforce it; just a
 //! suggested namespace pattern):
@@ -48,11 +50,35 @@ pub enum Outbound {
     Json(Value),
 }
 
+/// Alias for the bounded sender type carried in the registry.
+/// v0.9.11 (h2ck.me M3): every WS writer channel is bounded so a
+/// slow / dead reader combined with a `broadcast_where` fan-out
+/// cannot grow the sender queue without limit. `send`s that hit a
+/// full queue surface as `WouldBlock` (unicast) or a delivery skip
+/// (broadcast, counted separately), matching HTTP's own back-pressure
+/// contract instead of hiding memory growth behind an unbounded
+/// tokio channel.
+pub type OutboundSender = mpsc::Sender<Outbound>;
+
+/// Default per-connection outbound queue capacity. Large enough to
+/// absorb a normal burst (per-frame reply + a handful of broadcast
+/// fan-outs) without blocking; small enough that a genuinely stuck
+/// reader is surfaced within a few frames instead of at OOM.
+pub const DEFAULT_OUTBOUND_QUEUE_CAPACITY: usize = 256;
+
+/// Helper for the axum WS upgrade path (router) and the WS source
+/// runner. Both need `(Sender, Receiver)` with the same bound; test
+/// callers reach for it too so they don't have to re-derive the
+/// capacity contract.
+pub fn bounded_sender(capacity: usize) -> (OutboundSender, mpsc::Receiver<Outbound>) {
+    mpsc::channel::<Outbound>(capacity)
+}
+
 /// One registered connection: its writer channel plus the mutable
 /// tag map a DSL stamps on it via `ws_tag`.
 #[derive(Debug)]
 struct Connection {
-    tx: mpsc::UnboundedSender<Outbound>,
+    tx: OutboundSender,
     tags: DashMap<String, String>,
 }
 
@@ -68,7 +94,7 @@ impl WsRegistry {
         }
     }
 
-    pub fn register(&self, id: ConnectionId, sender: mpsc::UnboundedSender<Outbound>) {
+    pub fn register(&self, id: ConnectionId, sender: OutboundSender) {
         self.inner.insert(
             id,
             Connection {
@@ -86,21 +112,47 @@ impl WsRegistry {
         let entry = self.inner.get(id).ok_or_else(|| {
             RuuterError::InvalidStep(format!("ws_send: no such connection '{}'", id))
         })?;
-        entry.tx.send(Outbound::Json(payload)).map_err(|e| {
-            RuuterError::InvalidStep(format!("ws_send: writer dropped for '{}': {}", id, e))
-        })?;
+        // h2ck.me M3 — bounded channel semantics. `try_send` returns
+        // `TrySendError::Full` when the peer's outbound queue is at
+        // capacity (slow reader); the DSL author sees a concrete
+        // error naming the connection instead of the framework
+        // buffering unbounded and eventually OOM-ing the process.
+        // `Closed` (writer task dropped) surfaces the same way it
+        // did under the unbounded API.
+        entry
+            .tx
+            .try_send(Outbound::Json(payload))
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => RuuterError::InvalidStep(format!(
+                    "ws_send: outbound queue full for '{}' (slow reader?)",
+                    id
+                )),
+                mpsc::error::TrySendError::Closed(_) => RuuterError::InvalidStep(format!(
+                    "ws_send: writer dropped for '{}'",
+                    id
+                )),
+            })?;
         Ok(())
     }
 
     /// Broadcast to every connection whose id satisfies `pred`. Returns
-    /// the number of connections that accepted the message.
+    /// the number of connections that accepted the message. Callers on
+    /// a full queue are counted as "not delivered" rather than dropping
+    /// the whole broadcast — a slow subscriber must not stall fan-out
+    /// to fast ones (h2ck.me M3).
     pub fn broadcast<F>(&self, pred: F, payload: Value) -> usize
     where
         F: Fn(&str) -> bool,
     {
         let mut delivered = 0;
         for entry in self.inner.iter() {
-            if pred(entry.key()) && entry.value().tx.send(Outbound::Json(payload.clone())).is_ok() {
+            if pred(entry.key())
+                && entry
+                    .value()
+                    .tx
+                    .try_send(Outbound::Json(payload.clone()))
+                    .is_ok()
+            {
                 delivered += 1;
             }
         }
@@ -110,7 +162,7 @@ impl WsRegistry {
     /// Broadcast to every connection whose `(id, tags)` satisfy `pred`.
     /// The tag map is snapshotted per connection so the predicate sees
     /// a stable view. Returns the number of connections that accepted
-    /// the message.
+    /// the message. Full queues are skipped (see `broadcast`).
     pub fn broadcast_where<F>(&self, pred: F, payload: Value) -> usize
     where
         F: Fn(&str, &HashMap<String, String>) -> bool,
@@ -124,7 +176,11 @@ impl WsRegistry {
                 .map(|t| (t.key().clone(), t.value().clone()))
                 .collect();
             if pred(entry.key(), &tags)
-                && entry.value().tx.send(Outbound::Json(payload.clone())).is_ok()
+                && entry
+                    .value()
+                    .tx
+                    .try_send(Outbound::Json(payload.clone()))
+                    .is_ok()
             {
                 delivered += 1;
             }
@@ -188,8 +244,8 @@ mod tests {
     #[test]
     fn set_tags_merges_and_broadcast_where_filters() {
         let reg = WsRegistry::new();
-        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
-        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        let (a_tx, mut a_rx) = mpsc::channel(16);
+        let (b_tx, mut b_rx) = mpsc::channel(16);
         reg.register("client:a".into(), a_tx);
         reg.register("client:b".into(), b_tx);
 
@@ -225,7 +281,7 @@ mod tests {
     #[test]
     fn tags_dropped_on_unregister() {
         let reg = WsRegistry::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         reg.register("client:a".into(), tx);
         reg.set_tags("client:a", [("k".to_string(), "v".to_string())])
             .unwrap();
@@ -236,8 +292,8 @@ mod tests {
     #[test]
     fn broadcast_where_equals_matches_whole_value_only() {
         let reg = WsRegistry::new();
-        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
-        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        let (a_tx, mut a_rx) = mpsc::channel(16);
+        let (b_tx, mut b_rx) = mpsc::channel(16);
         reg.register("client:a".into(), a_tx);
         reg.register("client:b".into(), b_tx);
         reg.set_tags("client:a", [("tenant".to_string(), "acme".to_string())])
@@ -261,9 +317,9 @@ mod tests {
         // different value, one has no such tag key at all. Only the
         // matching one receives.
         let reg = WsRegistry::new();
-        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
-        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
-        let (c_tx, mut c_rx) = mpsc::unbounded_channel();
+        let (a_tx, mut a_rx) = mpsc::channel(16);
+        let (b_tx, mut b_rx) = mpsc::channel(16);
+        let (c_tx, mut c_rx) = mpsc::channel(16);
         reg.register("client:a".into(), a_tx);
         reg.register("client:b".into(), b_tx);
         reg.register("client:c".into(), c_tx);
@@ -286,7 +342,7 @@ mod tests {
     #[test]
     fn broadcast_where_returns_zero_when_no_connections_match() {
         let reg = WsRegistry::new();
-        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        let (a_tx, mut a_rx) = mpsc::channel(16);
         reg.register("client:a".into(), a_tx);
         reg.set_tags("client:a", [("roles".to_string(), ",viewer,".to_string())])
             .unwrap();
@@ -302,7 +358,7 @@ mod tests {
     #[test]
     fn set_tags_second_call_overwrites_same_key() {
         let reg = WsRegistry::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         reg.register("client:a".into(), tx);
         reg.set_tags("client:a", [("roles".to_string(), "viewer".to_string())])
             .unwrap();

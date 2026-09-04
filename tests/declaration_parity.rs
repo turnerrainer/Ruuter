@@ -187,10 +187,14 @@ reply:
 "#,
     );
     let router = build_router(tmp.path());
+    // h2ck.me M1 — `/_/openapi.json` is now mounted on the admin
+    // router (behind `RUUTER_ADMIN_ENABLED` in production) instead
+    // of the public router. Tests reach it through `admin_router()`
+    // directly.
     let body = to_bytes(
         router
             .clone()
-            .build_axum_router_from_arc()
+            .admin_router()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -240,9 +244,11 @@ reply:
 "#,
     );
     let router = build_router(tmp.path());
+    // h2ck.me M1 — `/_/openapi.json` is admin-gated; test hits
+    // admin_router() directly.
     let body = to_bytes(
         router
-            .build_axum_router_from_arc()
+            .admin_router()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -289,9 +295,11 @@ reply:
 "#,
     );
     let router = build_router(tmp.path());
+    // h2ck.me M1 — `/_/openapi.json` is admin-gated; test hits
+    // admin_router() directly.
     let body = to_bytes(
         router
-            .build_axum_router_from_arc()
+            .admin_router()
             .oneshot(
                 Request::builder()
                     .method("GET")

@@ -1128,8 +1128,35 @@ impl HttpClient {
 /// Off by default (env var absent → no rewriting). Kept out of the
 /// `HttpClient` struct so no test-mode flag propagates into production
 /// config surfaces.
+/// Env-var name for [`rewrite_url_for_tests`] and [`rewrite_env_is_active_in_release`].
+pub const RUUTER_HTTP_REWRITE_ENV: &str = "RUUTER_HTTP_REWRITE";
+
+/// h2ck.me M2 — surface whether `RUUTER_HTTP_REWRITE` is set in a
+/// posture where it could silently disable SSRF checks. The rewrite
+/// runs BEFORE `check_ssrf`; in a debug build that's fine (tests
+/// legitimately need to redirect outbound URLs to a local mockito
+/// instance without punching a hole in the allowlist), but in a
+/// release build the same env var lets an operator misconfigure
+/// their way past every SSRF guard for the rewritten origin. Boot
+/// code calls this and emits a WARN so the misconfiguration shows
+/// up in the same log stream as "Loaded config from …".
+///
+/// Returns `true` only when the env var is set to a non-empty value
+/// AND the current build has `debug_assertions` disabled. Test
+/// binaries always run with `debug_assertions` on, so this returns
+/// `false` in the framework's own test suite regardless of value.
+pub fn rewrite_env_is_active_in_release() -> bool {
+    if cfg!(debug_assertions) {
+        return false;
+    }
+    std::env::var(RUUTER_HTTP_REWRITE_ENV)
+        .ok()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
 fn rewrite_url_for_tests(url: &str) -> Option<String> {
-    let raw = std::env::var("RUUTER_HTTP_REWRITE").ok()?;
+    let raw = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok()?;
     if raw.is_empty() {
         return None;
     }
