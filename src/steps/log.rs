@@ -20,9 +20,11 @@ impl LogStepExecutor {
 
 impl StepExecutor for LogStepExecutor {
     async fn execute(&self, context: &ExecutionContext) -> Result<StepResult> {
-        let message = self
-            .script_engine
-            .evaluate(&serde_json::Value::String(self.step.log.clone()), context)?;
+        // Issue #56 — `log:` accepts any Value (scalar/map/array).
+        // ScriptEngine::evaluate walks objects and arrays and
+        // interpolates `${…}` on string leaves, so a mapping-form
+        // log payload evaluates the same as an assign body.
+        let message = self.script_engine.evaluate(&self.step.log, context)?;
 
         // Attacker-controlled CR/LF stripped to prevent log-line
         // splicing before the message reaches any log sink.

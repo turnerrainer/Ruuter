@@ -488,3 +488,62 @@ reply:
         out
     );
 }
+
+/// Issue #56 — `log:` accepts a mapping. Every string leaf runs
+/// through the script engine (same as `assign:`) so `${…}` works
+/// under a nested map; the evaluated shape renders as compact JSON
+/// in the `attrs.msg` field.
+#[tokio::test(flavor = "current_thread")]
+async fn log_step_accepts_map_form() {
+    let buf = SharedBuf::new();
+    let _guard = capture(buf.clone());
+    let dsl = r#"
+prep:
+  assign:
+    who: "alice"
+  next: say
+
+say:
+  log:
+    user: "${who}"
+    action: "login"
+    count: 3
+  next: reply
+
+reply:
+  return: { ok: true }
+  next: end
+"#;
+    let router = build_router("svc", "GET", "log-map", dsl);
+    router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "log-map",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect("exec");
+
+    let out = buf.contents();
+    // Interpolated leaf value, literal leaf, and numeric leaf must
+    // all round-trip into the rendered JSON payload on `attrs.msg`.
+    assert!(
+        out.contains(r#""user":"alice""#),
+        "map-form log must interpolate string leaves: {}",
+        out
+    );
+    assert!(
+        out.contains(r#""action":"login""#),
+        "map-form log must preserve literal string leaves: {}",
+        out
+    );
+    assert!(
+        out.contains(r#""count":3"#),
+        "map-form log must preserve numeric leaves: {}",
+        out
+    );
+}

@@ -113,3 +113,100 @@ done:
     );
     try_load(tmp.path()).expect("bare next-only step must parse");
 }
+
+// Issue #56 — one action key per step, enforced at parse time.
+//
+// The parser used to dispatch by if-ladder priority (`call:` beats
+// `template:` beats `assign:` beats … beats `log:`) and let serde
+// silently drop every non-winning key. A DSL author who wrote
+// `log:` alongside `call:` in one step got the http call and had
+// their log message deleted from memory with no signal. Now every
+// such step is a hard load error naming both keys.
+
+#[tokio::test]
+async fn multi_action_log_plus_call_is_hard_load_error() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        tmp.path(),
+        "svc/GET/mix.yml",
+        r#"
+bad:
+  log: "before the call"
+  call: http.get
+  args:
+    url: "http://example.com"
+"#,
+    );
+    let err = try_load(tmp.path()).unwrap_err();
+    assert!(
+        err.contains("multiple action keys"),
+        "expected multi-action rejection, got: {err}"
+    );
+    assert!(err.contains("call") && err.contains("log"), "error must name BOTH offending keys, got: {err}");
+}
+
+#[tokio::test]
+async fn multi_action_assign_plus_switch_is_hard_load_error() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        tmp.path(),
+        "svc/GET/mix2.yml",
+        r#"
+bad:
+  assign:
+    x: 1
+  switch:
+    - condition: "true"
+      next: end
+"#,
+    );
+    let err = try_load(tmp.path()).unwrap_err();
+    assert!(
+        err.contains("multiple action keys"),
+        "expected multi-action rejection, got: {err}"
+    );
+    assert!(err.contains("assign") && err.contains("switch"), "error must name BOTH offending keys, got: {err}");
+}
+
+/// Regression guard: a step containing exactly ONE action key plus
+/// unrelated non-action keys (base fields like `next:`, `sleep:`,
+/// Declaration metadata like `description:`) still parses. The
+/// multi-discriminator check counts only action keys.
+#[tokio::test]
+async fn single_action_with_base_and_metadata_still_parses() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        tmp.path(),
+        "svc/GET/fine.yml",
+        r#"
+say:
+  log: "hi"
+  sleep: 0
+  next: end
+"#,
+    );
+    try_load(tmp.path()).expect("single-action step must still parse");
+}
+
+/// `call: declare` is the Java-parity way to opt into a Declaration
+/// step, and Declaration bodies legitimately carry many keys
+/// (`version:`, `description:`, `namespace:`, `allowlist:`, …).
+/// None of those are action keys, so the check does not fire.
+#[tokio::test]
+async fn declaration_via_call_declare_still_parses() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        tmp.path(),
+        "svc/GET/dec.yml",
+        r#"
+info:
+  call: declare
+  version: "1.0"
+  description: "hello"
+say:
+  return: "world"
+  status: 200
+"#,
+    );
+    try_load(tmp.path()).expect("call:declare with metadata must still parse");
+}
