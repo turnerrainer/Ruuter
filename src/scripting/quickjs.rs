@@ -38,8 +38,8 @@
 //! vs no-pool" yet.
 
 use super::{
-    bump_context_created, find_script_segments, has_expressions, ExpressionRegistry, ScriptLimits,
-    DEFAULT_LIMITS, LINE_PATTERN,
+    bump_context_created, extract_undeclared_identifier, find_script_segments, has_expressions,
+    ExpressionRegistry, ScriptLimits, DEFAULT_LIMITS, LINE_PATTERN, MAX_UNDECLARED_RETRIES,
 };
 use crate::context::{ExecutionContext, QuickJsSession};
 use crate::{Result, RuuterError};
@@ -239,63 +239,112 @@ fn execute_js<'js>(
     registry: &ExpressionRegistry,
     session: &QuickJsSession,
 ) -> Result<Value> {
-    // Task 045 — if this expression was registered at DSL load AND
-    // we've compiled it already in this session, invoke by id.
-    // If not yet compiled in this session, compile-and-invoke in
-    // one eval, then mark the flag. If not registered at all,
-    // fall back to per-eval compile (rare — only for scripts the
-    // engine synthesises internally).
-    let js_value: rquickjs::Value<'js> = match registry.id_for(script) {
-        Some(id) => {
-            let already = session
-                .compiled_flags
-                .get(id as usize)
-                .map(|f| f.load(Ordering::Acquire));
-            // Invoke via `.call(globalThis)` so `this` inside the
-            // script body is `globalThis` (matches Boa's top-level
-            // eval semantics). Plain `()` would leave `this` as
-            // `undefined` under QuickJS strict mode, breaking DSL
-            // authors' `${this['foo-bar']}` reads (audit finding 16).
-            let script_bytes = if already == Some(true) {
-                format!("__fn_{}.call(globalThis)", id)
-            } else {
-                // Combined define+invoke — single eval, no
-                // double-parse. The parenthesised assignment
-                // returns the freshly-defined function; `.call`
-                // invokes it with `this === globalThis`. Issue #57 —
-                // the try/catch swallows ReferenceError so
-                // `${platform?.id}` where `platform` is undeclared
-                // evaluates to `undefined` (→ `null` at the JSON
-                // boundary), enabling template composition without
-                // requiring every DSL to pre-assign every optional
-                // binding. TypeError still bubbles up (`foo.bar` on
-                // a declared-but-null `foo` is a real DSL bug).
-                format!(
-                    "(globalThis.__fn_{} = function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
-                    id, script
-                )
-            };
-            let val: rquickjs::Value<'js> = ctx
-                .eval(script_bytes.as_bytes())
-                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?;
+    // Issue #57 — undeclared identifiers evaluate to `undefined`, not
+    // ReferenceError. Issue #62 — that fix used to catch inside JS,
+    // returning undefined for the WHOLE expression, which broke `?.`
+    // and `??`. Now: retry-with-declaration in Rust. Boa/QuickJS
+    // throws ReferenceError → we declare `globalThis[X] = undefined`
+    // → retry. `${missing_var?.blah ?? '123'}` now works because on
+    // the retry `undefined?.blah ?? '123'` evaluates naturally to
+    // `'123'`. `.call(globalThis)` preserves `this === globalThis`
+    // inside the expression body (audit finding 16). TypeError
+    // (`null.foo` when `foo` IS declared) still surfaces — real DSL
+    // bug. Bounded by MAX_UNDECLARED_RETRIES.
+    //
+    // Task 045 registered-expression fast path is preserved: if the
+    // expression was registered at DSL load AND compiled in this
+    // session, invoke by id (no re-parse). The compiled function body
+    // is a bare `return (<expr>);` — no JS-level try/catch — so an
+    // undeclared identifier bubbles up as ReferenceError to Rust,
+    // and the retry re-invokes the same compiled function after
+    // declaring the identifier.
+    // Preserve task 045 registered-function fast path. The function
+    // body is a bare `return (<expr>);` — NO JS-level try/catch, so
+    // the invoke wrapper below can observe ReferenceError via its
+    // own try/catch and hand the message back to Rust.
+    if let Some(id) = registry.id_for(script) {
+        let already = session
+            .compiled_flags
+            .get(id as usize)
+            .map(|f| f.load(Ordering::Acquire));
+        if already != Some(true) {
+            let define = format!(
+                "globalThis.__fn_{} = function(){{ return ({}); }};",
+                id, script
+            );
+            ctx.eval::<(), _>(define.as_bytes())
+                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval (define): {}", e)))?;
             if let Some(flag) = session.compiled_flags.get(id as usize) {
                 flag.store(true, Ordering::Release);
             }
-            val
         }
-        None => {
-            // Not registered — synthesised script. Compile inline.
-            // Same ReferenceError → undefined semantics as the
-            // registered path so behaviour is uniform.
-            let wrapped = format!(
-                "(function(){{ try {{ return ({}); }} catch(e) {{ if (e instanceof ReferenceError) return undefined; throw e; }} }}).call(globalThis)",
-                script
-            );
-            ctx.eval(wrapped.as_bytes())
-                .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?
-        }
+    }
+
+    // Body-of-work executed inside the invoke wrapper. Registered
+    // expressions call the pre-compiled function; synthesised
+    // expressions inline the body. Either way the CALL happens
+    // inside the JS try/catch below.
+    let call_expr = match registry.id_for(script) {
+        Some(id) => format!("__fn_{}.call(globalThis)", id),
+        None => format!("(function(){{ return ({}); }}).call(globalThis)", script),
     };
-    js_value_to_json(js_value)
+
+    // JS-level wrapper: run the call inside try/catch. On success,
+    // return the value. On failure, return a shape Rust can inspect
+    // ({__err_name, __err_message}) so we don't have to fight
+    // rquickjs's error-inspection surface to recover the JS Error
+    // message. TypeError / SyntaxError / anything non-Reference get
+    // re-thrown into Rust as an error.
+    //
+    // For registered functions this wrapper is compiled per invoke —
+    // one extra parse per DSL step. Cheap compared to the retry loop
+    // below when a retry is genuinely needed.
+    let wrapper = format!(
+        "(function(){{ try {{ return {{__ok: true, v: ({}) }}; }} catch(e) {{ return {{__ok: false, name: (e && e.name) || '', message: (e && e.message) || String(e) }}; }} }}).call(globalThis)",
+        call_expr
+    );
+    let wrapper_bytes = wrapper.as_bytes();
+
+    for _ in 0..=MAX_UNDECLARED_RETRIES {
+        let val: rquickjs::Value<'js> = ctx
+            .eval(wrapper_bytes)
+            .map_err(|e| RuuterError::ScriptEvaluation(format!("qjs eval: {}", e)))?;
+
+        // Unpack the {__ok, v} / {__ok:false, name, message} shape.
+        let obj = val.as_object().cloned().ok_or_else(|| {
+            RuuterError::ScriptEvaluation(
+                "qjs eval: wrapper did not return an object (internal invariant)".into(),
+            )
+        })?;
+        let ok: bool = obj.get::<_, bool>("__ok").unwrap_or(false);
+        if ok {
+            let v: rquickjs::Value<'js> = obj.get::<_, rquickjs::Value>("v").map_err(|e| {
+                RuuterError::ScriptEvaluation(format!("qjs eval: could not read result: {}", e))
+            })?;
+            return js_value_to_json(v);
+        }
+        let name: String = obj.get("name").unwrap_or_default();
+        let message: String = obj.get("message").unwrap_or_default();
+        let full = format!("{}: {}", name, message);
+
+        // ReferenceError → declare identifier, retry. Anything else
+        // (TypeError, RangeError, SyntaxError, quota) propagates.
+        if name == "ReferenceError" {
+            if let Some(ident) = extract_undeclared_identifier(&full) {
+                let decl =
+                    format!("globalThis[{}] = undefined;", js_string_literal(&ident));
+                ctx.eval::<(), _>(decl.as_bytes()).map_err(|e| {
+                    RuuterError::ScriptEvaluation(format!("qjs eval (declare): {}", e))
+                })?;
+                continue;
+            }
+        }
+        return Err(RuuterError::ScriptEvaluation(format!("qjs eval: {}", full)));
+    }
+    Err(RuuterError::ScriptEvaluation(format!(
+        "expression exceeded undeclared-identifier retry cap ({}): {}",
+        MAX_UNDECLARED_RETRIES, script
+    )))
 }
 
 fn setup_bindings<'js>(ctx: &rquickjs::Ctx<'js>, context: &ExecutionContext) -> Result<()> {
