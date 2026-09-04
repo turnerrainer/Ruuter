@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.10-rc.1] - 2026-09-04
+
+Ships five DSL / scripting / HTTP-client bug fixes surfaced by
+@angryziber against v0.9.9-rc: PR #65 (issue #56), PR #66 (issue
+#64), PR #67 (issue #61), PR #68 (issue #62), PR #69 (issue #63).
+
+Two of the five change observable behaviour in ways that could
+affect existing DSLs — call out in ops notes:
+- **#56** rejects any step with more than one action key at DSL
+  load time. Deployments carrying previously-silently-mutated
+  multi-key steps (e.g. `log:` alongside `call:`) will now refuse
+  to boot with a clear error naming both keys. Fix or split.
+- **#63** binds an empty upstream response body as `""` instead of
+  `null`. DSLs that did `${result.response.body === null}` for
+  "empty response" checks will flip; `${result.response.body}` on
+  its own still reads falsy in both cases. Use
+  `${result.response.body.length === 0}` to lock down the intent.
+
+### Fixed
+
+- **#56 — `log:` accepts a map; multi-action-key steps rejected at
+  parse time.** Reporter's two asks in one ticket. First,
+  `LogStep.log` widened from `String` to `serde_json::Value` so a
+  DSL author can write `log: { user: "${who}", action: "login" }`
+  and have every string leaf run through the script engine the
+  same way `assign:` / `template.body:` / `http.args.body:`
+  already do. Second, the parser used to dispatch by if-ladder
+  priority (`call:` beats `template:` beats `assign:` beats …
+  beats `log:`) and let serde silently drop every non-winning key
+  — so a step with both `log:` and `call:` ran the HTTP call and
+  discarded the log message from memory with no signal. Now:
+  multi-action-key steps are a hard load-time error naming every
+  offending key with the exact YAML syntax the author wrote and
+  the full list of the 11 valid actions inline in the error. Both
+  bugs are load-time (boot / hot-reload), zero per-request cost;
+  well-formed DSLs unaffected. Docs: `book/src/dsl/steps/index.md`
+  (One action per step section), `book/src/dsl/steps/log.md` (Map
+  form section). Tests: `tests/audit_parser_dispatch.rs` (4 new
+  multi-discriminator cases), `tests/logging_step_executions.rs`
+  (`log_step_accepts_map_form`).
+
+- **#64 — `switch:` conditions match on JS-truthy, not strict
+  boolean.** `${requestId && poll}` returns the second operand
+  (JS short-circuit), not `true` — so under the previous strict-
+  boolean check (Java-parity `Boolean.TRUE.equals(...)`) the
+  branch would be skipped when both operands were truthy strings,
+  forcing DSL authors into `${!!requestId && !!poll}`. Now: the
+  executor uses an `is_truthy` helper mirroring ECMAScript §7.1.5
+  ToBoolean (`null` / `undefined` / `false` / `0` / `NaN` / `""`
+  are falsy, everything else including `[]` and `{}` is truthy).
+  Deliberate divergence from Java Ruuter — the expression language
+  IS JavaScript, so the switch semantics should agree with what
+  the surrounding language returns. Documented inline in
+  `book/src/dsl/steps/switch.md` and (internal)
+  `DIVERGENCES.md` D-40. Well-formed DSLs (`${age >= 18}`,
+  `${a === 'buy'}`) still evaluate to real boolean `true` and
+  are unaffected. Tests: `tests/switch_truthy_conditions.rs` (11
+  cases including reporter's exact header-driven flow), unit
+  tests in `src/steps/switch.rs::truthy_tests` (5), verified on
+  both Boa and QuickJS backends.
+
+- **#61 — `next:` to a non-existent step raises a runtime error
+  naming source + target.** Previously the engine silently broke
+  out of its execution loop when `next:` named a step not
+  declared in the DSL, returning an empty 200 to the caller.
+  Typos (`next: rply` instead of `next: reply`) and stale
+  references (a step renamed but not every caller updated)
+  surfaced as "empty response" mysteries in production. Now the
+  engine raises a `DslExecution` error at the jump site: *"step
+  '<source>' jumped to `next: <target>`, but no step named
+  '<target>' exists in this DSL. Fix the target name, add the
+  step, or use `next: end` to terminate."* Applies to every named
+  jump target — top-level `next:`, `switch` branch `next:`,
+  `http` `error:` fallback. The `next: end` reserved terminator
+  is untouched. Runtime check (not parse-time) — O(1) hash
+  lookup per jump, zero cost on the happy path. Tests:
+  `tests/next_target_not_found.rs` (8 cases including chained
+  jumps that must blame the immediate jumper, HTTP `error:`
+  branches via mockito, case-sensitivity, `next: end` regression).
+
+- **#62 — `??` and `?.` fire correctly on undeclared identifiers.**
+  Issue #57 taught the engine to treat undeclared identifiers as
+  `undefined` via a JS-level try/catch that returned undefined on
+  ReferenceError. That wrap caught the error at the OUTERMOST
+  layer, collapsing the whole expression to undefined and
+  preventing `??` and `?.` from ever seeing the undeclared
+  identifier as `undefined`: `${missing_var?.blah ?? '123'}`
+  returned `null` instead of `'123'`. Fixed by retry-with-
+  declaration in Rust: on ReferenceError, extract the identifier
+  name from the engine's error message, declare
+  `globalThis[X] = undefined`, retry. The retry then evaluates
+  `undefined?.blah ?? '123'` under standard JS semantics and
+  returns `'123'`. Bounded by `MAX_UNDECLARED_RETRIES = 16` so a
+  legitimately broken expression can't loop unbounded. Preserves
+  every #57 guarantee: bare undeclared → undefined; `?.` on
+  undeclared → null; TypeError on declared-but-null.foo still
+  surfaces (real DSL bug); mixed-string interpolation of null
+  still renders as empty. Both engines (Boa + QuickJS). For
+  QuickJS, task 045's registered-function fast path is preserved:
+  the compiled function body is a bare `return (<expr>);` and
+  the invoke wrapper catches in JS to hand `{__ok, v}` or
+  `{__ok:false, name, message}` back to Rust, avoiding a fight
+  with rquickjs's error-inspection surface. Docs:
+  `book/src/dsl/js-gotchas.md` (the earlier "`??` doesn't fire on
+  undeclared" caveat is now the "`??` DOES fire, no assign
+  needed" note). Tests: `tests/nullish_coalescing_62.rs` (15
+  cases across both engines: reporter's exact case, `||` vs `??`
+  distinction on 0, mixed-string interpolation, chained `??`,
+  retry cap ceiling, declared-undefined regression), unit tests
+  in `src/scripting/mod.rs::extract_ident_tests` (5).
+
+- **#63 — Empty upstream body binds as `""`; `Value::Null`
+  forwarded as plaintext body is empty on the wire.** Two
+  related bugs in one ticket. First: `http.<verb>` used to bind
+  an empty upstream response body as `None` → `${result.response.body}`
+  surfaced as JSON `null`. Now: empty body binds as
+  `Value::String("")`, matching Java Ruuter and the wire truth.
+  Second: a `Value::Null` body under `content_type: "plaintext"`
+  used to serialise as the literal four bytes `n-u-l-l` on the
+  outbound wire (via `serde_json::to_string(Value::Null)`).
+  Now: null under plaintext → empty string on the wire.
+  Defensive: fix (a) prevents #63's specific null source, but
+  the same footgun could bite from anywhere else a null slips
+  into the outbound plaintext body slot. Docs:
+  `book/src/dsl/steps/http.md` (Empty body → "" note replaces
+  the earlier "Empty body → null"). Tests:
+  `tests/empty_response_body_63.rs` (9 cases: empty text/plain
+  and application/json bind as string, `Value::Null` forwarded
+  as plaintext arrives empty, 3-hop chain, whitespace-only body
+  binds verbatim, `.length` behaviour-change lock-down).
+
 ## [0.9.9-rc] - 2026-09-03
 
 Ships PR #59 (issue #57) and PR #58 (issue #54): undeclared
