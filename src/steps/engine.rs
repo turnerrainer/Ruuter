@@ -515,7 +515,23 @@ impl StepEngine {
                 if let Some(idx) = step_names.iter().position(|n| n == &next) {
                     current_step_idx = idx;
                 } else {
-                    break;
+                    // Issue #61 — jumping to a step name that isn't in
+                    // the DSL used to silently break out of the loop
+                    // and return an empty 200 to the caller. That hid
+                    // typos (`next: rply` instead of `next: reply`)
+                    // and stale references (a step was renamed but a
+                    // caller wasn't updated) as "empty responses" in
+                    // production. Fail loudly instead — the run stops,
+                    // the router surfaces a DslExecution error with the
+                    // offending step name and target, so the operator
+                    // sees the actual problem in one log line.
+                    return Err(RuuterError::DslExecution {
+                        step: step_name.clone(),
+                        message: format!(
+                            "step '{}' jumped to `next: {}`, but no step named '{}' exists in this DSL. Fix the target name, add the step, or use `next: end` to terminate.",
+                            step_name, next, next
+                        ),
+                    });
                 }
             } else {
                 current_step_idx += 1;

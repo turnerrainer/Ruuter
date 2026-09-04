@@ -8,6 +8,7 @@ Control flow:
 - Explicit `next: <step-name>` to jump.
 - Terminate with `next: end`.
 - A `return` step terminates immediately (its `next:` is ignored except for `next: end` clarity).
+- `next:` pointing to a step name that isn't declared in the DSL (typo, stale reference) raises a runtime error at the jump — the run stops and the caller sees a DslExecution error naming the source step and the missing target. This applies to top-level `next:`, `switch` branch `next:`, and any other named jump target.
 
 Every step type is documented on its own page. Common fields:
 
