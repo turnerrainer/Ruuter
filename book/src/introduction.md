@@ -30,7 +30,7 @@ after editing a file and the route is live — or opt in to
 [hot reload](./ops/hot-reload.md) for zero-restart edits during
 development.
 
-**Version:** 0.9.9-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
+**Version:** 0.9.10-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
 
 ## What ships in the box
 
