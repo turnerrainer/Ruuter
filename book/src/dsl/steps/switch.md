@@ -12,10 +12,11 @@ route:
   next: default_step        # runs if no condition matched
 ```
 
-- Each `condition:` is a JS expression that must evaluate to `true` for the branch to be taken.
-- Conditions are evaluated top-to-bottom; the first `true` wins.
-- Falsy conditions include `false`, `0`, `""`, `null`, `undefined`.
+- Each `condition:` is a JS expression that must evaluate to a **truthy** value for the branch to be taken. JS `ToBoolean` semantics apply: `${a && b}` fires when both operands are truthy, even when the result is not literally boolean `true`. Wrapping in `!!(...)` is never needed.
+- Conditions are evaluated top-to-bottom; the first truthy result wins.
+- **Falsy** values: `false`, `0`, `NaN`, `""`, `null`, `undefined`. Everything else — including any non-empty string, non-zero number, `[]`, and `{}` — is truthy.
 - The trailing `next:` is the fallthrough. Omitting it and having no match falls through to the next step in source order.
+- Diverges from Java Ruuter, which requires strict boolean `true`. The reason: Ruuter's expression language is JavaScript, so `${a && b}` naturally returns `b` (not `true`) when `a` is truthy — the JS-side semantics and the switch-side semantics should agree.
 
 ## Runnable example
 
