@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.10-rc.1] - 2026-09-04
+## [0.9.10-rc] - 2026-09-04
 
 Ships five DSL / scripting / HTTP-client bug fixes surfaced by
 @angryziber against v0.9.9-rc: PR #65 (issue #56), PR #66 (issue
