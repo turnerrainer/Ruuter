@@ -139,3 +139,134 @@ fn deep_optional_chain_with_nullish_fallback_returns_fallback() {
         .expect("must not throw");
     assert_eq!(out, Value::String("default".into()));
 }
+
+/// `||` (all-falsy fallback, distinct from `??` which only catches
+/// nullish). Undeclared identifier → undefined → falsy → falls
+/// through to the second operand.
+#[test]
+fn logical_or_on_undeclared_returns_second_operand() {
+    let engine = ScriptEngine::new();
+    let out = engine
+        .evaluate(
+            &Value::String("${some_missing_var || 'fallback'}".into()),
+            &empty_ctx(),
+        )
+        .expect("must not throw");
+    assert_eq!(out, Value::String("fallback".into()));
+}
+
+/// `||` where LHS is a declared falsy value (`0`) — must return the
+/// fallback. `||` catches ALL falsy, unlike `??` which only catches
+/// nullish. JS parity — this is the key distinction between the two.
+#[test]
+fn logical_or_on_zero_returns_fallback_but_nullish_returns_zero() {
+    let engine = ScriptEngine::new();
+    // `||`: 0 is falsy → fallback fires.
+    let or_out = engine
+        .evaluate(&Value::String("${0 || 'fb'}".into()), &empty_ctx())
+        .expect("must not throw");
+    assert_eq!(or_out, Value::String("fb".into()), "|| on 0 → 'fb'");
+
+    // `??`: 0 is NOT nullish → 0 wins.
+    let nullish_out = engine
+        .evaluate(&Value::String("${0 ?? 'fb'}".into()), &empty_ctx())
+        .expect("must not throw");
+    assert_eq!(nullish_out.as_i64(), Some(0), "?? on 0 → 0");
+}
+
+/// Mixed-string interpolation: `"prefix ${undeclared ?? 'fb'} suffix"`.
+/// The `${…}` segment inside a mixed string still gets full retry
+/// treatment, so `??` fires correctly and the segment renders as `'fb'`.
+/// Guards against a regression where the mixed-string code path
+/// bypasses the retry loop.
+#[test]
+fn mixed_string_with_nullish_on_undeclared_renders_fallback() {
+    let engine = ScriptEngine::new();
+    let out = engine
+        .evaluate(
+            &Value::String("prefix ${some_missing_id ?? 'fb'} suffix".into()),
+            &empty_ctx(),
+        )
+        .expect("must not throw");
+    assert_eq!(out, Value::String("prefix fb suffix".into()));
+}
+
+/// Chained `??`: multiple fallbacks in a row. `${a ?? b ?? 'last'}`
+/// where a and b are both undeclared should walk the chain and land
+/// on `'last'`. Guards against a code path where only the first
+/// undeclared identifier is declared and the second still throws.
+#[test]
+fn chained_nullish_walks_all_fallbacks_when_all_lhs_undeclared() {
+    let engine = ScriptEngine::new();
+    let out = engine
+        .evaluate(
+            &Value::String("${first_missing ?? second_missing ?? 'final'}".into()),
+            &empty_ctx(),
+        )
+        .expect("must not throw across multiple undeclared identifiers");
+    assert_eq!(out, Value::String("final".into()));
+}
+
+/// Nested optional chain across two undeclared identifiers:
+/// `${a?.b(c)?.d ?? 'fb'}` — the method call inside the optional
+/// chain references another undeclared identifier `c`. Both get
+/// declared as undefined; the `?.` shorts the chain; `??` picks the
+/// fallback.
+#[test]
+fn optional_chain_with_call_referencing_undeclared_returns_fallback() {
+    let engine = ScriptEngine::new();
+    let out = engine
+        .evaluate(
+            &Value::String("${outer?.inner(inner_missing)?.tail ?? 'fb'}".into()),
+            &empty_ctx(),
+        )
+        .expect("must not throw");
+    assert_eq!(out, Value::String("fb".into()));
+}
+
+/// Retry cap: an expression that references more than
+/// MAX_UNDECLARED_RETRIES distinct undeclared identifiers must fail
+/// cleanly with a descriptive error rather than loop forever. The
+/// cap is 16 — build an expression with 20 distinct identifiers to
+/// exceed it. `undefined + undefined + ...` sums to NaN in JS, but
+/// each identifier needs its own retry to reach that point.
+#[test]
+fn expression_exceeding_retry_cap_fails_cleanly() {
+    let engine = ScriptEngine::new();
+    // Twenty distinct undeclared identifiers, summed.
+    let expr = format!(
+        "${{{}}}",
+        (0..20)
+            .map(|i| format!("u{}", i))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    );
+    let err = engine
+        .evaluate(&Value::String(expr), &empty_ctx())
+        .expect_err("must fail — exceeds retry cap");
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("retry")
+            || msg.contains("undeclared")
+            || msg.contains("cap"),
+        "cap-exceeded error must mention the cap for operator visibility: {msg}"
+    );
+}
+
+/// Regression: `?.` on a declared-but-undefined value must short-
+/// circuit cleanly, NOT trigger a retry. Retries only fire on
+/// ReferenceError, not on `undefined` values.
+///
+/// `${(void 0)?.foo ?? 'fb'}` — `void 0` yields undefined; `?.`
+/// shorts; `??` picks fallback. No retry involved.
+#[test]
+fn optional_chain_on_declared_undefined_does_not_retry() {
+    let engine = ScriptEngine::new();
+    let out = engine
+        .evaluate(
+            &Value::String("${(void 0)?.foo ?? 'fb'}".into()),
+            &empty_ctx(),
+        )
+        .expect("must not throw");
+    assert_eq!(out, Value::String("fb".into()));
+}
