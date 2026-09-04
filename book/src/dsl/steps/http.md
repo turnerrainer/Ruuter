@@ -42,7 +42,7 @@ Reference downstream: `${upstream.response.status}`, `${upstream.response.body.f
   fails JSON parse) → the raw text as a string, accessible via
   `${upstream.response.body}`. UTF-8 lossy: invalid byte
   sequences render as U+FFFD rather than failing the step.
-- **Empty** body → `null`.
+- **Empty** body (`content-length: 0` or a chunked response with no bytes) → `""` (empty string), matching Java Ruuter and the wire truth. A DSL that forwards `${upstream.response.body}` as a plaintext outbound body sends the same empty payload it received — not the string `"null"`. Prior to issue #63, empty bodies bound as JSON `null`, which surfaced downstream as `"null"` when re-serialised as plaintext.
 
 Before issue #23 was fixed, non-JSON responses silently became
 `null`, losing the payload — an XML mapper couldn't return XML,
