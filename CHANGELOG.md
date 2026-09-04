@@ -13,6 +13,18 @@ Ships five DSL / scripting / HTTP-client bug fixes surfaced by
 @angryziber against v0.9.9-rc: PR #65 (issue #56), PR #66 (issue
 #64), PR #67 (issue #61), PR #68 (issue #62), PR #69 (issue #63).
 
+Pull:
+
+```bash
+docker pull turnerrainer/ruuter:0.9.10-rc     # pinned digest
+docker pull turnerrainer/ruuter:rc            # moving :rc tag
+```
+
+Both registries are populated (Docker Hub + GHCR), both arches
+(linux/amd64 + linux/arm64), all digests cosign-signed keyless.
+`ghcr.io/turnerrainer/ruuter:0.9.10-rc` mirrors the Docker Hub
+digest exactly.
+
 Two of the five change observable behaviour in ways that could
 affect existing DSLs — call out in ops notes:
 - **#56** rejects any step with more than one action key at DSL
