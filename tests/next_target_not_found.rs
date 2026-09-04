@@ -177,3 +177,202 @@ reply:
         .expect("valid next: must route normally");
     assert_eq!(res.value.unwrap()["ok"], true);
 }
+
+/// Chained-jump case: step A → step B (valid) → step C where C
+/// doesn't exist. The engine walks past A cleanly, executes B, then
+/// hits the missing target from B. Error must name B as the source
+/// and C as the target (NOT A, and NOT the whole chain).
+#[tokio::test(flavor = "current_thread")]
+async fn chained_jump_with_missing_target_names_the_jumping_step() {
+    let dsl = r#"
+alpha:
+  assign:
+    a: 1
+  next: beta
+
+beta:
+  assign:
+    b: 2
+  next: gamma_but_missing
+
+delta:
+  return: { ok: true }
+  next: end
+"#;
+    let router = build_router("svc", "GET", "chain", dsl);
+    let err = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "chain",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect_err("must fail — beta's next: target doesn't exist");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("beta") && msg.contains("gamma_but_missing"),
+        "error must name the immediate jumping step 'beta' and the missing target 'gamma_but_missing', NOT 'alpha': {msg}"
+    );
+    assert!(
+        !msg.contains("alpha"),
+        "error must NOT name earlier steps in the chain: {msg}"
+    );
+}
+
+/// `http.<verb>` `error:` field pointing to a missing step. Under
+/// audit finding 04 the http executor sets `next_step: Some(err_step)`
+/// on non-allowed upstream status, which then flows through the same
+/// engine lookup as any other `next:`. So the #61 fix covers this
+/// path automatically — this test locks that in.
+#[tokio::test(flavor = "current_thread")]
+async fn http_error_pointing_to_missing_step_is_a_runtime_error() {
+    use tempfile::TempDir;
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/fail")
+        .with_status(500)
+        .with_body("upstream oops")
+        .with_header("content-type", "text/plain")
+        .create_async()
+        .await;
+
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("svc").join("GET");
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("{}/fail", server.url());
+    std::fs::write(
+        dir.join("errjump.yml"),
+        format!(
+            r#"
+try_upstream:
+  call: http.get
+  args:
+    url: "{url}"
+  result: r
+  error: no_such_handler
+  next: unreachable
+
+unreachable:
+  return: "should not reach"
+  next: end
+"#
+        ),
+    )
+    .unwrap();
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = tmp.path().to_path_buf();
+    cfg.internal_requests.block_private_networks = false;
+    // Reject anything above 299 so the mock's 500 trips the `error:` branch.
+    cfg.http_codes_allow_list = vec![200, 201, 202, 204];
+
+    let loader = DslLoader::new(cfg.clone(), HashMap::new());
+    let dsls = loader.load_all().expect("load dsls");
+    let ws_registry = WsRegistry::new();
+    let engine = StepEngine::new(HttpClient::new(&cfg))
+        .with_logging(std::sync::Arc::new(cfg.logging.clone()))
+        .with_ws_registry(ws_registry.clone());
+    let router = DslRouter::new(
+        dsls,
+        HashMap::new(),
+        cfg,
+        StateStore::new(),
+        ws_registry,
+        engine,
+    );
+
+    let err = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "errjump",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect_err("http.error: to a missing step must raise the missing-target error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("no_such_handler") && msg.contains("try_upstream"),
+        "error must name the missing http.error: target and the http step as source: {msg}"
+    );
+}
+
+/// `switch` with a fallthrough `next:` pointing to a missing step
+/// (no branch matches, then `next: unknown_fallback` fires). Same
+/// error path as a matched-branch missing target, tested separately
+/// because the code path goes through the `no_match` sentinel first.
+#[tokio::test(flavor = "current_thread")]
+async fn switch_fallthrough_pointing_to_missing_step_is_a_runtime_error() {
+    let dsl = r#"
+route:
+  switch:
+    - condition: "${false}"
+      next: never_taken
+  next: unknown_fallback
+
+never_taken:
+  return: { picked: "never" }
+  next: end
+"#;
+    let router = build_router("svc", "GET", "swfall", dsl);
+    let err = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "swfall",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect_err("switch fallthrough to missing step must raise");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown_fallback") && msg.contains("route"),
+        "error must name the missing fallthrough target AND the switch step: {msg}"
+    );
+}
+
+/// Case-sensitivity guard: `next: Reply` when the step is `reply` is
+/// a MISSING target, not a fuzzy match. Step names are compared as
+/// literal strings — Java-parity.
+#[tokio::test(flavor = "current_thread")]
+async fn next_target_is_case_sensitive_and_a_case_mismatch_is_missing() {
+    let dsl = r#"
+setup:
+  assign:
+    x: 1
+  next: Reply
+
+reply:
+  return: { ok: true }
+  next: end
+"#;
+    let router = build_router("svc", "GET", "casing", dsl);
+    let err = router
+        .execute_dsl(
+            "svc",
+            "GET",
+            "casing",
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            "test".into(),
+        )
+        .await
+        .expect_err("`Reply` (capital R) must not fuzzy-match `reply`");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Reply"),
+        "error must quote the exact requested target (case-preserved): {msg}"
+    );
+}
