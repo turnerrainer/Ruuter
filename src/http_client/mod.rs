@@ -519,6 +519,15 @@ impl HttpClient {
                     // an object with a `text` key or a `plaintext` key
                     // (Java convention), send that string; else
                     // stringify the whole value.
+                    //
+                    // Issue #63 — `Value::Null` used to hit the
+                    // fallback `serde_json::to_string(Value::Null)`
+                    // which returns the literal string `"null"`. Sent
+                    // on the wire as text/plain, that surfaced on the
+                    // receiving service as the four bytes n-u-l-l.
+                    // Now: null → empty body, matching JS spec and
+                    // HTTP realities (null is "absent", not the word
+                    // "null" as a payload).
                     let text = if let Value::Object(map) = b {
                         map.get("text")
                             .or_else(|| map.get("plaintext"))
@@ -527,6 +536,8 @@ impl HttpClient {
                             .unwrap_or_else(|| serde_json::to_string(b).unwrap_or_default())
                     } else if let Value::String(s) = b {
                         s.clone()
+                    } else if matches!(b, Value::Null) {
+                        String::new()
                     } else {
                         serde_json::to_string(b).unwrap_or_default()
                     };
@@ -670,8 +681,15 @@ impl HttpClient {
         // returning `<root>…</root>`, or an upstream returning
         // `text/plain` diagnostics). UTF-8 lossy so a binary blob
         // doesn't crash the step — invalid sequences map to U+FFFD.
+        //
+        // Issue #63 — an empty upstream body used to bind as `None`,
+        // which surfaced under `${result.response.body}` as JSON null
+        // (Java-parity: Java returns `""`). Now: empty body binds
+        // as `Value::String("")` so the DSL sees the wire truth. A
+        // DSL that forwards the value as plaintext body gets `""`
+        // on the outgoing wire, not the string `"null"`.
         let body: Option<Value> = if bytes.is_empty() {
-            None
+            Some(Value::String(String::new()))
         } else {
             match serde_json::from_slice::<Value>(&bytes) {
                 Ok(v) => Some(v),
