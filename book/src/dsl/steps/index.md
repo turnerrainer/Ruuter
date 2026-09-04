@@ -17,4 +17,14 @@ Every step type is documented on its own page. Common fields:
 | `result` | `http`, `template` | bind response into caller context |
 | `status`, `headers` | `return` | override HTTP status + response headers |
 
-Unknown top-level keys inside a step are ignored (forward-compat) but may become a hard error in a future version — don't rely on it.
+## One action per step
+
+Every step contains exactly **one** action key from this set:
+
+`call:` · `template:` · `assign:` · `return:` · `switch:` · `log:` · `state:` · `iterate:` · `ws_send:` · `ws_tag:` · `single_flight:`
+
+A step listing more than one action key (e.g. `call:` alongside `assign:`, or `log:` alongside `switch:`) is **rejected at DSL load time** — Ruuter refuses to start (or fails the hot-reload, keeping the previous tree live) with an error naming the offending step and every offending action key. Split the actions into separate steps and chain them with `next:`.
+
+This rule exists because a step maps 1:1 to a single action variant internally. Prior versions silently deserialised only one of the keys (winner picked by parser priority) and dropped the rest — which meant the DSL on disk didn't describe what actually ran. Refusing the ambiguous input at load time keeps the on-disk DSL truthful.
+
+Other unknown top-level keys inside a step (typos, obsolete fields) are still ignored today, but that leniency may tighten in a future version — don't rely on it.

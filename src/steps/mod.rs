@@ -338,7 +338,14 @@ pub struct Condition {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LogStep {
-    pub log: String,
+    /// Issue #56 — accepts any JSON-shaped value: a scalar string
+    /// (the classic single-line form), a mapping (structured key/value
+    /// log payload), or an array. Every string leaf runs through the
+    /// script engine so `${…}` interpolation works the same as
+    /// `assign:`, `template.body:`, `http.args.body:`. Rendering to
+    /// the log sink stays "string → as-is, else compact JSON",
+    /// sanitised for CR/LF and truncated at 256 chars.
+    pub log: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
     #[serde(flatten)]

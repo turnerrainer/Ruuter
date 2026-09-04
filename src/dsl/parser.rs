@@ -97,6 +97,46 @@ impl DslParser {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
         };
 
+        // Issue #56 — one step = one action. The parser used to
+        // dispatch by if-ladder priority and let serde silently drop
+        // every non-winning key, which meant a YAML step listing both
+        // `log:` and `call:` would run the http call and silently
+        // discard the log message. Reviewers couldn't tell from the
+        // DSL what would actually execute. Reject at parse time
+        // instead, naming every offending key, so authors either
+        // split the step or fix the typo.
+        const ACTION_KEYS: &[&str] = &[
+            "call",
+            "template",
+            "assign",
+            "return",
+            "switch",
+            "log",
+            "state",
+            "iterate",
+            "ws_send",
+            "ws_tag",
+            "single_flight",
+        ];
+        let present: Vec<&str> = ACTION_KEYS
+            .iter()
+            .copied()
+            .filter(|k| key_present(k))
+            .collect();
+        if present.len() > 1 {
+            let quoted: Vec<String> = present.iter().map(|k| format!("`{}:`", k)).collect();
+            return Err(RuuterError::DslParse(format!(
+                "step '{}' declares {} actions in one step ({}). \
+                 A DSL step must declare exactly one action \
+                 (`call:`, `assign:`, `switch:`, `log:`, `template:`, `state:`, \
+                 `iterate:`, `return:`, `ws_send:`, `ws_tag:`, or `single_flight:`). \
+                 Move each action into its own named step and chain them with `next:`.",
+                name,
+                present.len(),
+                quoted.join(" and ")
+            )));
+        }
+
         let variant_hint: &str = if let Some(call) = str_field("call") {
             match call.as_str() {
                 "declare" => "declaration",

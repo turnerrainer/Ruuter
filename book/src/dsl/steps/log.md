@@ -8,9 +8,34 @@ audit:
   next: reply
 ```
 
-- The value is a string with `${...}` interpolation.
+- The value is either a **string** with `${...}` interpolation (single-line form)
+  or a **map / array** whose string leaves are interpolated the same way
+  and whose evaluated shape is rendered as compact JSON in the log line.
 - Output goes to stderr via `tracing`; controlled by `RUST_LOG` env var.
 - No return, no state change. Purely a side effect.
+
+## Map form
+
+Use a map when the log line has more than one named field — easier to
+read on disk, easier to parse in a log-ingestion pipeline than a single
+concatenated string.
+
+```yaml
+audit:
+  log:
+    user: "${incoming.headers['x-user']}"
+    action: "${incoming.body.action}"
+    request_id: "${incoming.headers['x-request-id']}"
+  next: reply
+```
+
+Every string leaf runs through the script engine, so `${...}` works the
+same as in the scalar form. Non-string leaves (numbers, booleans, nested
+maps, arrays) pass through unchanged. The rendered log line contains the
+compact-JSON form of the evaluated map, sanitised for CR/LF and
+truncated at 256 characters.
+
+Map keys are literal YAML — they are NOT evaluated. Only values are.
 
 ## Runnable example
 
