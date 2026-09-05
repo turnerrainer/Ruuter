@@ -30,14 +30,14 @@ after editing a file and the route is live — or opt in to
 [hot reload](./ops/hot-reload.md) for zero-restart edits during
 development.
 
-**Version:** 0.9.10-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
+**Version:** 0.9.11-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Repository:** [turnerrainer/Ruuter](https://github.com/turnerrainer/Ruuter)
 
 ## What ships in the box
 
 - File-based routing: `DSL/<project>/<METHOD>/<path>.yml` → `<METHOD> /<project>/<path>`
 - 12 DSL step primitives (`assign`, `return`, `switch`, `log`, `http`, `state`, `iterate`, `template`, `ws_send`, `ws_tag`, `single_flight`, `declaration`)
 - WebSocket server endpoints + upstream WebSocket source consumption
-- OpenAPI 3.1 spec auto-generated from the DSL tree at `/_/openapi.json`
+- OpenAPI 3.1 spec auto-generated from the DSL tree at `/_/openapi.json` (admin-gated; requires `RUUTER_ADMIN_ENABLED=true`)
 - Two shipped test binaries: `dsl-lint` (static) and `dsl-test` (runtime)
 - A Postman collection covering every shipped sample
 - Batteries: CSRF, SSRF allow-list, `X-Forwarded-For` trusted-proxy gating, W3C traceparent, response-size cap, request-method allow-list, in-process state store — all configurable, safe defaults
