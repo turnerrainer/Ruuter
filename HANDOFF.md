@@ -104,3 +104,57 @@ Consolidated from the last few conversations:
 | Test map | `tests/security.rs`, `tests/security_hardening.rs`, `tests/security_new_probes*.rs` |
 | h2ck.me review threads | `/home/rainer/Desktop/h2ck.me/projects/Ruuter-on-Rust/POST-FIX-REVIEW-3.md` (final roll-up) |
 | Follow-up task briefs | `tasks/backlog/063-*.md`, `064-*.md`, `065-*.md`, `066-*.md`, `067-*.md`, `068-*.md` |
+
+---
+
+## h2ck.me security-audit pipeline
+
+**Added**: 2026-09-06. Describes the ongoing pre-publication security audit + fix + review flow with the `h2ckme` private GitHub org. If you land in this repo cold and see open `feat/h2ck-audit-*` PRs or references to `v1/AUDIT.md`, start here.
+
+### What it is
+
+h2ck.me runs a versioned audit → fix → validate cycle against every Bürostack-fleet service before it goes public. Each round is a `vN/` folder in the corresponding private repo under [`github.com/h2ckme`](https://github.com/h2ckme):
+
+- `vN/AUDIT.md` — findings by severity, file:line pointers, attack scenarios.
+- `vN/FIX-KIT.md` — runnable attack sandbox (curl / Rust test snippets), diff-shaped fix code, per-finding acceptance criteria, "break-the-fix" input catalogue.
+- `vN/PR-REVIEWS/<pr-number>-<head-sha7>.md` — one per PR reviewed (append-only across force-pushes).
+- `vN/POST-FIX-REVIEW.md` — the next-iteration validator's pass/fail per finding.
+
+**Fleet-wide index** — one row per PR across every service:
+[`h2ckme/security-fleet` → `REVIEW-INDEX.md`](https://github.com/h2ckme/security-fleet/blob/main/REVIEW-INDEX.md).
+
+### Where feedback lives (hybrid pipeline as of 2026-09-06)
+
+1. **Every open v1 audit PR carries a comment** starting with `## h2ck.me v1 review`. That comment includes: verdict (✅ pass / ⚠️ pass-with-note / ❌ request-changes), one-paragraph summary, and a link to the full write-up in the h2ckme private repo. GitHub notifications on the PR will surface new h2ck.me comments the moment they land.
+2. **Full per-PR write-up** lives at [`h2ckme/Ruuter-on-Rust/v1/PR-REVIEWS/<pr>-<sha7>.md`](https://github.com/h2ckme/Ruuter-on-Rust/tree/main/v1/PR-REVIEWS). Detail level: acceptance-marker table per finding, break-the-fix probe results, standout implementation notes, non-blocking nits filed for the v2 backlog.
+3. **Audit + fix-kit context**: [`h2ckme/Ruuter-on-Rust/v1/AUDIT.md`](https://github.com/h2ckme/Ruuter-on-Rust/blob/main/v1/AUDIT.md) and [`v1/FIX-KIT.md`](https://github.com/h2ckme/Ruuter-on-Rust/blob/main/v1/FIX-KIT.md).
+
+**h2ckme access**: private org; your GitHub account has read via org membership. Clone with `git clone git@github.com:h2ckme/Ruuter-on-Rust.git`.
+
+### Open v1 PRs on this repo
+
+| PR | Branch | Findings | h2ck.me verdict |
+|---|---|---|---|
+| [#72](https://github.com/turnerrainer/Ruuter/pull/72) | `feat/h2ck-audit-v0.9.10-rc` | H1 template guards, H2 WS guards, M1 openapi admin-gate, M2 rewrite-env WARN, M3 bounded WS channel | ✅ pass (all 5 shipped in commit `26f4a16`; docs bump in `ea46074`; regression pins in `tests/security_h2ck_v0_9_10_rc.rs`; `cargo audit` clean; residuals `N-Info-5..9` deferred to v2) |
+
+### Next action for a maintainer landing here
+
+1. **Open [PR #72](https://github.com/turnerrainer/Ruuter/pull/72)** and read the `## h2ck.me v1 review` comment at the top.
+2. Follow the link to the full write-up in h2ckme for the acceptance table + break-the-fix probe results.
+3. **Merge the PR** on your release cadence (auto-verdict is ✅ pass; no blockers). After merge, tag `v0.9.11-rc`, push image.
+4. **Wait ~2 weeks**, then h2ck.me opens `v2/` as an adversarial re-audit of the merged branch (per CLAUDE.md rule 5: "ship after the round that audited the fix and found nothing"). Any residuals become v2 findings.
+
+### If a review says ⚠️ or ❌
+
+- ⚠️ pass-with-note = merge is OK but there's an operator-facing item worth addressing (typically a docs paragraph). The note is in the review comment.
+- ❌ request-changes = don't merge; address the item on the same fix branch, push a new SHA. h2ck.me sees the new SHA via the PR-update notification and writes a fresh `<pr>-<new-sha7>.md` review (append-only — the old review file stays for audit trail).
+
+### Iteration cadence going forward
+
+- **v1** — 2026-09-04 initial pre-publication audit. Fixes landed 2026-09-05 in commit `26f4a16`. PR reviewed + approved 2026-09-06.
+- **v2** — ~2 weeks after merge; opens as adversarial re-audit of the merged branch. Any residuals surface here.
+- **vN** — triggered by (a) new attack-surface additions (major feature that widens the audit surface), or (b) public bug reports / new probe classes.
+
+### h2ck.me does NOT touch this repo
+
+Explicit boundary: h2ck.me writes only to `h2ckme/*` (private org) + this PR comment thread. It never pushes code, opens PRs, or edits files in `turnerrainer/*`. All fixes come from you or a fixer of your choice, on a branch you push. The h2ck.me role is: audit → propose fix in FIX-KIT → validate the resulting PR → self-audit in the next iteration.
