@@ -593,31 +593,48 @@ async fn path_traversal_percent_encoded_does_not_pivot() {
     );
 }
 
-/// Sanity: the OpenAPI endpoint is served without a project prefix
-/// and must not be shadowed by a hostile DSL at `_/openapi.json`.
+/// Sanity: the OpenAPI endpoint is not shadowed by a hostile DSL at
+/// `_/openapi.json`. v0.9.11 (h2ck.me M1): the OpenAPI handler moved
+/// to `admin_router()`, so on the PUBLIC router the DSL-side path
+/// `/_/openapi.json` legitimately falls through to the DSL dispatch
+/// fallback (which then either 404s if no `_/` project exists or
+/// runs the shadowing DSL as the "_" project would). What must NOT
+/// happen is a hostile DSL at that path masquerading as the OpenAPI
+/// spec to callers hitting the ADMIN endpoint — the admin router
+/// has an exact-match route that outranks the fallback.
 #[tokio::test]
 async fn admin_route_not_shadowed_by_dsl_at_same_path() {
-    let router = build_router(
+    let router = std::sync::Arc::new(build_router(
         AppConfig::default(),
         &[(
             "_/GET/openapi.json.yml",
             "reply:\n  return: { pwned: true }\n  next: end\n",
         )],
-    );
-    let port = serve(router).await;
-    let resp = client()
-        .get(format!("http://127.0.0.1:{}/_/openapi.json", port))
-        .send()
+    ));
+    use tower::ServiceExt;
+    let resp = router
+        .admin_router()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/_/openapi.json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(
         body.get("pwned").is_none(),
-        "the DSL shadowed the OpenAPI handler — this is the bug"
+        "the DSL shadowed the OpenAPI handler on the admin router"
     );
     assert!(
         body.get("openapi").is_some() || body.get("info").is_some(),
-        "response was not the OpenAPI spec: {}",
+        "admin_router() response was not the OpenAPI spec: {}",
         body
     );
 }
@@ -1408,28 +1425,60 @@ reply:
 
 // ── OpenAPI exposure sanity ────────────────────────────────────────
 
-/// The auto-generated OpenAPI spec is served without auth. That is
-/// intentional (it describes the same DSL any client can already
-/// probe). This test just pins the current contract — if an admin
-/// endpoint is ever added, it MUST require auth, and this test
-/// should be split.
+/// v0.9.11 (h2ck.me M1): flipped from "unauthenticated by design"
+/// to "admin-gated by default." The pre-fix rationale ("describes
+/// the same DSL any client can already probe") did not hold once
+/// `declaration:` blocks with typed schemas landed — the spec now
+/// surfaces declared PII field names, expected request shapes, and
+/// response schemas that an internal admin API has no reason to
+/// leak to unauthenticated callers. Contract:
+/// - Public router (default): `/_/openapi.json` does NOT return the
+///   spec (falls through to the DSL dispatch fallback).
+/// - Admin router (mounted when `RUUTER_ADMIN_ENABLED=true`):
+///   `/_/openapi.json` returns the spec.
 #[tokio::test]
-async fn openapi_spec_served_unauthenticated_by_design() {
-    let router = build_router(
+async fn openapi_spec_admin_gated_by_default() {
+    use tower::ServiceExt;
+    let router = std::sync::Arc::new(build_router(
         AppConfig::default(),
         &[(
             "svc/GET/ping.yml",
             "reply:\n  return: { ok: true }\n  next: end\n",
         )],
-    );
-    let port = serve(router).await;
-    let resp = client()
-        .get(format!("http://127.0.0.1:{}/_/openapi.json", port))
-        .send()
+    ));
+    let public_resp = router
+        .clone()
+        .build_axum_router_from_arc()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/_/openapi.json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_ne!(
+        public_resp.status().as_u16(),
+        200,
+        "public router must not enumerate the DSL surface via /_/openapi.json"
+    );
+    let admin_resp = router
+        .admin_router()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/_/openapi.json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_resp.status().as_u16(), 200);
+    let bytes = axum::body::to_bytes(admin_resp.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(body.get("openapi").is_some() || body.get("info").is_some());
 }
 

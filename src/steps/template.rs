@@ -125,6 +125,46 @@ impl StepExecutor for TemplateStepExecutor {
         if let Some(tp) = context.traceparent() {
             child_ctx = child_ctx.with_traceparent(tp.to_string());
         }
+        child_ctx = child_ctx.with_expr_registry(self.engine.expr_registry().clone());
+
+        // h2ck.me H1 — enforce every guard that gates the target
+        // route BEFORE running the callee body. Without this, a
+        // public DSL that says `template: admin/things` silently
+        // bypasses the guard on `POST/admin` (or the project-level
+        // `*` guard). Guards see the CHILD context — the caller
+        // must forward auth headers explicitly via `template.headers`
+        // if it wants the guarded route to pass, mirroring what a
+        // real HTTP call from that caller would look like.
+        //
+        // A guard returning a `>= 400` status short-circuits the
+        // template step: the caller's `${result}` binds the guard's
+        // response body, the callee body never runs. Matches the
+        // HTTP path's short-circuit semantics
+        // (`DslRouter::execute_dsl`).
+        for guard in self.engine.applicable_guards_for(project, &dsl_key) {
+            let guard_result = self.engine.run(&guard, &child_ctx).await?;
+            if guard_result.status >= 400 {
+                if let Some(result_name) = &self.step.result {
+                    let bound = guard_result.value.clone().unwrap_or(Value::Null);
+                    context.set_variable(result_name.clone(), bound);
+                }
+                let mut extras = crate::steps::StepLogExtras::new()
+                    .push("dsl", dsl_key)
+                    .push("status", guard_result.status)
+                    .push("guard_short_circuit", true);
+                if let Some(preview) = crate::logging::preview_body_for_log(
+                    guard_result.value.as_ref(),
+                    &self.engine.logging(),
+                ) {
+                    extras = extras.push_preformatted("body", preview);
+                }
+                return Ok(StepResult {
+                    next_step: self.step.next.clone(),
+                    log_extras: extras,
+                    ..StepResult::new()
+                });
+            }
+        }
 
         let result = self.engine.run(&target_dsl, &child_ctx).await?;
 

@@ -97,7 +97,11 @@ async fn connect_and_drain(
     // so the reader can echo Pongs without holding the sink.
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
     let id = source_id(project, name);
-    let (reg_tx, mut reg_rx) = mpsc::unbounded_channel::<Outbound>();
+    // h2ck.me M3 — registry write channel is bounded. A hung upstream
+    // combined with a `broadcast_where` fan-out that includes this
+    // source would otherwise grow the sender queue without limit.
+    let (reg_tx, mut reg_rx) =
+        crate::ws::bounded_sender(crate::ws::DEFAULT_OUTBOUND_QUEUE_CAPACITY);
     registry.register(id.clone(), reg_tx);
 
     // Bridge: registry's typed Outbound → tungstenite Message::Text(JSON).

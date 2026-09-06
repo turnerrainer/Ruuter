@@ -210,13 +210,15 @@ fn audit_closest_only_keeps_project_guard_and_only_innermost_method_ancestor() {
     );
 }
 
-/// WS/inbound handlers must be excluded from the audit — the guard
-/// chain doesn't fire on the WS path today, so including them would
-/// report false-positive "unguarded" WS routes. Guard integration for
-/// WS is on the roadmap; this test locks in that the audit stays
-/// HTTP-only until it lands.
+/// v0.9.11 (h2ck.me H2a): WS/inbound handlers ARE now surfaced in
+/// the audit. Pre-fix the WS bucket was silently dropped from
+/// `audit_all_routes`, which meant `/_/unguarded` reported
+/// `unguarded: 0` while an unauthenticated attacker could upgrade
+/// to a WS handler without ever hitting a guard. The audit
+/// endpoint's contract is "report every route with no applicable
+/// guard"; WS routes belong in that contract.
 #[test]
-fn audit_excludes_ws_inbound_handlers() {
+fn audit_includes_ws_inbound_handlers() {
     let tmp = write_tree(&[
         ("svc/.guard.yml", NO_OP_GUARD),
         ("svc/GET/ping.yml", NO_OP_DSL),
@@ -231,9 +233,19 @@ frame:
     ]);
     let loaded = load(&tmp);
     let audit = audit_all_routes(&loaded.http, &loaded.guards, GuardMode::Stack);
-    for r in &audit {
-        assert_ne!(r.method, "WS", "WS methods must be filtered out: {:?}", r);
-    }
-    // Sanity — the HTTP route IS present.
+    // WS route MUST appear in the audit.
+    let ws_entry = audit
+        .iter()
+        .find(|r| r.method == "WS")
+        .expect("WS route must appear in /_/unguarded output");
+    // Project-level `.guard.yml` still applies to WS routes now that
+    // the guard chain runs on the WS upgrade — verify the audit
+    // reflects that ordering (project-level `*` first).
+    assert!(
+        ws_entry.guards.contains(&"*".to_string()),
+        "project-level guard `*` applies to the WS route: {:?}",
+        ws_entry
+    );
+    // Sanity — the HTTP route IS present too.
     assert!(audit.iter().any(|r| r.method == "GET" && r.path == "ping"));
 }

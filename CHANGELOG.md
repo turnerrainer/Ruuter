@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11-rc] - 2026-09-04
+
+Security-hardening pass surfaced by an h2ck.me audit of the
+v0.9.10-rc dev branch. Five findings landed as one bundle, plus
+matching regression tests under `tests/security_h2ck_v0_9_10_rc.rs`
+and updates to the two `security_hardening.rs` cases that pinned
+the pre-fix contract.
+
+### Security
+
+- **H1 — `template:` step now enforces guards on the target DSL.**
+  Pre-fix, a public DSL that said `template: admin/things` invoked
+  the target route in-process without running the guards that gate
+  it on the HTTP entry path (`POST/admin/.guard.yml` or a
+  project-level `*` guard). Any operator who assumed "guarded on
+  HTTP means guarded end-to-end" had a bypass. Fix: the template
+  step calls `StepEngine::applicable_guards_for(project, dsl_key)`
+  against a shared handle to the guard tree (`with_guards()` on the
+  engine, wired from `main.rs`) and runs every applicable guard
+  against the child context before dispatching the callee body. A
+  guard returning `>= 400` short-circuits: the caller's `${result}`
+  binds the guard's response, the target body never runs. Guards
+  see the CHILD context, so the caller must forward auth headers
+  explicitly via `template.headers` — mirroring what an HTTP call
+  from the same caller would look like. Test:
+  `template_step_must_run_target_dsl_guards`.
+
+- **H2 — WebSocket upgrades now run guards; `/_/unguarded` reports
+  WS routes.** Pre-fix, `handle_ws_upgrade` never called
+  `applicable_guards`, and `audit_all_routes` explicitly filtered
+  the `WS/` bucket out of its output. Operators who read the audit
+  endpoint as "the complete list of routes with no guard" got a
+  `unguarded: 0` verdict while an unauthenticated attacker could
+  upgrade to any WS handler and start firing frames past the
+  guard. Fix: the router runs the same guard chain on the WS
+  upgrade path that HTTP requests get, against a synthesized
+  `ExecutionContext` carrying the handshake headers + query
+  params. A guard returning `>= 400` rejects the upgrade with that
+  status; the client sees an HTTP-level failure and never gets a
+  WebSocket. `audit_all_routes` now includes WS routes. Tests:
+  `unguarded_audit_must_list_ws_routes_without_guards`,
+  updated `audit_includes_ws_inbound_handlers`.
+
+- **M1 — `GET /_/openapi.json` moved behind the admin gate.**
+  Pre-fix, the auto-generated OpenAPI spec was mounted on the
+  public router and enumerated every DSL route + declared
+  request/response schema to unauthenticated callers. The
+  pre-fix rationale ("describes the same DSL any client can probe
+  anyway") stopped holding once `declaration:` blocks with typed
+  schemas landed — the spec now surfaces declared PII field names
+  and typed request shapes that an internal admin API has no
+  reason to leak. Fix: `/_/openapi.json` mounts on `admin_router()`
+  alongside `/_/sources` and `/_/unguarded`, so it's only reachable
+  when the operator sets `RUUTER_ADMIN_ENABLED=true` (which they
+  typically pair with reverse-proxy auth in front of `/_/*`). Tests:
+  `openapi_json_must_be_admin_gated_by_default`, flipped
+  `openapi_spec_admin_gated_by_default` in `security_hardening.rs`.
+
+- **M2 — `RUUTER_HTTP_REWRITE` env in a release build now logs a
+  WARN at boot.** The env var is documented as test-only but the
+  code path was compiled into every release binary and consulted
+  BEFORE `check_ssrf`. A stray setting in prod silently disabled
+  SSRF allowlists and `block_private_networks` for the rewritten
+  origin. Fix: new `rewrite_env_is_active_in_release()` helper on
+  `http_client` returns true when the env var is set AND the
+  current build has `debug_assertions` disabled. `main.rs` calls it
+  at boot and emits a WARN in the same log stream as "Loaded
+  config from …", so a misconfiguration is visible before the
+  first outbound request fires. Test:
+  `ruuter_http_rewrite_env_is_flagged_as_dangerous_in_release`
+  (asserts the API exists).
+
+- **M3 — WS outbound writer channels bounded (default 256).**
+  Pre-fix, every WS registration used `mpsc::unbounded_channel`. A
+  slow / dead reader combined with a `broadcast_where` fan-out
+  could grow the sender queue without limit — memory-DoS surface.
+  Fix: `Outbound` senders are `mpsc::Sender<Outbound>` with a
+  bounded capacity (`DEFAULT_OUTBOUND_QUEUE_CAPACITY = 256`),
+  helper `ws::bounded_sender(cap)` for callers. `WsRegistry::send`
+  returns a concrete error naming the connection when the queue is
+  full instead of buffering unbounded; `broadcast` /
+  `broadcast_where` skip full queues so a slow subscriber can't
+  stall fan-out to fast ones. Test:
+  `ws_registry_send_must_be_bounded`.
+
+### Contract changes
+
+- Every DSL that reaches a target DSL via `template:` and expects
+  to bypass the target's guards will now be rejected by that
+  guard. Migration: forward the required auth headers explicitly
+  via `template.headers: { authorization: "${incoming.headers.authorization}" }`,
+  OR restructure so the shared logic lives in a non-guarded
+  template (e.g. `templates/shared/…`) that the guarded DSL calls.
+- Every WS DSL that lives under a project with a `.guard.yml`
+  will now run that guard on connect. Migration: verify the guard
+  DSL reads the handshake context (`incoming.headers`,
+  `incoming.params`) rather than a request body (WS handshake has
+  none) and that the auth check succeeds against the WS client's
+  connect headers.
+- `/_/openapi.json` no longer serves on the public router. If a
+  caller relied on the public-router path, they must now hit
+  `admin_router()` (i.e. run Ruuter with `RUUTER_ADMIN_ENABLED=true`
+  and put their own auth in front of `/_/*`).
+- `WsRegistry::send` returns `Err` when the peer's queue is full.
+  DSL authors who assume `ws_send` always succeeds should either
+  handle the error (`error:` branch) or expect the framework to
+  log the failure and continue.
+
 ## [0.9.10-rc] - 2026-09-04
 
 Ships five DSL / scripting / HTTP-client bug fixes surfaced by

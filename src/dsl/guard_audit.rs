@@ -116,21 +116,25 @@ pub fn guard_keys_for_dsl(
     out
 }
 
-/// Walk every HTTP DSL in the loaded tree and emit a `RouteAudit`
-/// per route. Deterministically sorted by `(project, method, path)`
-/// so `dsl-lint --require-guard` and `GET /_/unguarded` produce
-/// stable output.
+/// Walk every DSL in the loaded tree and emit a `RouteAudit` per
+/// route. Deterministically sorted by `(project, method, path)` so
+/// `dsl-lint --require-guard` and `GET /_/unguarded` produce stable
+/// output.
 ///
-/// Non-HTTP methods (`WS/`) are skipped — the guard chain fires on
-/// the HTTP `execute_dsl` path only, so WS routes aren't gated by
-/// guards today (see `book/src/dsl/guards.md`); including them in
-/// this audit would report false "unguarded" positives for handlers
-/// that aren't even in scope for the guard mechanism.
+/// v0.9.11 (h2ck.me H2a): WS routes ARE now included. The WS server
+/// enforces guards as of the same release, and even before that fix
+/// landed the audit endpoint's sole purpose was to identify routes
+/// with no applicable guard — silently omitting WS from that report
+/// hid a real bypass path from operators who read `/_/unguarded` as
+/// "the complete surface area." The `method` field on a WS entry is
+/// the literal string `WS` (or `WS/inbound`-cleaned to `WS`), and
+/// the `path` field is the WS DSL key with the method prefix
+/// stripped so it lines up with the HTTP-side entries.
 pub fn audit_all_routes(http: &HttpDsls, guards: &GuardDsls, mode: GuardMode) -> Vec<RouteAudit> {
     let mut out = Vec::new();
     for (project, methods) in http {
         for (method, dsls) in methods {
-            if !is_http_method(method) {
+            if !is_auditable_method(method) {
                 continue;
             }
             for dsl_key in dsls.keys() {
@@ -167,9 +171,13 @@ fn is_override_guard(dsl: Option<&Dsl>) -> bool {
         .unwrap_or(false)
 }
 
-fn is_http_method(name: &str) -> bool {
+/// Method buckets the audit surfaces. HTTP verbs + `WS` (server-side
+/// WebSocket handlers). Trigger buckets (event-source-driven DSLs
+/// with no inbound endpoint) are intentionally excluded — they have
+/// no reachable "route" for a caller to hit.
+fn is_auditable_method(name: &str) -> bool {
     matches!(
         name.to_uppercase().as_str(),
-        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD"
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD" | "WS"
     )
 }

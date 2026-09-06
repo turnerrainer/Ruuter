@@ -146,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn writes_evaluated_values_to_registry() {
         let reg = WsRegistry::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
         reg.register("client:x".into(), tx);
 
         let exec = WsTagStepExecutor::new(
@@ -170,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn empty_set_is_a_valid_noop_on_a_registered_connection() {
         let reg = WsRegistry::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
         reg.register("client:x".into(), tx);
 
         let exec = WsTagStepExecutor::new(step(&[]), reg.clone());

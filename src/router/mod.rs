@@ -26,7 +26,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, warn};
 
@@ -208,15 +207,28 @@ impl DslRouter {
         Arc::new(self).build_axum_router_from_arc()
     }
 
-    /// Issue #45 — admin-scoped audit endpoints. Currently mounts
-    /// `GET /_/unguarded`, a runtime overview of guarded vs unguarded
-    /// HTTP routes across the loaded tree. Caller decides whether to
-    /// mount it (config-gated in `main.rs` via
-    /// `supervisor::admin_enabled`) — mirrors the pattern
-    /// `SourceSupervisor::admin_router` uses for `/_/sources`.
+    /// Issue #45 + h2ck.me M1 — admin-scoped audit + spec endpoints.
+    /// Mounts:
+    ///
+    /// - `GET /_/unguarded` (issue #45) — runtime overview of guarded
+    ///   vs unguarded routes across the loaded tree.
+    /// - `GET /_/openapi.json` (h2ck.me M1) — auto-generated OpenAPI
+    ///   3.1 spec. Previously mounted on the public router; moved
+    ///   here so it stops enumerating the DSL surface (methods, paths,
+    ///   declared request/response schemas) to unauthenticated
+    ///   callers by default. Operators who intentionally want a
+    ///   public spec keep it accessible by setting
+    ///   `RUUTER_ADMIN_ENABLED=true` alongside their own reverse-
+    ///   proxy auth in front of `/_/*`, or by proxying the endpoint
+    ///   themselves.
+    ///
+    /// Caller decides whether to mount admin routes (config-gated in
+    /// `main.rs` via `supervisor::admin_enabled`) — mirrors the
+    /// pattern `SourceSupervisor::admin_router` uses for `/_/sources`.
     pub fn admin_router(self: Arc<Self>) -> Router {
         Router::new()
             .route("/_/unguarded", get(handle_unguarded))
+            .route("/_/openapi.json", get(openapi_handler))
             .with_state(self)
     }
 
@@ -230,9 +242,11 @@ impl DslRouter {
         let cors = build_cors_layer(&self.config.cors);
         let state = self;
 
+        // h2ck.me M1 — `/_/openapi.json` moved to admin_router. The
+        // public surface here is only `/health` (a load-balancer
+        // liveness probe) plus the DSL-routed fallback.
         let mut router = Router::new()
             .route("/health", get(health_check))
-            .route("/_/openapi.json", get(openapi_handler))
             .fallback(any(handle_request))
             .with_state(state);
         if let Some(layer) = cors {
@@ -1118,6 +1132,54 @@ impl DslRouter {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
+        // h2ck.me H2b — run the guard chain BEFORE accepting the WS
+        // upgrade. Without this, a guard configured for the
+        // project-level `*` key (or a WS-scoped `WS/<prefix>`)
+        // silently didn't apply, so any client could open a socket
+        // to `WS/<path>.yml` and start firing frames past the guard.
+        // A guard returning `>= 400` rejects the upgrade with that
+        // status; the client sees an HTTP-level failure and never
+        // gets a WebSocket. Guards see the handshake headers +
+        // query params in a synthesized `ExecutionContext` — the
+        // same view the frame-dispatch context uses, just without
+        // a connection id (there is no connection yet).
+        let query_values: HashMap<String, Value> = query_params
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+        let guard_ctx = crate::context::ExecutionContext::with_state(
+            HashMap::new(),
+            query_values,
+            headers_map.clone(),
+            "ws-upgrade".to_string(),
+            project.clone(),
+            self.state.clone(),
+        )
+        .with_expr_registry(self.engine.expr_registry().clone());
+        for guard in self.applicable_guards(&project, &dsl_key) {
+            match self.engine.run(&guard, &guard_ctx).await {
+                Ok(res) if res.status >= 400 => {
+                    let status = StatusCode::from_u16(res.status).unwrap_or(StatusCode::FORBIDDEN);
+                    let body = res.value.clone().unwrap_or_else(|| json!({"error":"WS guard denied"}));
+                    return (status, Json(body)).into_response();
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!(
+                        project = %project,
+                        dsl_key = %dsl_key,
+                        error = %e,
+                        "WS upgrade guard failed"
+                    );
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": format!("WS guard error: {}", e)})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+
         let router = self.clone();
         upgrade.on_upgrade(move |socket| async move {
             router
@@ -1135,7 +1197,11 @@ impl DslRouter {
         headers_map: HashMap<String, String>,
     ) {
         let connection_id = random_client_id();
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Outbound>();
+        // h2ck.me M3 — bounded per-connection outbound queue. Prevents
+        // a slow WS client combined with a `broadcast_where` fan-out
+        // from growing the sender queue without limit.
+        let (out_tx, mut out_rx) =
+            crate::ws::bounded_sender(crate::ws::DEFAULT_OUTBOUND_QUEUE_CAPACITY);
         self.ws_registry.register(connection_id.clone(), out_tx);
 
         let (mut sink, mut stream) = socket.split();
