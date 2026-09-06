@@ -142,7 +142,10 @@ bad:
         err.contains("declares 2 actions in one step"),
         "expected multi-action rejection with count, got: {err}"
     );
-    assert!(err.contains("call") && err.contains("log"), "error must name BOTH offending keys, got: {err}");
+    assert!(
+        err.contains("call") && err.contains("log"),
+        "error must name BOTH offending keys, got: {err}"
+    );
 }
 
 #[tokio::test]
@@ -165,7 +168,10 @@ bad:
         err.contains("declares 2 actions in one step"),
         "expected multi-action rejection with count, got: {err}"
     );
-    assert!(err.contains("assign") && err.contains("switch"), "error must name BOTH offending keys, got: {err}");
+    assert!(
+        err.contains("assign") && err.contains("switch"),
+        "error must name BOTH offending keys, got: {err}"
+    );
 }
 
 /// Regression guard: a step containing exactly ONE action key plus

@@ -1160,7 +1160,10 @@ impl DslRouter {
             match self.engine.run(&guard, &guard_ctx).await {
                 Ok(res) if res.status >= 400 => {
                     let status = StatusCode::from_u16(res.status).unwrap_or(StatusCode::FORBIDDEN);
-                    let body = res.value.clone().unwrap_or_else(|| json!({"error":"WS guard denied"}));
+                    let body = res
+                        .value
+                        .clone()
+                        .unwrap_or_else(|| json!({"error":"WS guard denied"}));
                     return (status, Json(body)).into_response();
                 }
                 Ok(_) => {}

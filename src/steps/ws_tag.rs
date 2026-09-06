@@ -89,12 +89,22 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     fn ctx_without_connection() -> ExecutionContext {
-        ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), String::new())
+        ExecutionContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            String::new(),
+        )
     }
 
     fn ctx_with_connection(id: &str) -> ExecutionContext {
-        ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), String::new())
-            .with_connection_id(id.to_string())
+        ExecutionContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            String::new(),
+        )
+        .with_connection_id(id.to_string())
     }
 
     fn step(entries: &[(&str, Value)]) -> WsTagStep {
