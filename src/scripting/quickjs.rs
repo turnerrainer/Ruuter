@@ -331,8 +331,7 @@ fn execute_js<'js>(
         // (TypeError, RangeError, SyntaxError, quota) propagates.
         if name == "ReferenceError" {
             if let Some(ident) = extract_undeclared_identifier(&full) {
-                let decl =
-                    format!("globalThis[{}] = undefined;", js_string_literal(&ident));
+                let decl = format!("globalThis[{}] = undefined;", js_string_literal(&ident));
                 ctx.eval::<(), _>(decl.as_bytes()).map_err(|e| {
                     RuuterError::ScriptEvaluation(format!("qjs eval (declare): {}", e))
                 })?;

@@ -127,10 +127,9 @@ impl WsRegistry {
                     "ws_send: outbound queue full for '{}' (slow reader?)",
                     id
                 )),
-                mpsc::error::TrySendError::Closed(_) => RuuterError::InvalidStep(format!(
-                    "ws_send: writer dropped for '{}'",
-                    id
-                )),
+                mpsc::error::TrySendError::Closed(_) => {
+                    RuuterError::InvalidStep(format!("ws_send: writer dropped for '{}'", id))
+                }
             })?;
         Ok(())
     }
@@ -249,8 +248,11 @@ mod tests {
         reg.register("client:a".into(), a_tx);
         reg.register("client:b".into(), b_tx);
 
-        reg.set_tags("client:a", [("roles".to_string(), ",admin,ops,".to_string())])
-            .unwrap();
+        reg.set_tags(
+            "client:a",
+            [("roles".to_string(), ",admin,ops,".to_string())],
+        )
+        .unwrap();
         reg.set_tags("client:b", [("roles".to_string(), ",viewer,".to_string())])
             .unwrap();
         // merge, not replace
@@ -365,7 +367,10 @@ mod tests {
         reg.set_tags("client:a", [("roles".to_string(), "admin".to_string())])
             .unwrap();
         assert_eq!(
-            reg.tags_of("client:a").unwrap().get("roles").map(String::as_str),
+            reg.tags_of("client:a")
+                .unwrap()
+                .get("roles")
+                .map(String::as_str),
             Some("admin")
         );
     }

@@ -202,7 +202,12 @@ mod tests {
     use std::collections::HashMap;
 
     fn empty_context() -> ExecutionContext {
-        ExecutionContext::new(HashMap::new(), HashMap::new(), HashMap::new(), String::new())
+        ExecutionContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            String::new(),
+        )
     }
 
     fn executor(bw: BroadcastWhere) -> WsSendStepExecutor {

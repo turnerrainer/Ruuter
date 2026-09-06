@@ -265,7 +265,9 @@ fanout:
             .unwrap();
 
     admin
-        .send(Message::Text(r#"{"type":"hello","roles":"admin,ops"}"#.into()))
+        .send(Message::Text(
+            r#"{"type":"hello","roles":"admin,ops"}"#.into(),
+        ))
         .await
         .unwrap();
     assert_eq!(
@@ -381,8 +383,7 @@ fanout:
     assert_eq!(got["type"], "announce");
     assert_eq!(got["text"], "heads up");
 
-    let quiet =
-        tokio::time::timeout(std::time::Duration::from_millis(300), acme_eu.next()).await;
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(300), acme_eu.next()).await;
     assert!(
         quiet.is_err(),
         "acme-eu received an announce meant for tenant=acme only"

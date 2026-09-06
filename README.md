@@ -5,6 +5,13 @@ driven by YAML DSLs on disk.
 
 **Version:** 0.9.11-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
+> **Upgrading from v0.9.10-rc?** Four contract changes shipped in the
+> h2ck.me security audit (PR #72). Read
+> [CHANGELOG.md § 0.9.11-rc "Contract changes"](CHANGELOG.md#0911-rc---2026-09-04)
+> before deploying: `template:` now runs the target's guards, WS
+> upgrades now run guards, `/_/openapi.json` is admin-gated, and
+> `WsRegistry::send` can return `Err` when a peer's queue is full.
+
 ## Try it in one command
 
 Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
@@ -179,5 +186,6 @@ shared secret. Worked sample:
 - **[Book (mdBook)](./book/src/SUMMARY.md)** — full LLM-oriented reference. Build locally with `mdbook serve book`; browses at http://localhost:3000. Auto-deployed to GitHub Pages on push to `main` (see `.github/workflows/docs.yml`).
 - [DSL reference (single page)](docs/DSL_REFERENCE.md) — same content, single Markdown file.
 - [CHANGELOG.md](CHANGELOG.md)
+- [CLAUDE.md](CLAUDE.md) — brief for coding agents: release-gate commands, breaking-change surface, best-practice config matrix, grep recipes for finding risky settings.
 - [Development TODO](docs/todo.md)
 - Original Java Ruuter: https://github.com/buerokratt/Ruuter

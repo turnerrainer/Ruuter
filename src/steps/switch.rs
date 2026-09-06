@@ -121,7 +121,7 @@ mod truthy_tests {
         assert!(is_truthy(&json!(1)));
         assert!(is_truthy(&json!(-1)));
         assert!(is_truthy(&json!(0.1)));
-        assert!(is_truthy(&json!(-3.14)));
+        assert!(is_truthy(&json!(-2.5)));
     }
 
     #[test]

@@ -197,10 +197,7 @@ fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
     // `.call(globalThis)` preserves `this === globalThis` inside the
     // expression body (audit finding 16 contract for
     // `${this['foo-bar']}` reads).
-    let wrapped = format!(
-        "(function(){{ return ({}); }}).call(globalThis)",
-        script
-    );
+    let wrapped = format!("(function(){{ return ({}); }}).call(globalThis)", script);
     let wrapped_bytes = wrapped.as_bytes();
 
     for _ in 0..=MAX_UNDECLARED_RETRIES {
@@ -224,7 +221,6 @@ fn execute_js(script: &str, boa: &mut BoaContext) -> Result<Value> {
         MAX_UNDECLARED_RETRIES, script
     )))
 }
-
 
 fn setup_bindings(boa: &mut BoaContext, context: &ExecutionContext) -> Result<()> {
     let mut incoming = HashMap::new();

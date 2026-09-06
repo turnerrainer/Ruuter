@@ -464,7 +464,11 @@ default:
         )
         .await
         .expect("exec");
-    assert_eq!(res.value.unwrap()["picked"], "matched", "empty array is truthy");
+    assert_eq!(
+        res.value.unwrap()["picked"],
+        "matched",
+        "empty array is truthy"
+    );
 
     let dsl_obj = r#"
 check:
@@ -494,7 +498,11 @@ default:
         )
         .await
         .expect("exec");
-    assert_eq!(res.value.unwrap()["picked"], "matched", "empty object is truthy");
+    assert_eq!(
+        res.value.unwrap()["picked"],
+        "matched",
+        "empty object is truthy"
+    );
 }
 
 /// The reporter's setup end-to-end: values come from request headers,

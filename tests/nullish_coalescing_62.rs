@@ -66,10 +66,7 @@ fn nullish_coalescing_on_bare_undeclared_returns_fallback() {
 fn optional_chain_on_undeclared_still_returns_null() {
     let engine = ScriptEngine::new();
     let out = engine
-        .evaluate(
-            &Value::String("${missing_var?.blah}".into()),
-            &empty_ctx(),
-        )
+        .evaluate(&Value::String("${missing_var?.blah}".into()), &empty_ctx())
         .expect("undeclared identifier with ?. must not throw");
     assert_eq!(out, Value::Null);
 }
@@ -246,9 +243,7 @@ fn expression_exceeding_retry_cap_fails_cleanly() {
         .expect_err("must fail — exceeds retry cap");
     let msg = err.to_string();
     assert!(
-        msg.to_lowercase().contains("retry")
-            || msg.contains("undeclared")
-            || msg.contains("cap"),
+        msg.to_lowercase().contains("retry") || msg.contains("undeclared") || msg.contains("cap"),
         "cap-exceeded error must mention the cap for operator visibility: {msg}"
     );
 }
