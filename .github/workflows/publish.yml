@@ -132,14 +132,20 @@ jobs:
       # native arm64 hardware but keeps the whole publish in one job.
       # Swap to matrix + real arm64 runners if build time becomes
       # painful (>25 min).
+      # docker/*-action bumped to their latest majors (v4 for
+      # setup-*, login; v7 for build-push) whose action.yml targets
+      # Node 24. Silences the "Node.js 20 is deprecated" annotation
+      # that fires on v3/v6 pins now that GHA is force-upgrading
+      # Node 20 targets to Node 24 anyway. Requires Actions Runner
+      # v2.327.1 or later; ubuntu-latest is well past that.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -151,7 +157,7 @@ jobs:
       # DOCKERHUB_TOKEN    = an access token with "Read, Write, Delete"
       #                      scope on the repository.
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -161,7 +167,7 @@ jobs:
       # can reuse the first's when the sources match.
       - name: Build and push (multi-arch)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         env:
           # Buildx honours SOURCE_DATE_EPOCH when the image output has
           # rewrite-timestamp=true (set on the `outputs:` line below).
