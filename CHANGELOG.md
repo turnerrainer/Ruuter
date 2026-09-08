@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #75 — `declaration.additive: true` posture.** Third posture
+  flag alongside `strict:`. When `additive: true`, the router does NOT
+  filter body / params / headers down to the declared allowlist —
+  undeclared fields pass through to `${incoming.*}` unchanged. The
+  `required:` check still fires; OpenAPI still emits the declared
+  schema. Use when the allowlist is documentation metadata only (the
+  route legitimately consumes correlation headers or log-forwarded
+  body keys it hasn't enumerated). Mutually exclusive with `strict:`;
+  setting both is a parse-time error. Docs:
+  `book/src/dsl/steps/declaration.md#additive`. Tests:
+  `additive_body_passes_through_undeclared_fields`,
+  `additive_headers_pass_through_undeclared`,
+  `additive_still_enforces_required_fields`,
+  `strict_and_additive_together_is_a_parse_error`.
+
 ### Fixed
 
 - **Issue #75 — `declaration.allowlist` contract fixes.** Four coupled

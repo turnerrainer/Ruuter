@@ -1358,11 +1358,15 @@ fn apply_declaration(
     traceparent: &str,
 ) -> Result<RequestView> {
     let strict = decl.is_strict();
+    let additive = decl.is_additive();
 
     if let Some(allow) = decl.effective_allowed_body() {
+        // Issue #75 — additive posture skips the filter/reject step but
+        // still fires the required-field check. Strict and additive are
+        // mutually exclusive (validated at parse time).
         if strict {
             reject_unknown_str_keyed(&body, &allow, "body")?;
-        } else {
+        } else if !additive {
             filter_str_keyed(&mut body, &allow);
         }
         if method == "POST" {
@@ -1380,7 +1384,7 @@ fn apply_declaration(
         let path_params_saved = query.remove("pathParams");
         if strict {
             reject_unknown_str_keyed(&query, &allow, "params")?;
-        } else {
+        } else if !additive {
             filter_str_keyed(&mut query, &allow);
         }
         if let Some(pp) = path_params_saved {
@@ -1409,7 +1413,7 @@ fn apply_declaration(
                 .chain(std::iter::once("traceparent".to_string()))
                 .collect();
             reject_unknown_str_keyed(&headers, &allow_with_tp, "headers")?;
-        } else {
+        } else if !additive {
             filter_str_keyed(&mut headers, &allow);
         }
         // Keep traceparent regardless — framework-injected.

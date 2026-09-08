@@ -1,6 +1,6 @@
 //! Issue #75 — `declaration.allowlist` regression suite.
 //!
-//! Covers the four contract fixes shipped for the sviljus report on
+//! Covers the contract fixes shipped for the sviljus report on
 //! `turnerrainer/ruuter:0.9.10-rc`:
 //!
 //! 1. **Guards run BEFORE `allowlist` stripping.** A route's
@@ -23,6 +23,11 @@
 //! 4. **Missing required → 400 Bad Request, not 500.** It's a client
 //!    error. `RuuterError::BadRequest` (the same variant used by
 //!    `strict: true`'s unknown-key rejection).
+//! 5. **Additive posture (`additive: true`).** The allowlist becomes
+//!    OpenAPI-documentation-only — undeclared fields pass through to
+//!    `${incoming.*}` untouched. Required-field checks still fire.
+//!    Mutually exclusive with `strict: true`; parse-time error if
+//!    both are set.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -527,5 +532,151 @@ reply:
     assert!(
         !body.contains("Field missing"),
         "field list must not leak to unauthorized callers: {body}"
+    );
+}
+
+// ============================================================================
+// 5. Additive posture — `additive: true` skips the filter step
+// ============================================================================
+
+/// `additive: true` on the body allowlist: undeclared fields pass
+/// through into `${incoming.body}` unchanged. The declared field
+/// is still required. Use case: DSL wants the allowlist purely as
+/// OpenAPI documentation, not as an input firewall.
+#[tokio::test]
+async fn additive_body_passes_through_undeclared_fields() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  additive: true
+  allowlist:
+    body:
+      - field: reqd
+        type: string
+        required: true
+reply:
+  return: { seen: "${JSON.stringify(incoming.body)}" }
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"reqd": "a", "extra": "kept"}),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "additive posture must admit unknown keys: {body}"
+    );
+    assert!(body.contains("reqd"), "declared field visible: {body}");
+    assert!(
+        body.contains("extra") && body.contains("kept"),
+        "undeclared field must survive under additive posture: {body}"
+    );
+}
+
+/// Additive posture on headers: an undeclared header (like
+/// `x-request-id` — a correlation header the operator wants to log
+/// but doesn't declare per-route) survives into `${incoming.headers}`.
+#[tokio::test]
+async fn additive_headers_pass_through_undeclared() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  additive: true
+  allowlist:
+    headers:
+      - field: x-tenant
+reply:
+  return:
+    tenant: "${incoming.headers['x-tenant']}"
+    correlation: "${incoming.headers['x-request-id']}"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[("x-tenant", "acme"), ("x-request-id", "corr-42")],
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(body.contains("acme"));
+    assert!(
+        body.contains("corr-42"),
+        "undeclared correlation header must survive: {body}"
+    );
+}
+
+/// Additive still enforces `required: true` — the posture flag only
+/// affects the strip step, not the missing-required check.
+#[tokio::test]
+async fn additive_still_enforces_required_fields() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  additive: true
+  allowlist:
+    body:
+      - field: reqd
+        type: string
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"other": "still-required-missing"}),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status, 400,
+        "additive posture keeps required-field check: {body}"
+    );
+    assert!(body.contains("Field missing: reqd"), "diagnostic: {body}");
+}
+
+/// `strict: true` and `additive: true` are mutually exclusive. Set
+/// both, and the DSL fails to load — a hard parse error at boot
+/// beats a one-wins-over-the-other silent runtime coin-flip.
+#[test]
+fn strict_and_additive_together_is_a_parse_error() {
+    use ruuter_on_rust::dsl::parser::DslParser;
+    let parser = DslParser::new(HashMap::new());
+    let err = parser
+        .parse_content(
+            r#"
+declaration:
+  strict: true
+  additive: true
+  allowlist:
+    body:
+      - field: reqd
+reply:
+  return: "ok"
+  status: 200
+"#,
+        )
+        .expect_err("parse must fail on contradictory posture");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("mutually exclusive"),
+        "diagnostic should explain the conflict, got: {msg}"
     );
 }

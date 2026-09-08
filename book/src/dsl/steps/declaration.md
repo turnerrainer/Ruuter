@@ -132,6 +132,35 @@ would previously succeed (Ruuter silently dropped `surprise`). With
 `traceparent` on request headers is always allowed under `strict`
 even if it isn't in the header allowlist (framework-injected).
 
+### `additive` (issue #75)
+
+Per-DSL opt-in to skip the filter step entirely — undeclared fields
+pass through to `${incoming.*}` unchanged. The allowlist becomes
+documentation / OpenAPI metadata only. `required:` still fires on
+declared fields.
+
+```yaml
+declaration:
+  additive: true
+  allowlist:
+    body:
+      - field: userName
+        required: true
+    headers:
+      - field: x-tenant
+```
+
+Use when the route legitimately consumes fields it hasn't enumerated
+(correlation headers a middleware injects, log-forwarded body keys,
+etc.) but the operator still wants the OpenAPI spec to describe the
+"official" contract. A request carrying `{"userName": "alice",
+"extra": "x"}` succeeds, and `${incoming.body.extra}` is visible to
+the DSL.
+
+`additive: true` and `strict: true` mean opposite things (permit vs.
+reject unknown keys). Setting both is a **parse-time error** — Ruuter
+refuses to load the DSL rather than silently pick a posture.
+
 ### `override_ancestors`
 
 Only meaningful on guard DSLs. `true` = this guard REPLACES ancestor

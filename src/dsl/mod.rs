@@ -47,6 +47,19 @@ pub struct DeclarationStep {
     /// with no allowlist, "unknown" isn't defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
+    /// Issue #75 — per-DSL opt-in for additive posture. When
+    /// `Some(true)`, the router does NOT filter body / query / header
+    /// maps down to the declared allowlist — undeclared fields pass
+    /// through to `${incoming.*}` unchanged. The `required:` check
+    /// still fires; OpenAPI still emits the declared schema. Use when
+    /// the DSL wants the allowlist purely as documentation / OpenAPI
+    /// metadata rather than as an input firewall.
+    ///
+    /// Mutually exclusive with `strict:`. Setting both is a parse-
+    /// time error (contradictory postures — strict rejects unknown
+    /// keys, additive permits them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additive: Option<bool>,
     /// Task 020 — when `Some(true)` on a guard DSL, this guard REPLACES
     /// all ancestor guards for the routes it protects (rather than
     /// stacking on top of them). Used when a specific endpoint has
@@ -167,6 +180,32 @@ impl DeclarationStep {
     /// filter-and-continue.
     pub fn is_strict(&self) -> bool {
         self.strict.unwrap_or(false)
+    }
+
+    /// Issue #75 — whether additive posture is on for this DSL.
+    /// `Some(true)` → router does NOT filter undeclared fields out
+    /// of `${incoming.*}`; the allowlist becomes documentation
+    /// metadata only. Absent or `Some(false)` → traditional filter-
+    /// and-continue.
+    pub fn is_additive(&self) -> bool {
+        self.additive.unwrap_or(false)
+    }
+
+    /// Issue #75 — validate mutually-exclusive posture flags.
+    /// Returns `Err` if the declaration sets both `strict: true`
+    /// and `additive: true` (contradictory — one rejects unknown
+    /// keys, the other permits them). Called from the parser at
+    /// load time so an operator gets a hard failure at boot instead
+    /// of a silent one-wins-over-the-other at request time.
+    pub fn validate_posture(&self) -> Result<(), String> {
+        if self.is_strict() && self.is_additive() {
+            return Err(
+                "declaration.strict and declaration.additive are mutually exclusive \
+                 (strict rejects unknown fields; additive permits them). Pick one."
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Task 070 — structured body allowlist (with per-field metadata).
