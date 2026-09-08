@@ -28,6 +28,14 @@
 //!    `${incoming.*}` untouched. Required-field checks still fire.
 //!    Mutually exclusive with `strict: true`; parse-time error if
 //!    both are set.
+//! 6. **Body type enforcement (row 3 of the reporter's table).**
+//!    Structured allowlist entries with `type:` are now checked at
+//!    the wire — a `type: string` receiving a JSON number returns
+//!    400 naming the field, declared type, and received type. Null
+//!    values, untyped entries, and unknown type names skip the check
+//!    (forward-compat with OpenAPI vocabulary additions). Params /
+//!    headers are string-typed at the wire and not enforced (would
+//!    need a separate coercion story).
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -679,4 +687,301 @@ reply:
         msg.contains("mutually exclusive"),
         "diagnostic should explain the conflict, got: {msg}"
     );
+}
+
+// ============================================================================
+// 6. Body type enforcement (issue #75 row 3)
+// ============================================================================
+
+/// Row 3 of the reporter's table: `{"reqd":123,"opt":"b"}` sent to a
+/// route with `reqd: type: string` returned 200 with no type check.
+/// Post-fix, the type mismatch is a 400 naming the field, the declared
+/// type, and the received JSON type.
+#[tokio::test]
+async fn body_string_field_receiving_number_is_400() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: reqd
+        type: string
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"reqd": 123}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "type mismatch is a client error: {body}");
+    assert!(
+        body.contains("Field type mismatch") && body.contains("reqd"),
+        "diagnostic must name the field: {body}"
+    );
+    assert!(
+        body.contains("string"),
+        "diagnostic must name declared type: {body}"
+    );
+    assert!(
+        body.contains("number"),
+        "diagnostic must name received type: {body}"
+    );
+}
+
+/// Integer declared, integer sent: 200.
+#[tokio::test]
+async fn body_integer_field_receiving_integer_is_200() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: age
+        type: integer
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"age": 42}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Integer declared, `1.0` sent (float with no fractional part): 200
+/// (loose integer semantics — matches Java Ruuter and OpenAPI's
+/// permissive interpretation).
+#[tokio::test]
+async fn body_integer_field_accepts_whole_number_float() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: age
+        type: integer
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"age": 42.0}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Integer declared, `1.5` sent (has fractional part): 400.
+#[tokio::test]
+async fn body_integer_field_receiving_fractional_number_is_400() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: age
+        type: integer
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"age": 1.5}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "fractional value fails integer check: {body}");
+    assert!(body.contains("integer"));
+}
+
+/// Type check covers boolean / array / object as well.
+#[tokio::test]
+async fn body_type_check_covers_all_primitive_types() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: b
+        type: boolean
+        required: true
+      - field: arr
+        type: array
+        required: true
+      - field: obj
+        type: object
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    // Sending correctly-typed values → 200.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"b": true, "arr": [1,2,3], "obj": {"k": "v"}}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Untyped structured entries skip the type check (backwards-compat
+/// with declarations that were written for OpenAPI documentation
+/// without a `type:` hint yet).
+#[tokio::test]
+async fn body_field_without_declared_type_skips_check() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: anything
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    // Send an integer where no type is declared → 200 (permissive).
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"anything": 42}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Legacy flat `allowed_body: [...]` has no metadata slot, so the
+/// type check is a no-op even if the DSL author later adds a
+/// structured entry alongside — the flat form wins for the field-name
+/// list (matching `effective_allowed_body`'s precedence).
+#[tokio::test]
+async fn legacy_flat_allowed_body_skips_type_check() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowed_body: [ reqd ]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    // Flat form has no `type:` metadata, so any JSON type is accepted.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"reqd": 123}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Unknown declared-type name (e.g. `type: date-time`, which is
+/// really an OpenAPI format, not a type) is not enforced. Keeps the
+/// type check forward-compat with vocabulary additions.
+#[tokio::test]
+async fn body_unknown_declared_type_is_not_enforced() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: when
+        type: date-time
+        required: true
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"when": "2026-09-08T13:00:00Z"}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Null value on a typed field is treated as absence (skipped by
+/// type check). Rationale: null is a valid absence marker and the
+/// required-field check already handles presence. Belt-and-braces
+/// enforcement would require a separate `null: forbid` flag.
+#[tokio::test]
+async fn body_null_value_skips_type_check() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: opt
+        type: string
+        required: false
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"opt": null}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
 }

@@ -67,7 +67,12 @@ metadata:
 
 - `field` — the field name (required).
 - `type` — OpenAPI type: `string` (default), `integer`, `number`,
-  `boolean`, `array`, `object`.
+  `boolean`, `array`, `object`. Enforced at the wire for **body**
+  fields — a mismatch is a 400 (`{"error": "Field type mismatch in
+  body: <field> expected <declared>, got <received>"}`). Null values,
+  entries with no `type:` set, and unknown type names skip the check.
+  Params and headers are string-typed at the wire (issue #75); their
+  `type:` currently drives OpenAPI only.
 - `required` — `true` puts the field in the OpenAPI `required` array;
   in the request body allowlist for POST/PUT/PATCH, missing required
   fields cause a `400 Bad Request` (`{"error": "Field missing: X"}`).

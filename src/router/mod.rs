@@ -1376,6 +1376,15 @@ fn apply_declaration(
                 }
             }
         }
+        // Issue #75 — enforce declared `type:` on body fields.
+        // No-op when the DSL uses the legacy flat `allowed_body:`
+        // form (no metadata slot) or when a field's declaration omits
+        // `type:`. Params/headers are always string-typed at the wire;
+        // enforcing them requires a coercion story we're not shipping
+        // here.
+        if let Some(structured) = decl.structured_body() {
+            check_field_types(&body, structured, "body")?;
+        }
     }
 
     if let Some(allow) = decl.effective_allowed_params() {
@@ -1423,6 +1432,77 @@ fn apply_declaration(
     }
 
     Ok((body, query, headers))
+}
+
+/// Issue #75 — enforce declared `type:` on body fields present in
+/// the request. Skips fields whose declaration omits `type:`, skips
+/// null values (treated as absence), skips unknown type names (forward-
+/// compat with OpenAPI type additions). Only called for the structured
+/// allowlist form — legacy flat `allowed_body: [name]` carries no
+/// per-field metadata.
+///
+/// Type map (mirrors `openapi.rs` and the Task 070 vocabulary):
+/// - `string` → JSON string
+/// - `integer` → JSON number with no fractional part
+/// - `number` → any JSON number
+/// - `boolean` → JSON true/false
+/// - `array` → JSON array
+/// - `object` → JSON object
+fn check_field_types(
+    body: &HashMap<String, Value>,
+    fields: &[crate::dsl::DslField],
+    section: &str,
+) -> Result<()> {
+    for field in fields {
+        let Some(declared_type) = field.field_type.as_deref() else {
+            continue;
+        };
+        let Some(value) = body.get(&field.field) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let ok = match declared_type {
+            "string" => value.is_string(),
+            "integer" => {
+                value.is_i64()
+                    || value.is_u64()
+                    || value
+                        .as_f64()
+                        .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
+            }
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            _ => true,
+        };
+        if !ok {
+            return Err(RuuterError::BadRequest(format!(
+                "Field type mismatch in {}: {} expected {}, got {}",
+                section,
+                field.field,
+                declared_type,
+                json_type_name(value),
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Issue #75 — friendly JSON-type name for `check_field_types`
+/// error diagnostics. Not a Display impl on Value because we only
+/// need it in one place and Value doesn't expose one.
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Issue #75 — return the subset of `allow` (the effective flat field-

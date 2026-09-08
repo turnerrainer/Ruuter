@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Issue #75 — body `type:` is enforced at the wire.** Structured
+  `allowlist.body:` entries with `type:` now cause a `400 Bad Request`
+  when the JSON body value's type doesn't match the declared type
+  (`{"error": "Field type mismatch in body: <field> expected <declared>,
+  got <received>"}`). Fixes row 3 of the reporter's table — pre-fix,
+  a `type: string` receiving `123` silently succeeded because the
+  runtime never consulted `field_type` (only the OpenAPI generator
+  did). Skips null values (treated as absence), skips fields without
+  a `type:` set, and skips unknown type names (forward-compat with
+  OpenAPI vocabulary additions). Integer accepts JSON numbers with no
+  fractional part (`42`, `42.0`); fractional numbers (`3.14`) fail.
+  Params / headers are string-typed at the wire and are not enforced
+  — that would need a separate coercion story. Docs: updated in
+  `book/src/dsl/steps/declaration.md#per-field-metadata`. Tests:
+  `body_string_field_receiving_number_is_400`,
+  `body_integer_field_receiving_integer_is_200`,
+  `body_integer_field_accepts_whole_number_float`,
+  `body_integer_field_receiving_fractional_number_is_400`,
+  `body_type_check_covers_all_primitive_types`,
+  `body_field_without_declared_type_skips_check`,
+  `legacy_flat_allowed_body_skips_type_check`,
+  `body_unknown_declared_type_is_not_enforced`,
+  `body_null_value_skips_type_check`.
+
 - **Issue #75 — `declaration.additive: true` posture.** Third posture
   flag alongside `strict:`. When `additive: true`, the router does NOT
   filter body / params / headers down to the declared allowlist —
