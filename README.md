@@ -3,14 +3,15 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.9.11-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.9.12-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.10-rc?** Four contract changes shipped in the
-> h2ck.me security audit (PR #72). Read
-> [CHANGELOG.md § 0.9.11-rc "Contract changes"](CHANGELOG.md#0911-rc---2026-09-04)
-> before deploying: `template:` now runs the target's guards, WS
-> upgrades now run guards, `/_/openapi.json` is admin-gated, and
-> `WsRegistry::send` can return `Err` when a peer's queue is full.
+> **Upgrading from v0.9.11-rc?** Issue #75 landed a small behaviour
+> shift on top of the h2ck.me v0.9.11-rc contract changes. Read
+> [CHANGELOG.md § 0.9.12-rc](CHANGELOG.md#0912-rc---2026-09-08)
+> before deploying: guards now run BEFORE `allowlist:` stripping,
+> `required: false` is honoured, missing required is `400` not `500`,
+> body `type:` is enforced, `additive:` posture is new, and guards
+> can carry their own declaration (`required_one_of`, etc.).
 
 ## Try it in one command
 
@@ -18,7 +19,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.9.11-rc
+    turnerrainer/ruuter:0.9.12-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -32,7 +33,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.9.11-rc
+    turnerrainer/ruuter:0.9.12-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,

@@ -29,14 +29,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-07 on `ecbfe1b`):
+Expected on a clean `dev` (verified 2026-09-08 on `223f2a1`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 488 passed / 0 failed / 3 ignored across 64 test binaries |
+| `cargo test --no-fail-fast` | 522 passed / 0 failed / 3 ignored across 65 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 63 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
@@ -50,6 +50,39 @@ push, PR, and a daily 06:00 UTC cron. Exceptions live in
 `.cargo/audit.toml` — currently RUSTSEC-2024-0384 (`instant`) and
 RUSTSEC-2024-0436 (`paste`), both transitive-only, review date
 2026-10-01.
+
+## Behaviour-change surface as of v0.9.12-rc (issue #75)
+
+Issue #75 landed in commit `223f2a1` (PR #76) — `declaration.allowlist`
+contract fixes. None of these are breaking for a correctly-shaped
+DSL, but they change observable behaviour on the buggy paths the
+reporter identified. Full detail in
+[CHANGELOG.md § 0.9.12-rc](CHANGELOG.md#0912-rc---2026-09-08).
+
+- **Guards run BEFORE `allowlist:` stripping.** A route's
+  `allowlist.headers` no longer strips headers the parent guard
+  reads. If a route had unexplained 401/400 from its parent guard
+  after adding `allowlist.headers`, retest — the workaround (drop
+  the allowlist) is no longer needed.
+- **`required: false` is honoured.** Structured `allowlist.body:`
+  entries no longer force presence unless `required: true` is
+  explicit. Legacy flat `allowed_body: [...]` unchanged.
+- **Missing required → `400`, not `500`.** Client-side tests that
+  asserted `status == 500` on this path must flip to `400`. Body
+  shape unchanged.
+- **Body `type:` mismatch → `400`.** Declared `type: string` /
+  `integer` / etc. is now enforced at the wire. If any DSL declared
+  a type for OpenAPI purposes while accepting the wrong type at the
+  wire, callers now see `400`.
+- **New posture: `additive: true`.** Third choice alongside `strict:`
+  — allowlist is documentation-only, undeclared fields pass through.
+  Mutually exclusive with `strict:` (parse-time error if both set).
+- **Guards can declare their own contract.** `required:`,
+  `required_one_of`, and body `type:` are enforced against the raw
+  request before a guard's steps run. Guards with only
+  `override_ancestors: true` are unaffected.
+- **New: `allowlist.required_one_of`.** Per-section OR-of-alternatives
+  groups. Motivating case: "X-Api-Key OR X-Internal-Service-Token".
 
 ## Breaking-change surface as of v0.9.11-rc (h2ck.me audit fixes)
 

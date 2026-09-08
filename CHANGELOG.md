@@ -7,7 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.12-rc] - 2026-09-08
+
+Issue #75 (sviljus / kemit-ee/efti-gate-ee) — full `declaration.allowlist`
+contract fix. Four coupled bugs and two feature gaps in the
+declaration-block enforcement path. Landed in PR #76 as one bundle;
+release-gate green (522 passed / 0 failed / 3 ignored across 65 test
+binaries).
+
+**Behaviour change surface (grep before upgrading):**
+
+- Guards now run BEFORE `allowlist:` stripping. Adding
+  `declaration.allowlist.headers` to a route no longer silently
+  strips headers the parent guard reads. Any DSL that relied on the
+  pre-fix "guard sees stripped headers" behaviour (there shouldn't
+  be any — that was the reporter's example A bug) will now see the
+  raw wire request in the guard.
+- Missing `required: true` field returns `400 Bad Request` (was
+  `500`). Response body shape unchanged: `{"error": "Field missing:
+  X"}`. If a client-side test asserted `status == 500` on this path,
+  it needs to flip to `400`.
+- `required: false` on structured `allowlist.body:` entries is now
+  honoured. Pre-fix, every listed field was mandatory regardless of
+  the flag; if you were sending a "kitchen-sink" body to work around
+  that, you can drop the padding.
+- Body `type:` mismatch on structured allowlist entries returns
+  `400`. If any DSL declared `type: string` for OpenAPI purposes
+  while accepting non-string values at the wire, callers now see a
+  `400 Field type mismatch` instead of a `200` — declare the
+  correct type, or leave `type:` unset for permissive behaviour.
+
 ### Added
+
+- **Issue #75 — guard declarations are now enforced.** A guard's
+  `declaration:` block is no longer inert. Before the guard's steps
+  run, the router enforces (against the raw request):
+  `required: true` fields, `required_one_of` groups, and body `type:`
+  mismatches. Filtering (`strict:` / `additive:`) is a no-op on
+  guards — guards check, they don't reshape the request for
+  downstream (only the terminal DSL's declaration filters
+  `incoming.*`). Existing guards that carry only
+  `override_ancestors: true` are unaffected. Tests:
+  `guard_required_one_of_all_missing_returns_400`,
+  `guard_required_one_of_first_present_admits`,
+  `guard_declaration_missing_required_returns_400`,
+  `guard_declaration_type_check_enforced`,
+  `guard_declaration_does_not_strip_undeclared_headers`,
+  `guard_declaration_with_only_override_ancestors_still_works`.
+
+- **Issue #75 — `allowlist.required_one_of` for OR-of-alternatives
+  contracts.** Per-section (body / params / headers) groups; a group
+  is satisfied when the request carries at least one of its members.
+  Multiple groups AND together. Motivating case (issue example B):
+  a guard that admits on `X-Api-Key` OR `X-Internal-Service-Token`
+  can now declare its credential contract for OpenAPI consumers
+  without turning both into "required" via the base allowlist.
+  Diagnostic on miss: `Missing required_one_of in <section>: at
+  least one of [x, y] must be present`. Works on both terminal DSLs
+  and guards. Docs: new `required_one_of` section in
+  `book/src/dsl/steps/declaration.md`. Tests:
+  `terminal_dsl_required_one_of_all_missing_returns_400`,
+  `terminal_dsl_required_one_of_first_present_succeeds`,
+  `terminal_dsl_required_one_of_second_present_succeeds`,
+  `terminal_dsl_required_one_of_body_group`,
+  `terminal_dsl_multiple_required_one_of_groups_are_conjoined`.
+
+- **Issue #75 — body `type:` is enforced at the wire.**
 
 - **Issue #75 — guard declarations are now enforced.** A guard's
   `declaration:` block is no longer inert. Before the guard's steps
