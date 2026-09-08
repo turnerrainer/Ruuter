@@ -87,6 +87,44 @@ pub struct Allowlist {
     pub headers: Option<Vec<DslField>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Vec<DslField>>,
+    /// Issue #75 — express "at least one of X, Y, Z must be present"
+    /// contracts. Each `Vec<String>` is one alternative group; the
+    /// group is satisfied when the request carries at least one of
+    /// its fields. Applied per-section so headers-only, params-only,
+    /// or body-only constraints stay explicit. Motivating case from
+    /// the reporter: a guard that admits on `X-Api-Key` OR
+    /// `X-Internal-Service-Token` couldn't declare its credential
+    /// contract at all because `allowlist.headers` treated both
+    /// entries as mandatory.
+    ///
+    /// ```yaml
+    /// allowlist:
+    ///   headers:
+    ///     - field: x-api-key
+    ///     - field: x-internal-service-token
+    ///   required_one_of:
+    ///     headers:
+    ///       - [x-api-key, x-internal-service-token]
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_one_of: Option<RequiredOneOf>,
+}
+
+/// Issue #75 — per-section "at least one of these fields must be
+/// present" groups. Each inner `Vec<String>` is one alternative
+/// group; the group is satisfied when the request carries at least
+/// one of its members. Multiple groups compose with AND (every
+/// group must be satisfied).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RequiredOneOf {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Vec<Vec<String>>>,
+    /// Accepts both `headers` and `header` for parity with the
+    /// allowlist itself.
+    #[serde(default, alias = "header", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Vec<Vec<String>>>,
 }
 
 /// Task 070 — per-field metadata used by allowlist entries AND

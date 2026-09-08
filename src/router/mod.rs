@@ -325,7 +325,25 @@ impl DslRouter {
         // does not run. The same `ExecutionContext` flows through, so
         // a guard can `assign` variables (e.g. a parsed token) for
         // the main DSL to consume.
+        //
+        // Issue #75 — before each guard runs its steps, enforce its
+        // own `declaration:` contract (required fields, required_one_of
+        // groups, body types) against the RAW request. Guards can
+        // now declare their credential/input contract for OpenAPI
+        // consumers without having to hand-write the check in the
+        // DSL. Filtering / strict-key rejection do NOT apply to
+        // guards — guards check, they don't reshape the request for
+        // downstream.
         for guard in self.applicable_guards(project, &matched_key) {
+            if let Some(decl) = &guard.declaration {
+                enforce_guard_declaration(
+                    decl,
+                    context.request_body(),
+                    context.request_query(),
+                    context.request_headers(),
+                    &uppercase_method,
+                )?;
+            }
             let guard_result = self.engine.run(&guard, &context).await?;
             if guard_result.status >= 400 {
                 return Ok(guard_result);
@@ -1387,6 +1405,14 @@ fn apply_declaration(
         }
     }
 
+    // Issue #75 — `required_one_of` (per-section). Runs whether or not
+    // the section has an allowlist (someone can write "at least one
+    // of x-api-key / x-internal-service-token" without declaring the
+    // full allowlist). Checked against the current view of the map —
+    // additive posture keeps unknown keys visible, so the check sees
+    // the same data the DSL will.
+    enforce_required_one_of(decl, &body, &query, &headers)?;
+
     if let Some(allow) = decl.effective_allowed_params() {
         // Preserve the framework-injected `pathParams` key so path-
         // param DSLs keep working regardless of the declared allowlist.
@@ -1432,6 +1458,105 @@ fn apply_declaration(
     }
 
     Ok((body, query, headers))
+}
+
+/// Issue #75 — guard-declaration enforcement. Runs BEFORE each
+/// guard's steps against the raw request. Applies the presence
+/// checks — required, required_one_of, body types — but NOT the
+/// filter / strict-rejection path. Guards check auth and short-
+/// circuit; they don't reshape the request for downstream. If the
+/// filter fired here, the terminal DSL's `apply_declaration` would
+/// then see an already-mangled view and its own contract wouldn't
+/// compose.
+fn enforce_guard_declaration(
+    decl: &crate::dsl::DeclarationStep,
+    body: &HashMap<String, Value>,
+    query: &HashMap<String, Value>,
+    headers: &HashMap<String, String>,
+    method: &str,
+) -> Result<()> {
+    // Missing-required (only when there's an allowlist to draw the
+    // required set from). Legacy flat allowed_body → all required;
+    // structured → only entries with required:true.
+    if let Some(allow) = decl.effective_allowed_body() {
+        if method == "POST" {
+            for name in required_body_field_names(decl, &allow) {
+                if !body.contains_key(&name) {
+                    return Err(RuuterError::BadRequest(format!("Field missing: {}", name)));
+                }
+            }
+        }
+        if let Some(structured) = decl.structured_body() {
+            check_field_types(body, structured, "body")?;
+        }
+    }
+    if let Some(allow) = decl.effective_allowed_params() {
+        if method == "GET" {
+            if let Some(allow_body) = decl.effective_allowed_body() {
+                for name in required_body_field_names(decl, &allow_body) {
+                    if !query.contains_key(&name) {
+                        return Err(RuuterError::BadRequest(format!("Field missing: {}", name)));
+                    }
+                }
+            }
+        }
+        // Reference `allow` so clippy doesn't flag it — the presence
+        // of a param allowlist is what gates the GET missing check
+        // above; the list of names itself is only used by structured
+        // metadata callers (see terminal-DSL apply_declaration).
+        let _ = allow;
+    }
+    enforce_required_one_of(decl, body, query, headers)?;
+    Ok(())
+}
+
+/// Issue #75 — check every `required_one_of` group in the declaration
+/// against the current request maps. A group is satisfied when the
+/// section's map contains at least one of the group's field names.
+/// Diagnostic names the section and the group members so the caller
+/// can see which alternative satisfies the contract.
+fn enforce_required_one_of(
+    decl: &crate::dsl::DeclarationStep,
+    body: &HashMap<String, Value>,
+    query: &HashMap<String, Value>,
+    headers: &HashMap<String, String>,
+) -> Result<()> {
+    let Some(allowlist) = decl.allowlist.as_ref() else {
+        return Ok(());
+    };
+    let Some(one_of) = allowlist.required_one_of.as_ref() else {
+        return Ok(());
+    };
+    let body_present = |k: &str| body.contains_key(k);
+    let query_present = |k: &str| query.contains_key(k);
+    let headers_present = |k: &str| headers.contains_key(k);
+
+    check_one_of_groups(one_of.body.as_deref(), "body", &body_present)?;
+    check_one_of_groups(one_of.params.as_deref(), "params", &query_present)?;
+    check_one_of_groups(one_of.headers.as_deref(), "headers", &headers_present)?;
+    Ok(())
+}
+
+/// Issue #75 — per-section helper for `enforce_required_one_of`.
+/// `present` returns true when the section carries a given field name.
+/// Emits one 400 per unsatisfied group, naming the section and every
+/// alternative so a client debugging the rejection sees the OR-choices.
+fn check_one_of_groups(
+    groups: Option<&[Vec<String>]>,
+    section: &str,
+    present: &dyn Fn(&str) -> bool,
+) -> Result<()> {
+    let Some(groups) = groups else { return Ok(()) };
+    for group in groups {
+        if !group.iter().any(|name| present(name)) {
+            return Err(RuuterError::BadRequest(format!(
+                "Missing required_one_of in {}: at least one of [{}] must be present",
+                section,
+                group.join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Issue #75 — enforce declared `type:` on body fields present in

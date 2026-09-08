@@ -137,6 +137,95 @@ would previously succeed (Ruuter silently dropped `surprise`). With
 `traceparent` on request headers is always allowed under `strict`
 even if it isn't in the header allowlist (framework-injected).
 
+### `allowlist.required_one_of` (issue #75)
+
+Express "at least one of these fields must be present" contracts.
+Groups are per-section (body / params / headers) and compose with
+AND — every group must be satisfied. Motivating case: a guard that
+admits on `X-Api-Key` OR `X-Internal-Service-Token` couldn't
+declare its contract at all with the base allowlist (listing both
+made both mandatory).
+
+```yaml
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+    body:
+      - field: email
+      - field: phone
+    required_one_of:
+      body:
+        - [email, phone]
+```
+
+A request satisfying neither alternative returns:
+
+```json
+{"error": "Missing required_one_of in headers: at least one of [x-api-key, x-internal-service-token] must be present"}
+```
+
+Works on route DSLs and on guards. Composes with `required: true`
+on individual fields — required fields must always be present; the
+one_of groups add an OR-of-alternatives contract on top.
+
+### Guard-carried declarations (issue #75)
+
+Guards are ordinary DSLs and can carry a `declaration:` block. Fields
+enforced on the raw request BEFORE the guard's steps run:
+
+- `required: true` on `allowlist.body / .params / .headers` entries
+  → missing field → 400.
+- `allowlist.required_one_of` groups → unsatisfied group → 400.
+- Body `type:` mismatch → 400.
+
+Fields **not** enforced on guards:
+
+- Filtering (`strict:` and `additive:` are no-ops on guards). Guards
+  check, they don't reshape the request for downstream. Only the
+  terminal DSL's declaration filters `incoming.*` for the route.
+
+Example — declare the reporter's X-Api-Key/X-Internal-Service-Token
+credential contract at the guard level:
+
+```yaml
+# platforms/.guard.yml
+declaration:
+  description: "Accepts X-Api-Key OR X-Internal-Service-Token."
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+
+check_present:
+  switch:
+    - condition: ${incoming.headers?.['x-internal-service-token'] == '[#INTERNAL_SERVICE_TOKEN]'}
+      next: allow
+  next: check_api_key
+
+check_api_key:
+  switch:
+    - condition: ${incoming.headers['x-api-key'] == '[#API_KEY]'}
+      next: allow
+  next: deny
+
+allow: { return: { ok: true }, next: end }
+deny: { status: 401, return: { error: "unauthorized" }, next: end }
+```
+
+The declaration surfaces the credential contract to the OpenAPI
+generator (with `required_one_of` naming the alternatives) without
+duplicating the check in the DSL — the guard's steps still do the
+actual credential comparison, but a caller missing both headers
+never reaches them.
+
 ### `additive` (issue #75)
 
 Per-DSL opt-in to skip the filter step entirely — undeclared fields

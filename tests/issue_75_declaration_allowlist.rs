@@ -985,3 +985,476 @@ reply:
     .await;
     assert_eq!(status, 200);
 }
+
+// ============================================================================
+// 7. required_one_of — "at least one of these fields must be present"
+// ============================================================================
+
+/// Reporter's example B pattern (X-Api-Key OR X-Internal-Service-Token):
+/// neither header present → 400 naming the two alternatives.
+#[tokio::test]
+async fn terminal_dsl_required_one_of_all_missing_returns_400() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "neither header present must 400: {body}");
+    assert!(
+        body.contains("required_one_of") && body.contains("x-api-key"),
+        "diagnostic must name both alternatives: {body}"
+    );
+    assert!(
+        body.contains("x-internal-service-token"),
+        "diagnostic must name second alternative: {body}"
+    );
+}
+
+/// Either alternative admits the request.
+#[tokio::test]
+async fn terminal_dsl_required_one_of_first_present_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[("x-api-key", "k")],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn terminal_dsl_required_one_of_second_present_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[("x-internal-service-token", "t")],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// required_one_of also works on body and params.
+#[tokio::test]
+async fn terminal_dsl_required_one_of_body_group() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: email
+      - field: phone
+    required_one_of:
+      body:
+        - [email, phone]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    // Neither → 400.
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "no contact channel supplied: {body}");
+    // Just email → 200.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"email": "a@b.c"}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+    // Just phone → 200.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({"phone": "+123"}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+/// Multiple `required_one_of` groups compose with AND: every group
+/// must be satisfied.
+#[tokio::test]
+async fn terminal_dsl_multiple_required_one_of_groups_are_conjoined() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/probe.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-auth-a
+      - field: x-auth-b
+      - field: x-tenant-1
+      - field: x-tenant-2
+    required_one_of:
+      headers:
+        - [x-auth-a, x-auth-b]
+        - [x-tenant-1, x-tenant-2]
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    // First group satisfied, second not → 400.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[("x-auth-a", "x")],
+    )
+    .await;
+    assert_eq!(status, 400);
+    // Both groups satisfied → 200.
+    let (status, _body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/probe",
+        serde_json::json!({}),
+        &[("x-auth-a", "x"), ("x-tenant-2", "y")],
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+// ============================================================================
+// 8. Guard-carried declarations (issue #75 example B)
+// ============================================================================
+
+/// A guard declares `required_one_of` for its credential contract.
+/// Neither credential present → 400 from the guard's declaration
+/// (before the guard's own steps run).
+#[tokio::test]
+async fn guard_required_one_of_all_missing_returns_400() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/.guard.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+allow:
+  return: { ok: true }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/things.yml",
+        r#"
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/things",
+        serde_json::json!({}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "guard's declaration check fires: {body}");
+    assert!(
+        body.contains("required_one_of") && body.contains("x-api-key"),
+        "diagnostic must come from guard's declaration: {body}"
+    );
+}
+
+/// Guard's declaration admits when one credential is present. The
+/// terminal DSL then runs.
+#[tokio::test]
+async fn guard_required_one_of_first_present_admits() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/.guard.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+allow:
+  return: { ok: true }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/things.yml",
+        r#"
+reply:
+  return: { via: "route" }
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/things",
+        serde_json::json!({}),
+        &[("x-api-key", "k")],
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(body.contains("route"), "route DSL must run: {body}");
+}
+
+/// Guard-declared `required: true` on a header fires before the
+/// guard's own steps run.
+#[tokio::test]
+async fn guard_declaration_missing_required_returns_400() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/.guard.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: token
+        type: string
+        required: true
+allow:
+  return: { ok: true }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/things.yml",
+        r#"
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/things",
+        serde_json::json!({}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400, "guard's required-field check fires: {body}");
+    assert!(body.contains("Field missing: token"), "diagnostic: {body}");
+}
+
+/// Guard-declared body types are enforced.
+#[tokio::test]
+async fn guard_declaration_type_check_enforced() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/.guard.yml",
+        r#"
+declaration:
+  allowlist:
+    body:
+      - field: token
+        type: string
+        required: true
+allow:
+  return: { ok: true }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/things.yml",
+        r#"
+reply:
+  return: "ok"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/things",
+        serde_json::json!({"token": 12345}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(body.contains("Field type mismatch"), "diagnostic: {body}");
+}
+
+/// Guards do NOT filter — a guard with an `allowlist` still passes
+/// undeclared fields through to the terminal DSL. Only the terminal
+/// DSL's declaration filters.
+#[tokio::test]
+async fn guard_declaration_does_not_strip_undeclared_headers() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/.guard.yml",
+        r#"
+declaration:
+  allowlist:
+    headers:
+      - field: x-guard-only
+allow:
+  return: { ok: true }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/things.yml",
+        r#"
+reply:
+  return:
+    guard_hdr: "${incoming.headers['x-guard-only']}"
+    other_hdr: "${incoming.headers['x-other']}"
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/things",
+        serde_json::json!({}),
+        &[("x-guard-only", "g"), ("x-other", "o")],
+    )
+    .await;
+    assert_eq!(status, 200);
+    // Both headers must survive — the guard's allowlist doesn't strip.
+    assert!(
+        body.contains(r#""g""#),
+        "guard-listed header present: {body}"
+    );
+    assert!(
+        body.contains(r#""o""#),
+        "undeclared header still visible: {body}"
+    );
+}
+
+/// Backwards compat: a guard with `declaration: { override_ancestors:
+/// true }` and no allowlist still runs its steps (no enforcement
+/// pass to trigger a false rejection). The route is under the
+/// override guard's scope; the parent's deny does NOT fire.
+#[tokio::test]
+async fn guard_declaration_with_only_override_ancestors_still_works() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/parent.guard.yml",
+        r#"
+deny:
+  status: 401
+  return: { error: "parent guard denied" }
+  next: end
+"#,
+    );
+    // Override guard at parent/specific.guard.yml protects
+    // POST/parent/specific/*. Its `declaration.override_ancestors:
+    // true` REPLACES the parent guard for its subtree.
+    write_dsl(
+        tmp.path(),
+        "svc/POST/parent/specific.guard.yml",
+        r#"
+declaration:
+  override_ancestors: true
+allow:
+  return: { via: "override" }
+  next: end
+"#,
+    );
+    write_dsl(
+        tmp.path(),
+        "svc/POST/parent/specific/thing.yml",
+        r#"
+reply:
+  return: { via: "route" }
+  status: 200
+"#,
+    );
+    let (status, body) = post_json_headers(
+        build_router(tmp.path()),
+        "/svc/parent/specific/thing",
+        serde_json::json!({}),
+        &[],
+    )
+    .await;
+    // Override wins over parent → parent's 401 does NOT fire.
+    // Override guard admits (no >=400 status), so terminal DSL runs.
+    assert_eq!(status, 200, "override guard admits: {body}");
+    assert!(body.contains("route"));
+}
