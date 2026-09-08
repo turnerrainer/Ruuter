@@ -300,86 +300,15 @@ impl DslRouter {
         let mut new_headers = headers;
         new_headers.insert("traceparent".to_string(), traceparent.clone());
 
-        // Audit finding 10: enforce declare-block allowlists (Java's
-        // DslService `filterFields` + `checkFields`). Body / query /
-        // header maps are filtered down to the declared allowlist;
-        // POST body additionally must CONTAIN every declared field
-        // (`checkFields`). GET runs the check against the query.
-        // Missing declaration = permissive (matches Java).
-        let mut body = body;
-        if let Some(decl) = &dsl.declaration {
-            let strict = decl.is_strict();
-            if let Some(allow) = decl.effective_allowed_body() {
-                // Task 070 — strict posture: reject unknown keys with
-                // 400 instead of silently filtering. Traditional
-                // (filter-and-continue) posture preserved when
-                // `strict: false`.
-                if strict {
-                    reject_unknown_str_keyed(&body, &allow, "body")?;
-                } else {
-                    filter_str_keyed(&mut body, &allow);
-                }
-                if uppercase_method == "POST" {
-                    for field in &allow {
-                        if !body.contains_key(field) {
-                            return Err(RuuterError::DslExecution {
-                                step: "declare".into(),
-                                message: format!("Field missing: {}", field),
-                            });
-                        }
-                    }
-                }
-            }
-            if let Some(allow) = decl.effective_allowed_params() {
-                // Preserve the framework-injected `pathParams` key so
-                // path-param DSLs keep working regardless of the
-                // declared allowlist.
-                let path_params_saved = query.remove("pathParams");
-                if strict {
-                    reject_unknown_str_keyed(&query, &allow, "params")?;
-                } else {
-                    filter_str_keyed(&mut query, &allow);
-                }
-                if let Some(pp) = path_params_saved {
-                    query.insert("pathParams".to_string(), pp);
-                }
-                if uppercase_method == "GET" {
-                    if let Some(allow_body) = decl.effective_allowed_body() {
-                        for field in &allow_body {
-                            if !query.contains_key(field) {
-                                return Err(RuuterError::DslExecution {
-                                    step: "declare".into(),
-                                    message: format!("Field missing: {}", field),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(allow) = decl.effective_allowed_header() {
-                // Strict posture on headers is measured against a
-                // filtered view that keeps framework-injected headers
-                // (traceparent) out of the "unknown" bucket. Otherwise
-                // every request with a traceparent (i.e. every request)
-                // would 400 under strict.
-                if strict {
-                    let allow_with_tp: Vec<String> = allow
-                        .iter()
-                        .cloned()
-                        .chain(std::iter::once("traceparent".to_string()))
-                        .collect();
-                    reject_unknown_str_keyed(&new_headers, &allow_with_tp, "headers")?;
-                } else {
-                    filter_str_keyed(&mut new_headers, &allow);
-                }
-                // Keep traceparent regardless — framework-injected.
-                new_headers
-                    .entry("traceparent".to_string())
-                    .or_insert(traceparent.clone());
-            }
-        }
-
-        let context = ExecutionContext::with_state(
+        // Issue #75 — guards run on the RAW request. `apply_declaration`
+        // (filter, strict-key rejection, missing-required check) runs
+        // AFTER the guard chain succeeds. Rationale: a route's
+        // `allowlist.headers` used to strip credential / correlation
+        // headers before the guard ran, breaking guards that depended
+        // on them (e.g. the X-Road-Id case in issue #75 example A).
+        // Post-fix, guards always see the wire request; only the
+        // terminal DSL sees the declaration-filtered view.
+        let mut context = ExecutionContext::with_state(
             body,
             query,
             new_headers,
@@ -387,7 +316,7 @@ impl DslRouter {
             project.to_string(),
             self.state.clone(),
         )
-        .with_traceparent(traceparent)
+        .with_traceparent(traceparent.clone())
         .with_expr_registry(self.engine.expr_registry().clone());
 
         // Run any guards that protect this route, outermost first.
@@ -401,6 +330,22 @@ impl DslRouter {
             if guard_result.status >= 400 {
                 return Ok(guard_result);
             }
+        }
+
+        // Issue #75 — enforce the terminal DSL's declaration block.
+        // Runs after guards (see comment above the context builder)
+        // and rewrites the context's `incoming.body / .params / .headers`
+        // to the filtered view before the main DSL sees them.
+        if let Some(decl) = &dsl.declaration {
+            let filtered = apply_declaration(
+                decl,
+                context.request_body().clone(),
+                context.request_query().clone(),
+                context.request_headers().clone(),
+                &uppercase_method,
+                &traceparent,
+            )?;
+            context.replace_request_view(filtered.0, filtered.1, filtered.2);
         }
 
         self.engine.run(&dsl, &context).await
@@ -1375,6 +1320,131 @@ fn reject_unknown_str_keyed<V>(
         }
     }
     Ok(())
+}
+
+/// Issue #75 — the (body, query, headers) tuple returned by
+/// `apply_declaration`. Named to keep the signature readable and
+/// silence `clippy::type_complexity`.
+type RequestView = (
+    HashMap<String, Value>,
+    HashMap<String, Value>,
+    HashMap<String, String>,
+);
+
+/// Issue #75 — the terminal DSL's declaration enforcement pass. Runs
+/// AFTER the guard chain (see `execute_dsl`) so guards see the raw
+/// request. Applies, in this order:
+///
+/// 1. Body / params / headers filtering (silent strip or 400 under
+///    `strict: true`).
+/// 2. Missing-required check. Structured `allowlist.body:` entries
+///    honour the per-field `required:` flag (default false); legacy
+///    flat `allowed_body: [name, ...]` presence-enforces every
+///    listed field, matching pre-#75 semantics.
+///
+/// A missing required field now returns `RuuterError::BadRequest`
+/// (400) instead of `DslExecution` (500). The declaration is a
+/// client-input contract; violations are client errors, not server
+/// errors.
+///
+/// `traceparent` is threaded in so the header-strip path can keep
+/// the framework-injected value regardless of the DSL's allowlist.
+fn apply_declaration(
+    decl: &crate::dsl::DeclarationStep,
+    mut body: HashMap<String, Value>,
+    mut query: HashMap<String, Value>,
+    mut headers: HashMap<String, String>,
+    method: &str,
+    traceparent: &str,
+) -> Result<RequestView> {
+    let strict = decl.is_strict();
+
+    if let Some(allow) = decl.effective_allowed_body() {
+        if strict {
+            reject_unknown_str_keyed(&body, &allow, "body")?;
+        } else {
+            filter_str_keyed(&mut body, &allow);
+        }
+        if method == "POST" {
+            for name in required_body_field_names(decl, &allow) {
+                if !body.contains_key(&name) {
+                    return Err(RuuterError::BadRequest(format!("Field missing: {}", name)));
+                }
+            }
+        }
+    }
+
+    if let Some(allow) = decl.effective_allowed_params() {
+        // Preserve the framework-injected `pathParams` key so path-
+        // param DSLs keep working regardless of the declared allowlist.
+        let path_params_saved = query.remove("pathParams");
+        if strict {
+            reject_unknown_str_keyed(&query, &allow, "params")?;
+        } else {
+            filter_str_keyed(&mut query, &allow);
+        }
+        if let Some(pp) = path_params_saved {
+            query.insert("pathParams".to_string(), pp);
+        }
+        if method == "GET" {
+            if let Some(allow_body) = decl.effective_allowed_body() {
+                for name in required_body_field_names(decl, &allow_body) {
+                    if !query.contains_key(&name) {
+                        return Err(RuuterError::BadRequest(format!("Field missing: {}", name)));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(allow) = decl.effective_allowed_header() {
+        // Strict posture on headers is measured against a filtered
+        // view that keeps framework-injected headers (traceparent)
+        // out of the "unknown" bucket. Otherwise every request with
+        // a traceparent (i.e. every request) would 400 under strict.
+        if strict {
+            let allow_with_tp: Vec<String> = allow
+                .iter()
+                .cloned()
+                .chain(std::iter::once("traceparent".to_string()))
+                .collect();
+            reject_unknown_str_keyed(&headers, &allow_with_tp, "headers")?;
+        } else {
+            filter_str_keyed(&mut headers, &allow);
+        }
+        // Keep traceparent regardless — framework-injected.
+        headers
+            .entry("traceparent".to_string())
+            .or_insert_with(|| traceparent.to_string());
+    }
+
+    Ok((body, query, headers))
+}
+
+/// Issue #75 — return the subset of `allow` (the effective flat field-
+/// name list) whose entries are missing-checked. Legacy flat form
+/// (`allowed_body: [name, ...]`) has no per-field metadata, so every
+/// listed field is required (pre-#75 behaviour, matches Java Ruuter).
+/// Structured form (`allowlist.body: [{field: X, required: true}]`)
+/// honours the flag — default false, so a field is only required when
+/// `required: true` is explicit. Same rule the OpenAPI generator
+/// applies when emitting the schema's `required: [...]` array
+/// (`src/openapi.rs`).
+fn required_body_field_names(decl: &crate::dsl::DeclarationStep, allow: &[String]) -> Vec<String> {
+    // Legacy flat form wins over structured (matches
+    // `effective_allowed_body`'s precedence). When the legacy flat
+    // field is set, ALL listed names are required.
+    if decl.allowed_body.is_some() {
+        return allow.to_vec();
+    }
+    match decl.structured_body() {
+        Some(fields) => fields
+            .iter()
+            .filter(|f| f.required.unwrap_or(false))
+            .map(|f| f.field.clone())
+            .collect(),
+        None => allow.to_vec(),
+    }
 }
 
 fn parse_payload(text: &str) -> Value {

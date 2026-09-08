@@ -109,7 +109,7 @@ async fn main() {
             if missing_decl > 0 && config.dsl.warn_on_missing_declaration {
                 info!(
                     "{} of {} HTTP DSLs have no declaration block; add `declaration:` \
-                     for richer OpenAPI + strict-key support (see book/src/dsl/declaration.md), \
+                     for richer OpenAPI + strict-key support (see book/src/dsl/steps/declaration.md), \
                      or set `dsl.warn_on_missing_declaration: false` to hide these WARNs.",
                     missing_decl, http_total
                 );

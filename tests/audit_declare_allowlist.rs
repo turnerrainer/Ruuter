@@ -95,7 +95,10 @@ reply:
     );
 }
 
-/// checkFields fires on POST — missing declared field is a hard 500.
+/// Legacy flat `allowed_body:` still presence-enforces every listed
+/// field on POST (matches Java Ruuter and pre-#75 behaviour). The
+/// status code moved from 500 → 400 in issue #75 — a missing required
+/// input is a client error, not a server error.
 #[tokio::test]
 async fn allowed_body_check_fires_on_missing_field_post() {
     let tmp = TempDir::new().unwrap();
@@ -117,7 +120,7 @@ reply:
         serde_json::json!({ "userId": 42 }),
     )
     .await;
-    assert_eq!(status, 500);
+    assert_eq!(status, 400);
     assert!(body.contains("Field missing: amount"), "diagnostic: {body}");
 }
 

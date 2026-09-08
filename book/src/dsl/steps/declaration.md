@@ -70,7 +70,10 @@ metadata:
   `boolean`, `array`, `object`.
 - `required` — `true` puts the field in the OpenAPI `required` array;
   in the request body allowlist for POST/PUT/PATCH, missing required
-  fields cause a `Field missing: X` error (500). Default `false`.
+  fields cause a `400 Bad Request` (`{"error": "Field missing: X"}`).
+  Default `false` — fields without an explicit `required: true` are
+  optional at the wire (issue #75). The runtime and OpenAPI generator
+  agree on this rule: only `required: true` fields are enforced.
 - `format` — OpenAPI format hint (`email`, `uuid`, `date-time`, …).
 - `description` — human-readable, shows in the spec.
 - `default` — default value; emitted as `default:` in the spec.
@@ -137,16 +140,24 @@ guards for its subtree; `false` (default) = guards stack. See
 
 ## Effects at request time
 
-1. **Allowlist filtering.** Body / query / header maps are restricted
-   to declared field names before the DSL sees them.
-2. **Required-field check.** On POST, every declared body field must
-   be present. On GET, every declared body field must be present in
-   the query string (Java-parity). Missing → 500.
-3. **Strict-key rejection.** When `strict: true`, any request key
+1. **Guard chain runs first.** Guards see the RAW wire request
+   (issue #75). A route's `allowlist:` never strips a header the
+   parent guard needs to read — filter happens after the guard
+   admits the request.
+2. **Allowlist filtering.** After guards pass, body / query / header
+   maps are restricted to declared field names before the terminal
+   DSL sees them.
+3. **Required-field check.** Only fields marked `required: true` on
+   the structured form are enforced. Missing → **400 Bad Request**
+   (`{"error": "Field missing: X"}`). On POST the check runs against
+   the body; on GET, against the query string (Java-parity). Legacy
+   flat `allowed_body: [...]` (no metadata) presence-enforces every
+   listed name.
+4. **Strict-key rejection.** When `strict: true`, any request key
    not in the effective allowlist → 400.
-4. **OpenAPI generation.** Full spec produced from declaration
+5. **OpenAPI generation.** Full spec produced from declaration
    metadata; consumers generate typed clients.
-5. **Missing-declaration WARN.** Boot-time WARN per HTTP DSL without
+6. **Missing-declaration WARN.** Boot-time WARN per HTTP DSL without
    a declaration (gated by `dsl.warn_on_missing_declaration`, default
    on). Silence via config.
 

@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Issue #75 — `declaration.allowlist` contract fixes.** Four coupled
+  bugs in the declaration-block enforcement path, all reported by
+  sviljus against `turnerrainer/ruuter:0.9.10-rc`:
+
+  - **Guards now run BEFORE `allowlist` stripping.** Pre-fix the
+    router filtered `incoming.body / .params / .headers` down to the
+    route's `allowlist:` **before** dispatching the guard chain. A
+    route whose `allowlist.headers` omitted a header its guard read
+    (e.g. `xroad/.guard.yml` reading `X-Road-Id`) would silently
+    break the guard — the guard saw the stripped view and 4xx'd every
+    request (issue example A, 8 CI tests red). Post-fix, guards run
+    against the raw wire request; only the terminal DSL sees the
+    filtered view. The reorder is a security-adjacent fix: it closes
+    a class of "adding a route-level declaration breaks the parent
+    guard" regressions. New helper: `ExecutionContext::replace_request_view`
+    on `src/context/mod.rs`. Test:
+    `guard_sees_headers_not_listed_in_routes_allowlist`.
+
+  - **`required: false` on structured `allowlist.body / .params:`
+    entries is now honoured.** Pre-fix, every listed field was
+    presence-enforced regardless of the flag — the runtime path
+    collapsed `Vec<DslField>` down to `Vec<String>` of names and lost
+    the metadata (issue example C, `dev-login.yml` couldn't declare
+    `firstName` as optional; `admin/POST/v1/gates.yml` couldn't
+    declare `tlsCert` as optional). Post-fix, the runtime matches the
+    OpenAPI generator: default `false`; a field is only required when
+    `required: true` is explicit. Legacy flat `allowed_body: [...]`
+    is unchanged (no metadata slot → all listed fields required, as
+    before). New helper: `required_body_field_names` on
+    `src/router/mod.rs`. Tests:
+    `structured_required_false_allows_missing_field`,
+    `structured_required_absent_defaults_to_not_required`,
+    `legacy_flat_allowed_body_still_presence_enforced`.
+
+  - **Missing required field → `400 Bad Request`, not `500`.** The
+    pre-fix `RuuterError::DslExecution { step: "declare", ... }`
+    mapped to 500 — misleading (it's a client contract violation,
+    not a server error) and useless for RFC-7807-style client
+    tooling. Post-fix uses `RuuterError::BadRequest`, the same
+    variant `declaration.strict: true` already returns for unknown
+    keys. Response shape is unchanged (`{"error": "Field missing: X"}`).
+    Test: `structured_required_true_missing_field_returns_400_not_500`.
+
+  - **Doc fixes.** `src/main.rs` boot log now points at
+    `book/src/dsl/steps/declaration.md` (correct path — was
+    `book/src/dsl/declaration.md` and 404'd). `declaration.md` updated
+    to describe the corrected `required` and status-code semantics.
+
+  DSL authors: no change required for correctly-shaped DSLs. If you
+  were working around the 500 by putting a `validate_input:` switch
+  step ahead of the declaration, the switch step is now redundant for
+  presence checks — the declaration returns 400 with the same
+  `{"error": "..."}` shape your handler was returning. If you were
+  omitting `allowlist.headers` because it broke your parent guard,
+  you can now declare it safely; the guard runs on the raw request
+  and only the terminal DSL sees the filtered view.
+
 ## [0.9.11-rc] - 2026-09-04
 
 Security-hardening pass surfaced by an h2ck.me audit of the
