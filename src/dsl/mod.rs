@@ -47,6 +47,19 @@ pub struct DeclarationStep {
     /// with no allowlist, "unknown" isn't defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
+    /// Issue #75 — per-DSL opt-in for additive posture. When
+    /// `Some(true)`, the router does NOT filter body / query / header
+    /// maps down to the declared allowlist — undeclared fields pass
+    /// through to `${incoming.*}` unchanged. The `required:` check
+    /// still fires; OpenAPI still emits the declared schema. Use when
+    /// the DSL wants the allowlist purely as documentation / OpenAPI
+    /// metadata rather than as an input firewall.
+    ///
+    /// Mutually exclusive with `strict:`. Setting both is a parse-
+    /// time error (contradictory postures — strict rejects unknown
+    /// keys, additive permits them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additive: Option<bool>,
     /// Task 020 — when `Some(true)` on a guard DSL, this guard REPLACES
     /// all ancestor guards for the routes it protects (rather than
     /// stacking on top of them). Used when a specific endpoint has
@@ -74,6 +87,44 @@ pub struct Allowlist {
     pub headers: Option<Vec<DslField>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Vec<DslField>>,
+    /// Issue #75 — express "at least one of X, Y, Z must be present"
+    /// contracts. Each `Vec<String>` is one alternative group; the
+    /// group is satisfied when the request carries at least one of
+    /// its fields. Applied per-section so headers-only, params-only,
+    /// or body-only constraints stay explicit. Motivating case from
+    /// the reporter: a guard that admits on `X-Api-Key` OR
+    /// `X-Internal-Service-Token` couldn't declare its credential
+    /// contract at all because `allowlist.headers` treated both
+    /// entries as mandatory.
+    ///
+    /// ```yaml
+    /// allowlist:
+    ///   headers:
+    ///     - field: x-api-key
+    ///     - field: x-internal-service-token
+    ///   required_one_of:
+    ///     headers:
+    ///       - [x-api-key, x-internal-service-token]
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_one_of: Option<RequiredOneOf>,
+}
+
+/// Issue #75 — per-section "at least one of these fields must be
+/// present" groups. Each inner `Vec<String>` is one alternative
+/// group; the group is satisfied when the request carries at least
+/// one of its members. Multiple groups compose with AND (every
+/// group must be satisfied).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RequiredOneOf {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Vec<Vec<String>>>,
+    /// Accepts both `headers` and `header` for parity with the
+    /// allowlist itself.
+    #[serde(default, alias = "header", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Vec<Vec<String>>>,
 }
 
 /// Task 070 — per-field metadata used by allowlist entries AND
@@ -167,6 +218,32 @@ impl DeclarationStep {
     /// filter-and-continue.
     pub fn is_strict(&self) -> bool {
         self.strict.unwrap_or(false)
+    }
+
+    /// Issue #75 — whether additive posture is on for this DSL.
+    /// `Some(true)` → router does NOT filter undeclared fields out
+    /// of `${incoming.*}`; the allowlist becomes documentation
+    /// metadata only. Absent or `Some(false)` → traditional filter-
+    /// and-continue.
+    pub fn is_additive(&self) -> bool {
+        self.additive.unwrap_or(false)
+    }
+
+    /// Issue #75 — validate mutually-exclusive posture flags.
+    /// Returns `Err` if the declaration sets both `strict: true`
+    /// and `additive: true` (contradictory — one rejects unknown
+    /// keys, the other permits them). Called from the parser at
+    /// load time so an operator gets a hard failure at boot instead
+    /// of a silent one-wins-over-the-other at request time.
+    pub fn validate_posture(&self) -> Result<(), String> {
+        if self.is_strict() && self.is_additive() {
+            return Err(
+                "declaration.strict and declaration.additive are mutually exclusive \
+                 (strict rejects unknown fields; additive permits them). Pick one."
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Task 070 — structured body allowlist (with per-field metadata).

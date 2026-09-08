@@ -41,7 +41,15 @@ impl DslParser {
         // comes first in the YAML, as the Ruuter DSL contract requires.
         let yaml: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(&replaced)?;
         let steps = self.parse_steps(yaml)?;
-        Ok(Dsl::new(steps))
+        let dsl = Dsl::new(steps);
+        // Issue #75 — validate declaration posture flags at parse time
+        // so a contradictory declaration (both strict:true and additive:true)
+        // fails loudly at load rather than silently at request time.
+        if let Some(decl) = &dsl.declaration {
+            decl.validate_posture()
+                .map_err(|msg| RuuterError::DslParse(format!("declaration: {}", msg)))?;
+        }
+        Ok(dsl)
     }
 
     fn replace_constants(&self, content: &str) -> String {

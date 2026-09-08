@@ -233,4 +233,21 @@ impl ExecutionContext {
     pub fn request_origin(&self) -> &str {
         &self.request_origin
     }
+
+    /// Issue #75 — swap the request-side maps in place after guards
+    /// have run against the raw request. Guards must see the request
+    /// as it hit the wire (headers a guard needs may not be listed in
+    /// the route's `declaration.allowlist.headers`); the terminal DSL
+    /// then sees the filtered view. Only the router calls this — DSL
+    /// steps have no legitimate reason to mutate `incoming.*`.
+    pub fn replace_request_view(
+        &mut self,
+        body: HashMap<String, Value>,
+        query: HashMap<String, Value>,
+        headers: HashMap<String, String>,
+    ) {
+        self.request_body = body;
+        self.request_query = query;
+        self.request_headers = headers;
+    }
 }

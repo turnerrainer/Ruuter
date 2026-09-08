@@ -67,10 +67,18 @@ metadata:
 
 - `field` — the field name (required).
 - `type` — OpenAPI type: `string` (default), `integer`, `number`,
-  `boolean`, `array`, `object`.
+  `boolean`, `array`, `object`. Enforced at the wire for **body**
+  fields — a mismatch is a 400 (`{"error": "Field type mismatch in
+  body: <field> expected <declared>, got <received>"}`). Null values,
+  entries with no `type:` set, and unknown type names skip the check.
+  Params and headers are string-typed at the wire (issue #75); their
+  `type:` currently drives OpenAPI only.
 - `required` — `true` puts the field in the OpenAPI `required` array;
   in the request body allowlist for POST/PUT/PATCH, missing required
-  fields cause a `Field missing: X` error (500). Default `false`.
+  fields cause a `400 Bad Request` (`{"error": "Field missing: X"}`).
+  Default `false` — fields without an explicit `required: true` are
+  optional at the wire (issue #75). The runtime and OpenAPI generator
+  agree on this rule: only `required: true` fields are enforced.
 - `format` — OpenAPI format hint (`email`, `uuid`, `date-time`, …).
 - `description` — human-readable, shows in the spec.
 - `default` — default value; emitted as `default:` in the spec.
@@ -129,6 +137,124 @@ would previously succeed (Ruuter silently dropped `surprise`). With
 `traceparent` on request headers is always allowed under `strict`
 even if it isn't in the header allowlist (framework-injected).
 
+### `allowlist.required_one_of` (issue #75)
+
+Express "at least one of these fields must be present" contracts.
+Groups are per-section (body / params / headers) and compose with
+AND — every group must be satisfied. Motivating case: a guard that
+admits on `X-Api-Key` OR `X-Internal-Service-Token` couldn't
+declare its contract at all with the base allowlist (listing both
+made both mandatory).
+
+```yaml
+declaration:
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+    body:
+      - field: email
+      - field: phone
+    required_one_of:
+      body:
+        - [email, phone]
+```
+
+A request satisfying neither alternative returns:
+
+```json
+{"error": "Missing required_one_of in headers: at least one of [x-api-key, x-internal-service-token] must be present"}
+```
+
+Works on route DSLs and on guards. Composes with `required: true`
+on individual fields — required fields must always be present; the
+one_of groups add an OR-of-alternatives contract on top.
+
+### Guard-carried declarations (issue #75)
+
+Guards are ordinary DSLs and can carry a `declaration:` block. Fields
+enforced on the raw request BEFORE the guard's steps run:
+
+- `required: true` on `allowlist.body / .params / .headers` entries
+  → missing field → 400.
+- `allowlist.required_one_of` groups → unsatisfied group → 400.
+- Body `type:` mismatch → 400.
+
+Fields **not** enforced on guards:
+
+- Filtering (`strict:` and `additive:` are no-ops on guards). Guards
+  check, they don't reshape the request for downstream. Only the
+  terminal DSL's declaration filters `incoming.*` for the route.
+
+Example — declare the reporter's X-Api-Key/X-Internal-Service-Token
+credential contract at the guard level:
+
+```yaml
+# platforms/.guard.yml
+declaration:
+  description: "Accepts X-Api-Key OR X-Internal-Service-Token."
+  allowlist:
+    headers:
+      - field: x-api-key
+      - field: x-internal-service-token
+    required_one_of:
+      headers:
+        - [x-api-key, x-internal-service-token]
+
+check_present:
+  switch:
+    - condition: ${incoming.headers?.['x-internal-service-token'] == '[#INTERNAL_SERVICE_TOKEN]'}
+      next: allow
+  next: check_api_key
+
+check_api_key:
+  switch:
+    - condition: ${incoming.headers['x-api-key'] == '[#API_KEY]'}
+      next: allow
+  next: deny
+
+allow: { return: { ok: true }, next: end }
+deny: { status: 401, return: { error: "unauthorized" }, next: end }
+```
+
+The declaration surfaces the credential contract to the OpenAPI
+generator (with `required_one_of` naming the alternatives) without
+duplicating the check in the DSL — the guard's steps still do the
+actual credential comparison, but a caller missing both headers
+never reaches them.
+
+### `additive` (issue #75)
+
+Per-DSL opt-in to skip the filter step entirely — undeclared fields
+pass through to `${incoming.*}` unchanged. The allowlist becomes
+documentation / OpenAPI metadata only. `required:` still fires on
+declared fields.
+
+```yaml
+declaration:
+  additive: true
+  allowlist:
+    body:
+      - field: userName
+        required: true
+    headers:
+      - field: x-tenant
+```
+
+Use when the route legitimately consumes fields it hasn't enumerated
+(correlation headers a middleware injects, log-forwarded body keys,
+etc.) but the operator still wants the OpenAPI spec to describe the
+"official" contract. A request carrying `{"userName": "alice",
+"extra": "x"}` succeeds, and `${incoming.body.extra}` is visible to
+the DSL.
+
+`additive: true` and `strict: true` mean opposite things (permit vs.
+reject unknown keys). Setting both is a **parse-time error** — Ruuter
+refuses to load the DSL rather than silently pick a posture.
+
 ### `override_ancestors`
 
 Only meaningful on guard DSLs. `true` = this guard REPLACES ancestor
@@ -137,16 +263,24 @@ guards for its subtree; `false` (default) = guards stack. See
 
 ## Effects at request time
 
-1. **Allowlist filtering.** Body / query / header maps are restricted
-   to declared field names before the DSL sees them.
-2. **Required-field check.** On POST, every declared body field must
-   be present. On GET, every declared body field must be present in
-   the query string (Java-parity). Missing → 500.
-3. **Strict-key rejection.** When `strict: true`, any request key
+1. **Guard chain runs first.** Guards see the RAW wire request
+   (issue #75). A route's `allowlist:` never strips a header the
+   parent guard needs to read — filter happens after the guard
+   admits the request.
+2. **Allowlist filtering.** After guards pass, body / query / header
+   maps are restricted to declared field names before the terminal
+   DSL sees them.
+3. **Required-field check.** Only fields marked `required: true` on
+   the structured form are enforced. Missing → **400 Bad Request**
+   (`{"error": "Field missing: X"}`). On POST the check runs against
+   the body; on GET, against the query string (Java-parity). Legacy
+   flat `allowed_body: [...]` (no metadata) presence-enforces every
+   listed name.
+4. **Strict-key rejection.** When `strict: true`, any request key
    not in the effective allowlist → 400.
-4. **OpenAPI generation.** Full spec produced from declaration
+5. **OpenAPI generation.** Full spec produced from declaration
    metadata; consumers generate typed clients.
-5. **Missing-declaration WARN.** Boot-time WARN per HTTP DSL without
+6. **Missing-declaration WARN.** Boot-time WARN per HTTP DSL without
    a declaration (gated by `dsl.warn_on_missing_declaration`, default
    on). Silence via config.
 
