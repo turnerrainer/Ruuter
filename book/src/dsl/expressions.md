@@ -113,7 +113,32 @@ Every row below is verified on Boa AND QuickJS via the same test file, so a regr
 
 ### Math
 
-`Math.floor`, `Math.ceil`, `Math.round`, `Math.abs`, `Math.min`, `Math.max`, `Math.random`, `Math.pow` (or `**`), `Math.sqrt`, `Math.log`, `Math.log10`, and the other standard `Math.*` are all supported. Verified rows in the test cover `floor`, `ceil`, `round`, `abs`, `min`, `max`, `random`.
+| Method | Example |
+|---|---|
+| `Math.floor(x)` | `Math.floor(3.7)` → 3 |
+| `Math.ceil(x)` | `Math.ceil(3.2)` → 4 |
+| `Math.round(x)` | `Math.round(3.5)` → 4 |
+| `Math.abs(x)` | `Math.abs(-5)` → 5 |
+| `Math.min(a, b, …)` | `Math.min(1, 2, 3)` → 1 |
+| `Math.max(a, b, …)` | `Math.max(1, 2, 3)` → 3 |
+| `Math.pow(x, y)` | `Math.pow(2, 10)` → 1024 (or `2 ** 10`) |
+| `Math.sqrt(x)` | `Math.sqrt(16)` → 4 |
+| `Math.log(x)` / `Math.log10(x)` / `Math.log2(x)` | `Math.log10(1000)` → 3 |
+| `Math.random()` | returns a number in `[0, 1)` |
+| `Math.PI`, `Math.E` | irrational constants |
+
+Every row verified by `tests/issue_90_js_subset.rs::{math_helpers, math_extended}` on both backends.
+
+### Date
+
+| Method | Example |
+|---|---|
+| `Date.now()` | ms since Unix epoch (returns `number`) |
+| `new Date(ms).toISOString()` | `new Date(0).toISOString()` → `"1970-01-01T00:00:00.000Z"` |
+| `new Date(ms).getTime()` | round-trips: `new Date(1234567890000).getTime()` → 1234567890000 |
+| `new Date().getTime()` | current time in ms (equivalent to `Date.now()`) |
+
+Verified by `tests/issue_90_js_subset.rs::date_now_and_iso` on both backends.
 
 ### Regex
 
