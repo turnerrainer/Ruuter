@@ -270,7 +270,10 @@ fn math_helpers() {
     check("Math.max(1, 2, 3)", json!(3));
     // Math.random() is nondeterministic — pin only the type.
     let r = eval("Math.random()");
-    assert!(matches!(r, Value::Number(_)), "Math.random must return a number: {r:?}");
+    assert!(
+        matches!(r, Value::Number(_)),
+        "Math.random must return a number: {r:?}"
+    );
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -282,7 +285,10 @@ fn arrow_and_iife() {
     check("((x) => x + 1)(41)", json!(42));
     check("(function(x){ return x + 1; })(41)", json!(42));
     // Nested arrows.
-    check("[[1,2],[3,4]].map(a => a.reduce((x,y) => x+y, 0))", json!([3, 7]));
+    check(
+        "[[1,2],[3,4]].map(a => a.reduce((x,y) => x+y, 0))",
+        json!([3, 7]),
+    );
 }
 
 // ────────────────────────────────────────────────────────────────

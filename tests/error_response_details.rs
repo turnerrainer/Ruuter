@@ -159,8 +159,17 @@ async fn http_step_failure_surfaces_underlying_cause() {
     let tmp = TempDir::new().unwrap();
     // Deliberately unreachable target: port 1 is IANA-reserved
     // "tcpmux" and effectively never in use on a dev host, so the
-    // connect attempt fails with an OS-level error. reqwest wraps
-    // that as .source() inside its Display-hidden layers.
+    // connect attempt fails with an OS-level error.
+    //
+    // As of issue #89 (2026-09-09), transport-layer failures on
+    // http.* steps no longer RAISE — they surface as an in-band
+    // stub `HttpResponse { status: 0, error: Some("connect"),
+    // body: {error, message} }` that the DSL binds under `result:`.
+    // The intent of #28/#29 (make the underlying cause visible to
+    // the DSL author) still holds; the mechanism moved from
+    // "raise-with-source-chain in the 500 response body" to "bind
+    // stub with `message` field". This test now pins the new
+    // mechanism.
     write_dsl(
         tmp.path(),
         "svc/GET/upstream.yml",
@@ -172,24 +181,36 @@ fetch:
   result: r
   next: reply
 reply:
-  return: "ok"
+  return:
+    status: "${r.response.status}"
+    error_kind: "${r.response.error}"
+    message: "${r.response.body.message}"
   status: 200
 "#,
     );
     let router = build_router(tmp.path());
     let (status, body) = get(router, "/svc/upstream").await;
 
-    assert_eq!(status, 500);
-    // #28: response identifies the failing step + project.
-    assert!(body.contains("fetch"), "step name required, got: {body}");
-    assert!(body.contains("svc"), "project name required, got: {body}");
-    // #29 core assertion: response includes the ACTUAL cause
-    // (connect / DNS / IO error), not just the generic
-    // "error sending request for url" that reqwest's Display emits.
-    // Different platforms surface connect failures with slightly
-    // different messages (ECONNREFUSED / "Connection refused" /
-    // "actively refused" on Windows, etc.) — match on any of the
-    // common signatures.
+    // Post-#89: transport failure → stub, DSL runs → 200 with the
+    // shape the DSL asked for.
+    assert_eq!(status, 200, "transport failure must not raise: {body}");
+    // The stable transport-error kind reaches the DSL. reqwest
+    // classifies port-1 connect as "connect".
+    assert!(
+        body.contains("\"error_kind\":\"connect\""),
+        "response.error kind must be catchable: {body}"
+    );
+    // status:0 signals "no successful upstream response". Values
+    // may serialise as JSON integer or quoted string depending on
+    // whether the DSL's expression was a whole-scalar
+    // (`${r.response.status}`) — accept either shape.
+    assert!(
+        body.contains("\"status\":0") || body.contains("\"status\":\"0\""),
+        "response.status must be 0 (stub): {body}"
+    );
+    // The underlying OS/reqwest cause message reaches the DSL via
+    // `response.body.message` — the surface #28/#29 promised now
+    // lives here.
     let lower = body.to_lowercase();
     let has_cause = [
         "refused",
@@ -202,12 +223,7 @@ reply:
     .any(|needle| lower.contains(needle));
     assert!(
         has_cause,
-        "response must include the underlying connect failure cause, got: {body}"
-    );
-    // And the chain must be walked (multi-hop).
-    assert!(
-        body.contains("caused by"),
-        "response must render the source() chain, got: {body}"
+        "stub response.body.message must include the underlying connect failure cause: {body}"
     );
 }
 

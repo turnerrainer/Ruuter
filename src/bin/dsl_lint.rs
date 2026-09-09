@@ -597,9 +597,9 @@ fn check_yaml_scalar_quoting(path: &Path, raw: &str, report: &mut Report) {
         // `something: ${…}` patterns inside a block string.
         let key = &trimmed_start[..sep];
         if key.is_empty()
-            || !key.chars().all(|c| {
-                c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'
-            })
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/')
         {
             continue;
         }

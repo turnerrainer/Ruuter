@@ -111,7 +111,14 @@ async fn http_patch_5xx_bubbles_status() {
 }
 
 #[tokio::test]
-async fn http_patch_timeout_errors_out() {
+async fn http_patch_timeout_binds_stub_response() {
+    // Pre-#89 this test pinned "timeout raises → run_patch returns
+    // Err". After #89 (http.* transport failures are catchable),
+    // timeout binds a stub `HttpResponse { status: 0, error:
+    // Some("timeout") }` to the DSL's `result:` and the step
+    // returns Ok. This test now pins the new contract: timeout
+    // still visibly fails the upstream call, just via the in-band
+    // stub instead of a raise.
     let mut server = mockito::Server::new_async().await;
     let _m = server
         .mock("PATCH", "/orders/slow")
@@ -124,9 +131,26 @@ async fn http_patch_timeout_errors_out() {
         .await;
 
     let result = run_patch(format!("{}/orders/slow", server.url()), Some(50)).await;
+    let out = result.expect("step must complete (returns stub, not Err) after #89");
+    // The stub carries status:0 and a transport-error kind. The
+    // exact kind depends on where reqwest raised — could be
+    // "timeout" (request-level timeout fired) or "body" (chunked
+    // read got a timeout from the socket layer). Both are valid
+    // transport-failure signals; assert on status:0 which is stable.
+    let status = out
+        .pointer("/response/status")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(u64::MAX);
+    assert_eq!(
+        status, 0,
+        "stub status must be 0 on transport failure: {out:?}"
+    );
+    let error_kind = out
+        .pointer("/response/error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert!(
-        result.is_err(),
-        "step must fail when upstream exceeds the configured timeout, got {:?}",
-        result
+        !error_kind.is_empty(),
+        "response.error must name the transport-error kind: {out:?}"
     );
 }
