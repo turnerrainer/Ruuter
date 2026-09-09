@@ -18,6 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/ruuter-on-rust /app/ruuter-on-rust
+# Issue #83 — ship the CI tools alongside the runtime binary. Same
+# `cargo build --release` produces all three, so this adds ~15 MB and
+# zero build time. Symlinks under /usr/local/bin/ so downstream CI
+# can just `docker run … turnerrainer/ruuter:<tag> dsl-lint --dsl …`
+# without a full path. Version-alignment guarantee: tools built from
+# exactly the engine version they'll be linting against.
+COPY --from=builder /build/target/release/dsl-lint /app/dsl-lint
+COPY --from=builder /build/target/release/dsl-test /app/dsl-test
+RUN ln -s /app/dsl-lint /usr/local/bin/dsl-lint \
+ && ln -s /app/dsl-test /usr/local/bin/dsl-test
 COPY DSL ./DSL
 COPY constants.ini ./constants.ini
 

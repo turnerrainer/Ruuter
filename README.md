@@ -49,6 +49,28 @@ docker pull turnerrainer/ruuter:rc
 Every published digest is signed keyless via cosign — verify with the
 recipe in [book/src/ops/docker.md](book/src/ops/docker.md#verify-the-image-cosign).
 
+## Lint / test your DSL tree in CI (issue #83)
+
+`dsl-lint` (static analysis) and `dsl-test` (runtime scenarios) ship
+inside the same image as the runtime binary, at exactly the engine
+version they'll be validating against:
+
+```bash
+# Lint every DSL under ./DSL against constants.ini.
+docker run --rm -v "$PWD:/w" -w /w \
+    turnerrainer/ruuter:0.9.13-rc \
+    dsl-lint --dsl DSL --constants constants.ini
+
+# Run every DSL-test scenario under ./DSL-tests.
+docker run --rm -v "$PWD:/w" -w /w \
+    turnerrainer/ruuter:0.9.13-rc \
+    dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+```
+
+`:rc` for tracking the latest RC in CI; pin to `:0.9.13-rc` in a
+release-branch CI so a downstream job doesn't silently upgrade
+tooling mid-flight.
+
 ## Build from source
 
 For hacking on Ruuter itself:

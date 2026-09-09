@@ -281,6 +281,23 @@ jobs:
               exit 1
             fi
 
+            # Issue #83 — smoke-test the CI tools ship alongside the
+            # runtime binary. Same image, no server needed: run each
+            # tool with `--help` under the platform-pinned image to
+            # prove both binaries are present and QEMU-runnable on
+            # arm64. Failure here means the release publishes an
+            # image where `docker run … turnerrainer/ruuter:<tag>
+            # dsl-lint` would error out for a downstream — a
+            # regression we want caught before cosign signs.
+            for tool in dsl-lint dsl-test; do
+              if ! docker run --rm --platform "${platform}" \
+                   "${IMAGE}" "${tool}" --help >/dev/null; then
+                echo "::error::${platform}: ${tool} --help failed"
+                exit 1
+              fi
+            done
+            echo "${platform}: dsl-lint + dsl-test both runnable"
+
             docker rm -f "${cid}" >/dev/null
             echo "::endgroup::"
           done
