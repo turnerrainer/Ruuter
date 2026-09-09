@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Issue #82 — step-key list is now a single source of truth.** The
+  parser's `ACTION_STEP_KEYS` and the linter's `STEP_KEYS` moved to
+  `src/steps/mod.rs`, so future step primitives can't land in one
+  place and be silently unrecognised in the other (the two-year
+  `ws_tag:` drift PR #80 fixed). A unit test pins the invariant
+  `ACTION_STEP_KEYS = STEP_KEYS \ {"declaration"}`. An integration
+  test (`tests/issue_82_dsl_lint_step_recognition.rs`) invokes the
+  shipped `dsl-lint` binary against a fixture DSL exercising every
+  step primitive and asserts exit 0 — any drift trips this test.
+  New shipped sample `DSL/samples/WS/inbound/roles.yml` demonstrates
+  `ws_tag:` + `ws_send.broadcast_where`, giving the release-gate
+  `dsl-lint DSL/samples` check something to trip on if `ws_tag:`
+  ever regresses out of the linter's accept-list again.
+
 ### Added
 
 - **Issue #83 — `dsl-lint` and `dsl-test` now ship in the published

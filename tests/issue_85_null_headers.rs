@@ -222,7 +222,10 @@ shape:
     let body = serde_json::to_string(&r.value).unwrap_or_default();
     // Header values reach the child as strings (HTTP wire semantics).
     assert!(body.contains("\"n\":\"5\""), "integer stringifies: {body}");
-    assert!(body.contains("\"b\":\"true\""), "boolean stringifies: {body}");
+    assert!(
+        body.contains("\"b\":\"true\""),
+        "boolean stringifies: {body}"
+    );
 }
 
 /// Mixed batch — one null-valued header dropped, one string-valued
@@ -272,7 +275,10 @@ shape:
         .await
         .expect("execute_dsl");
     let body = serde_json::to_string(&r.value).unwrap_or_default();
-    assert!(body.contains("\"kept\":\"yes\""), "kept header survives: {body}");
+    assert!(
+        body.contains("\"kept\":\"yes\""),
+        "kept header survives: {body}"
+    );
     assert!(
         body.contains("\"dropped_present\":false"),
         "dropped header must be absent from child map: {body}"

@@ -28,20 +28,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const KNOWN_STEP_KEYS: &[&str] = &[
-    "assign",
-    "return",
-    "call",
-    "switch",
-    "log",
-    "template",
-    "state",
-    "iterate",
-    "ws_send",
-    "ws_tag",
-    "single_flight",
-    "declaration",
-];
+// Issue #82 — the recognised-step-key list moved to
+// `ruuter_on_rust::steps::STEP_KEYS` so this linter and the runtime
+// parser (`src/dsl/parser.rs::ACTION_STEP_KEYS`) can't drift out of
+// alignment again (PR #80 was exactly that class of bug — `ws_tag:`
+// landed in the parser only for two release cycles).
+use ruuter_on_rust::steps::STEP_KEYS as KNOWN_STEP_KEYS;
 
 fn main() -> ExitCode {
     let args = Args::parse();

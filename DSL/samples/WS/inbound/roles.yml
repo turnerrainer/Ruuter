@@ -1,0 +1,48 @@
+# WebSocket sample — permission-scoped broadcast via `ws_tag` +
+# `ws_send.broadcast_where` (issues #52, #82).
+#
+# Clients connect to:  ws://localhost:8080/samples/roles
+# Frame contracts from clients:
+#   { "type": "hello", "role": "admin" }   # stamps this connection
+#                                          # with role=admin
+#   { "type": "hello", "role": "viewer" }  # or role=viewer
+#   { "type": "broadcast_admins", "text": "…" }
+#                                          # fans out ONLY to
+#                                          # role=admin connections
+#
+# The `ws_tag` step stamps the tag on the sending connection so that
+# subsequent `broadcast_where` matches without an external directory.
+# Ships as a `dsl-lint` coverage anchor — issue #82 tracks why we
+# want at least one shipped WS sample per step primitive.
+
+route:
+  switch:
+    - condition: "${incoming.body.type === 'hello'}"
+      next: stamp_role
+    - condition: "${incoming.body.type === 'broadcast_admins'}"
+      next: fanout_admins
+  next: end
+
+stamp_role:
+  ws_tag:
+    set:
+      role: "${incoming.body.role}"
+  next: ack_hello
+
+ack_hello:
+  ws_send:
+    payload:
+      type: "hello_ack"
+      role: "${incoming.body.role}"
+  next: end
+
+fanout_admins:
+  ws_send:
+    broadcast_where:
+      tag: "role"
+      equals: "admin"
+    payload:
+      type: "admin_msg"
+      from: "${incoming.connection_id}"
+      text: "${incoming.body.text}"
+  next: end

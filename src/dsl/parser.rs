@@ -113,35 +113,30 @@ impl DslParser {
         // DSL what would actually execute. Reject at parse time
         // instead, naming every offending key, so authors either
         // split the step or fix the typo.
-        const ACTION_KEYS: &[&str] = &[
-            "call",
-            "template",
-            "assign",
-            "return",
-            "switch",
-            "log",
-            "state",
-            "iterate",
-            "ws_send",
-            "ws_tag",
-            "single_flight",
-        ];
-        let present: Vec<&str> = ACTION_KEYS
+        //
+        // Issue #82 — the action-key list moved to
+        // `crate::steps::ACTION_STEP_KEYS` so `dsl-lint` and this
+        // parser can't drift out of alignment again (PR #80 was
+        // exactly that class of bug).
+        let present: Vec<&str> = crate::steps::ACTION_STEP_KEYS
             .iter()
             .copied()
             .filter(|k| key_present(k))
             .collect();
         if present.len() > 1 {
             let quoted: Vec<String> = present.iter().map(|k| format!("`{}:`", k)).collect();
+            let allowed: Vec<String> = crate::steps::ACTION_STEP_KEYS
+                .iter()
+                .map(|k| format!("`{}:`", k))
+                .collect();
             return Err(RuuterError::DslParse(format!(
                 "step '{}' declares {} actions in one step ({}). \
-                 A DSL step must declare exactly one action \
-                 (`call:`, `assign:`, `switch:`, `log:`, `template:`, `state:`, \
-                 `iterate:`, `return:`, `ws_send:`, `ws_tag:`, or `single_flight:`). \
+                 A DSL step must declare exactly one action ({}). \
                  Move each action into its own named step and chain them with `next:`.",
                 name,
                 present.len(),
-                quoted.join(" and ")
+                quoted.join(" and "),
+                allowed.join(", "),
             )));
         }
 
