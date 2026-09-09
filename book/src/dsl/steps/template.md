@@ -40,7 +40,8 @@ Identical to the [`http` step](./http.md):
 
 - **State store**: shared with caller (same project, same DashMap).
 - **Traceparent**: forwarded from caller.
-- **Guards**: NOT re-applied. The template call bypasses guards that would fire on a real HTTP request to the same path.
+- **Guards**: **re-applied** against the child context (since v0.9.11-rc, h2ck.me H1 / PR #72). A `template:` step to a guarded route runs every applicable guard on the callee's `<METHOD>/<path>` key before dispatching the body; a guard returning `>= 400` short-circuits and the caller's `${result}` binds the guard's response. Forward auth headers explicitly via `template.headers:` if the target route depends on them.
+- **Guard recursion** (issue #79): guards that themselves contain a `template:` step no longer loop. The router tracks guard keys currently mid-execution on the `ExecutionContext` and filters the target's applicable-guard list against that stack, so `guard → template → same-guard` cycles break at the second step. A hard cap at `MAX_GUARD_DEPTH = 32` surfaces exotic mutual-recursion patterns as a clean `DslExecution` error instead of a stack overflow.
 - **Local variables**: NOT shared. The callee starts with a fresh variable context; only the values you pass via `body:`/`query:`/`headers:` reach it.
 
 ## Runnable example

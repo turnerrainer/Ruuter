@@ -139,12 +139,18 @@ impl StepEngine {
         self
     }
 
-    /// Return the list of guard DSLs that gate `(project, dsl_key)`,
-    /// outermost first, using the same helper `DslRouter` uses on
-    /// the HTTP path (`guard_audit::guard_keys_for_dsl`) so semantics
-    /// stay consistent across surfaces. Empty when no guard tree is
-    /// wired or nothing applies.
-    pub fn applicable_guards_for(&self, project: &str, dsl_key: &str) -> Vec<Dsl> {
+    /// Return `(key, guard)` pairs for every guard that gates
+    /// `(project, dsl_key)`, outermost first, using the same helper
+    /// `DslRouter` uses on the HTTP path (`guard_audit::guard_keys_for_dsl`)
+    /// so semantics stay consistent across surfaces. Empty when no
+    /// guard tree is wired or nothing applies.
+    ///
+    /// Issue #79 — returns keys alongside DSLs so callers can push
+    /// the guard's key onto the execution stack before running it
+    /// (recursion detection) and filter out guards that are already
+    /// on the stack (the reporter's project-wide `.guard.yml` that
+    /// templates into a route the same guard covers).
+    pub fn applicable_guards_for(&self, project: &str, dsl_key: &str) -> Vec<(String, Dsl)> {
         let Some(handle) = self.guards.as_ref() else {
             return Vec::new();
         };
@@ -159,7 +165,7 @@ impl StepEngine {
             return Vec::new();
         };
         keys.into_iter()
-            .filter_map(|k| project_guards.get(&k).cloned())
+            .filter_map(|k| project_guards.get(&k).cloned().map(|dsl| (k, dsl)))
             .collect()
     }
 

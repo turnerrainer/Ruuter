@@ -420,3 +420,33 @@ HTTP/1.1 403 Forbidden
 ## Order of framework checks
 
 Guards run AFTER method-allow-list, CSRF, and If-Match enforcement. See [Request pipeline](../framework/pipeline.md).
+
+## Guard recursion via `template:` (issue #79)
+
+A guard is allowed to contain a `template:` step — a common pattern is a project-wide `.guard.yml` that delegates its auth check to a shared `helpers/check-user-authority` template. Since v0.9.11-rc (h2ck.me H1) the template step re-runs the target's guard chain against the child context. If the template's target is itself covered by the same guard, the naive path `guard → template → target's guards → same guard → template → …` would recurse forever.
+
+Ruuter breaks the cycle by tracking guard keys currently mid-execution on the `ExecutionContext`. All three guard-loop call sites (HTTP entry, WS upgrade, template step) push a guard's key before running it and pop after (RAII drop-guard, so early returns and errors still pop). The template step filters `applicable_guards_for(target)` against that stack:
+
+- **Same-key cycle** (the reporter's minimal case): the guard that is currently running is silently skipped when the template step considers it again. Every OTHER guard on the target still fires.
+- **Depth cap** (`MAX_GUARD_DEPTH = 32`): exotic mutual-recursion patterns (guard A templates into guard B's territory, which templates back, etc.) that slip past the same-key check surface as a clean `RuuterError::DslExecution { step: "guard", … }` with a diagnostic listing every key on the stack. No stack overflow.
+
+**Practical guidance.** You can write:
+
+```yaml
+# svc/.guard.yml
+check:
+  template: "helpers/check-user-authority"
+  requestType: GET
+  result: r
+  next: decide
+
+decide:
+  switch:
+    - condition: "${r.userId == null}"
+      next: deny
+  next: allow
+```
+
+with `svc/GET/helpers/check-user-authority.yml` in the same project. The project guard runs once, its template step runs `check-user-authority` (whose applicable-guards list includes THIS project guard, which is filtered out), and the guard admits or denies based on the result.
+
+If the template target has its own additional guards (e.g. an `admin/*` guard folded on top of the project guard), those additional guards DO fire — filtering is scoped to the guard(s) already on the stack, not to the full guard chain.
