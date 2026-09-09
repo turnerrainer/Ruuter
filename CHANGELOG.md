@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #91 — YAML gotchas doc + `dsl-lint` scalar-quoting
+  warning.** New `book/src/dsl/yaml-gotchas.md` page covering the
+  YAML plain-scalar edge cases that trap DSL authors (`: ` inside
+  a ternary, `, ` in flow context, `#` comment starts, block-scalar
+  indicators, multi-line continuations, Unicode homoglyphs). The
+  common thread: silent misparse, no error near the offending
+  line, wrong value on the wire. `dsl-lint` now programmatically
+  catches the highest-hit case — an unquoted `${...}` scalar whose
+  expression body contains `: ` — and emits a WARNING (never an
+  error) with a suggested quoted form. Runs on every file including
+  ones that fail to parse, so the "wrap in quotes" remediation
+  surfaces alongside the generic "mapping values not allowed"
+  message serde-yaml emits. Tests: 6 cases in
+  `tests/issue_91_yaml_scalar_quoting.rs` covering the trap, the
+  quoted (double + single) forms, plain scalars without `: `,
+  comments and list-item prefixes (not inspected), and the
+  warning severity.
+
 ### Fixed
 
 - **Issue #89 — `http.*` transport failures are now catchable by the
