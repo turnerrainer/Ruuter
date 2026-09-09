@@ -3,17 +3,17 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.9.13-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.9.14-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.12-rc?** Issue #79 fix: a `template:` step
-> inside a guard whose target is under the same guard used to
-> stack-overflow the worker (fatal-abort regression from v0.9.11-rc
-> H1). Post-fix the recursion is broken by a guard-key stack on the
-> `ExecutionContext`, with a hard `MAX_GUARD_DEPTH = 32` as belt-and-
-> braces. Not a breaking change — the crash meant no operator could
-> ship this shape. Also: `dsl-lint` now accepts `ws_tag:` steps
-> (previously reported them as unrecognised). Details in
-> [CHANGELOG.md § 0.9.13-rc](CHANGELOG.md#0913-rc---2026-09-09).
+> **Upgrading from v0.9.13-rc?** Three fixes on top of v0.9.13-rc:
+> `dsl-lint` and `dsl-test` now ship inside the published image
+> (`docker run … turnerrainer/ruuter:<tag> dsl-lint --dsl DSL`);
+> the `template:` step no longer sends the literal string `"null"`
+> as a header value when the source expression evaluates to
+> `undefined`; and the parser + linter step-key lists are now a
+> single source of truth (`src/steps/mod.rs`) with a regression
+> test that guards against future drift. Details in
+> [CHANGELOG.md § 0.9.14-rc](CHANGELOG.md#0914-rc---2026-09-09).
 
 ## Try it in one command
 
@@ -21,7 +21,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.9.13-rc
+    turnerrainer/ruuter:0.9.14-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -35,7 +35,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.9.13-rc
+    turnerrainer/ruuter:0.9.14-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -58,12 +58,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.13-rc \
+    turnerrainer/ruuter:0.9.14-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.13-rc \
+    turnerrainer/ruuter:0.9.14-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 
