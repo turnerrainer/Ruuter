@@ -419,6 +419,7 @@ impl SelfCallHandler for DslRouter {
             status: result.status,
             body: result.value,
             headers: result.headers,
+            error: None,
         })
     }
 }

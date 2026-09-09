@@ -610,7 +610,47 @@ impl HttpClient {
             }
         }
 
-        let response = request.send().await?;
+        // Issue #89 — surface transport-layer failures (DNS, connect
+        // refused, TLS handshake, read/write timeout, request-build)
+        // as an in-band stub `HttpResponse { status: 0, error:
+        // Some(kind) }` instead of raising. Pre-fix, `.send().await?`
+        // propagated `reqwest::Error` up as `RuuterError::Http`, which
+        // aborted the whole run and produced Ruuter's generic 500
+        // response — the DSL author never got a chance to run a
+        // `check_*` switch that would have emitted a semantic 502.
+        //
+        // Post-fix, `HttpStepExecutor` observes `response.error ==
+        // Some(kind)`, binds the stub to the DSL's `result:`, and
+        // either routes to `error:` (if set) or falls through to
+        // `next:` — matching what the DSL author's mental model of
+        // "check the response status" already expects.
+        //
+        // Policy-level rejections (SSRF blocked, method disallowed,
+        // URL invalid, host-allowlist denial) still raise via the
+        // `RuuterError::HttpRequest` returns above — those are ops
+        // config decisions, not upstream availability events, and
+        // making them catchable would let a DSL probe the private
+        // network.
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(err) => {
+                let kind = classify_transport_error(&err);
+                tracing::warn!(
+                    http.error.kind = %kind,
+                    http.error.message = %err,
+                    "outbound http transport failure — binding stub result"
+                );
+                return Ok(HttpResponse {
+                    status: 0,
+                    body: Some(serde_json::json!({
+                        "error": kind.clone(),
+                        "message": err.to_string(),
+                    })),
+                    headers: HashMap::new(),
+                    error: Some(kind),
+                });
+            }
+        };
         let status = response.status().as_u16();
 
         // Audit finding 04: the `http_codes_allow_list` check moved
@@ -650,27 +690,73 @@ impl HttpClient {
             }
         }
 
+        // Issue #89 — a body-read failure (upstream disconnected
+        // mid-stream, read timeout during chunked read, etc.) is a
+        // transport-flavored event: the DSL author who's branching
+        // on `${result.response.status == 0}` expects to catch it,
+        // just like a connect-refused. Both stream and non-stream
+        // paths below convert `reqwest::Error` to the same stub-
+        // response shape produced by the `.send().await` catch
+        // above. The `http_response_size_limit` breach path stays a
+        // raise — it's a policy decision (upstream tried to send
+        // more than the operator allows), not an availability
+        // event.
         let bytes = if let Some(cap) = self.response_size_limit {
             let mut stream = response.bytes_stream();
             let mut buf: Vec<u8> = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk
-                    .map_err(|e| RuuterError::HttpRequest(format!("upstream read error: {}", e)))?;
-                if buf.len() + chunk.len() > cap {
-                    return Err(RuuterError::HttpRequest(format!(
-                        "upstream response body exceeded http_response_size_limit {}",
-                        cap
-                    )));
+            loop {
+                match stream.next().await {
+                    None => break,
+                    Some(Err(e)) => {
+                        let kind = classify_transport_error(&e);
+                        tracing::warn!(
+                            http.error.kind = %kind,
+                            http.error.message = %e,
+                            "upstream body-read failure — binding stub result"
+                        );
+                        return Ok(HttpResponse {
+                            status: 0,
+                            body: Some(serde_json::json!({
+                                "error": kind.clone(),
+                                "message": e.to_string(),
+                            })),
+                            headers: HashMap::new(),
+                            error: Some(kind),
+                        });
+                    }
+                    Some(Ok(chunk)) => {
+                        if buf.len() + chunk.len() > cap {
+                            return Err(RuuterError::HttpRequest(format!(
+                                "upstream response body exceeded http_response_size_limit {}",
+                                cap
+                            )));
+                        }
+                        buf.extend_from_slice(&chunk);
+                    }
                 }
-                buf.extend_from_slice(&chunk);
             }
             buf
         } else {
-            response
-                .bytes()
-                .await
-                .map_err(|e| RuuterError::HttpRequest(format!("upstream read error: {}", e)))?
-                .to_vec()
+            match response.bytes().await {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    let kind = classify_transport_error(&e);
+                    tracing::warn!(
+                        http.error.kind = %kind,
+                        http.error.message = %e,
+                        "upstream body-read failure — binding stub result"
+                    );
+                    return Ok(HttpResponse {
+                        status: 0,
+                        body: Some(serde_json::json!({
+                            "error": kind.clone(),
+                            "message": e.to_string(),
+                        })),
+                        headers: HashMap::new(),
+                        error: Some(kind),
+                    });
+                }
+            }
         };
 
         // Issue #23 — non-JSON responses used to become `null` in the
@@ -701,6 +787,7 @@ impl HttpClient {
             status,
             body,
             headers: response_headers,
+            error: None,
         })
     }
 
@@ -819,12 +906,44 @@ impl HttpClient {
     }
 }
 
-/// h2ck.me N4 — true when `ip` sits in a range that must never
-/// be reachable from an internet-exposed outbound (loopback,
-/// link-local, unspecified, RFC-1918 IPv4, ULA IPv6). Used by the
-/// default SSRF blocklist to close the cloud-metadata exposure
-/// (`169.254.169.254` and friends) even when no allowlist has been
-/// configured.
+/// Issue #89 — classify a reqwest transport error into a stable
+/// short kind that DSL authors can branch on via
+/// `${result.response.error == 'timeout'}` etc. Never localised;
+/// new kinds may be added over time but existing ones do not change.
+///
+/// | Kind        | Cause                                              |
+/// |-------------|----------------------------------------------------|
+/// | `timeout`   | Read/write timeout or reqwest client-level timeout |
+/// | `connect`   | TCP connect refused, TLS handshake failed, DNS     |
+/// | `request`   | Request-build error (e.g. bad url that slipped     |
+/// |             | past pre-flight, malformed headers)                |
+/// | `body`      | Failure reading the response body                  |
+/// | `decode`    | Response-body decode error                         |
+/// | `unknown`   | Anything else reqwest surfaces                     |
+///
+/// The rich reqwest error is not exposed — the caller-visible view
+/// is `{error, message}`, where `message` is `err.to_string()`.
+pub(crate) fn classify_transport_error(err: &reqwest::Error) -> String {
+    if err.is_timeout() {
+        "timeout".to_string()
+    } else if err.is_connect() {
+        "connect".to_string()
+    } else if err.is_request() {
+        "request".to_string()
+    } else if err.is_body() {
+        "body".to_string()
+    } else if err.is_decode() {
+        "decode".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// True when `ip` sits in a range that must never be reachable from
+/// an internet-exposed outbound (loopback, link-local, unspecified,
+/// RFC-1918 IPv4, ULA IPv6). Used by the default SSRF blocklist to
+/// close the cloud-metadata exposure (`169.254.169.254` and friends)
+/// even when no allowlist has been configured.
 fn is_private_or_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -1179,4 +1298,19 @@ pub struct HttpResponse {
     pub status: u16,
     pub body: Option<Value>,
     pub headers: HashMap<String, String>,
+    /// Issue #89 — transport-failure marker. `None` on a real
+    /// upstream response (any HTTP status the upstream actually
+    /// produced, including 4xx/5xx). `Some(kind)` when the request
+    /// never reached a responsive upstream — DNS, connect refused,
+    /// TLS handshake, read/write timeout, request-build error.
+    /// Callers (HttpStepExecutor) surface this into the DSL result
+    /// binding at `response.error` so a `check_*` switch can branch
+    /// on `${result.response.status == 0}` or
+    /// `${result.response.error == 'timeout'}` instead of aborting
+    /// the entire run.
+    ///
+    /// Kinds are stable strings (never localised): `timeout`,
+    /// `connect`, `request`, `body`, `decode`, `unknown`. New kinds
+    /// may be added; existing ones do not change.
+    pub error: Option<String>,
 }
