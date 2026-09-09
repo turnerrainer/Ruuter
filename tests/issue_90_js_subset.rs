@@ -276,6 +276,56 @@ fn math_helpers() {
     );
 }
 
+#[test]
+fn math_extended() {
+    // Verified additions — the doc claims these; the test now
+    // backs the claim.
+    check("Math.pow(2, 10)", json!(1024));
+    check("Math.sqrt(16)", json!(4));
+    check("Math.log(1)", json!(0));
+    check("Math.log10(1000)", json!(3));
+    check("Math.log2(8)", json!(3));
+    // Math.PI / Math.E are irrational; pin type only.
+    let pi = eval("Math.PI");
+    assert!(
+        matches!(pi, Value::Number(_)),
+        "Math.PI must be a number: {pi:?}"
+    );
+    let e = eval("Math.E");
+    assert!(
+        matches!(e, Value::Number(_)),
+        "Math.E must be a number: {e:?}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Date — verified on both backends
+// ────────────────────────────────────────────────────────────────
+
+#[test]
+fn date_now_and_iso() {
+    // Date.now() is nondeterministic — pin type.
+    let now = eval("Date.now()");
+    assert!(
+        matches!(now, Value::Number(_)),
+        "Date.now() must return a number (ms since epoch): {now:?}"
+    );
+
+    // new Date(<literal ms>).toISOString() is deterministic.
+    // 0 → 1970-01-01T00:00:00.000Z
+    check(
+        "new Date(0).toISOString()",
+        json!("1970-01-01T00:00:00.000Z"),
+    );
+    check(
+        "new Date(1000).toISOString()",
+        json!("1970-01-01T00:00:01.000Z"),
+    );
+
+    // .getTime() round-trips.
+    check("new Date(1234567890000).getTime()", json!(1234567890000_i64));
+}
+
 // ────────────────────────────────────────────────────────────────
 // Functions
 // ────────────────────────────────────────────────────────────────
