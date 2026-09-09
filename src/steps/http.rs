@@ -162,15 +162,53 @@ impl StepExecutor for HttpStepExecutor {
         // the upstream status / body via `${resultName.response.*}`.
         // Matches Java: DefaultHttpDsl reads the failed response's
         // status / body from the same context slot.
+        //
+        // Issue #89 — on a transport failure the HttpClient returns
+        // a stub `HttpResponse { status: 0, error: Some(kind), body:
+        // Some({error, message}), headers: {} }`. We surface both a
+        // top-level `response.error` (short stable kind: `timeout`,
+        // `connect`, `request`, `body`, `decode`, `unknown`) AND
+        // preserve the shape a `check_*` switch expects (`status`,
+        // `body`, `headers`), so the DSL author can either branch
+        // on `status == 0` or on `error == 'timeout'`.
         if let Some(result_name) = &self.step.result {
-            let result_value = json!({
-                "response": {
-                    "status": response.status,
-                    "body": response.body,
-                    "headers": response.headers,
-                }
+            let mut response_obj = serde_json::Map::new();
+            response_obj.insert("status".into(), json!(response.status));
+            response_obj.insert("body".into(), response.body.clone().unwrap_or(Value::Null));
+            response_obj.insert("headers".into(), json!(response.headers));
+            if let Some(err_kind) = &response.error {
+                response_obj.insert("error".into(), json!(err_kind));
+            }
+            let mut result_obj = serde_json::Map::new();
+            result_obj.insert("response".into(), Value::Object(response_obj));
+            context.set_variable(result_name.clone(), Value::Object(result_obj));
+        }
+
+        // Issue #89 — transport failure. Route to `error:` if the
+        // DSL wired one, otherwise fall through to `next:` so a
+        // subsequent `check_*` switch can branch on
+        // `${result.response.status == 0}`. Do NOT raise — that's
+        // the pre-fix behaviour that stole the DSL author's chance
+        // to emit a semantic 502.
+        //
+        // The allow-list-miss branch below (real upstream response
+        // with a status outside `http_codes_allow_list`) is
+        // untouched and still raises when no `error:` handler is
+        // set — that's a real policy decision, not an availability
+        // event, and its escalation semantics are load-bearing.
+        if response.error.is_some() {
+            if let Some(err_step) = &self.step.error {
+                return Ok(StepResult {
+                    next_step: Some(err_step.clone()),
+                    log_extras: http_extras(&method, &url_str, 0, true),
+                    ..StepResult::new()
+                });
+            }
+            return Ok(StepResult {
+                next_step: self.step.next.clone(),
+                log_extras: http_extras(&method, &url_str, 0, false),
+                ..StepResult::new()
             });
-            context.set_variable(result_name.clone(), result_value);
         }
 
         // Audit finding 04: honour the DSL's `error:` field on

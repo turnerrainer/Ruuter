@@ -276,5 +276,6 @@ pub async fn request_over_unix_pooled(
         status,
         body: parsed_body,
         headers: response_headers,
+        error: None,
     })
 }
