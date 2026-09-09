@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Issue #92 — `stop_in_case_of_exception` no longer WARNs on every
+  boot for operators who never touched the field.** The Rust `bool`
+  Default is `false`, so `#[serde(default)]` on the field
+  deserialised an absent value as `false` and tripped
+  `warn_on_stale_config_fields` (whose guard is `!config.stop_in_case_of_exception`).
+  Fix uses `#[serde(default = "default_stop_in_case_of_exception")]`
+  returning `true`, matching the engine's actual behaviour (always
+  halts on step error). Explicit `false` in `ruuter.yaml` still
+  WARNs — that's the intended surface for "you set a value we
+  can't honour." Related to #89 which addresses the biggest
+  category of "want a step error to be catchable" (http transport
+  failures).
+
 - **Issue #89 — `http.*` transport failures are now catchable by the
   DSL.** Pre-fix, connection-refused / DNS / TLS handshake / read-
   or-write timeout on an `http.get` / `http.post` (etc.) step
