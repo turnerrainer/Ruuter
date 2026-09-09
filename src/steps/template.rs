@@ -114,6 +114,12 @@ impl StepExecutor for TemplateStepExecutor {
         // Fresh state store for the child? No — share the parent's
         // project-scoped state so a template's `state` step sees the
         // same view its caller does. Same for traceparent propagation.
+        //
+        // Issue #79 — also share the caller's guard stack, so nested
+        // guards invoked from THIS template step observe the enclosing
+        // guard's key and can break `guard → template → same-guard`
+        // recursion. The child context is built via `with_state` (not
+        // cloned from the parent), so the propagation is explicit.
         let mut child_ctx = ExecutionContext::with_state(
             child_body,
             child_query,
@@ -121,7 +127,8 @@ impl StepExecutor for TemplateStepExecutor {
             context.request_origin().to_string(),
             project.to_string(),
             share_state_store(context),
-        );
+        )
+        .with_guard_stack_from(context);
         if let Some(tp) = context.traceparent() {
             child_ctx = child_ctx.with_traceparent(tp.to_string());
         }
@@ -141,7 +148,19 @@ impl StepExecutor for TemplateStepExecutor {
         // response body, the callee body never runs. Matches the
         // HTTP path's short-circuit semantics
         // (`DslRouter::execute_dsl`).
-        for guard in self.engine.applicable_guards_for(project, &dsl_key) {
+        //
+        // Issue #79 — filter out any guard whose key is already on
+        // the parent's execution stack (a `template:` inside a guard
+        // that gates the target would loop otherwise). Then push the
+        // key onto the stack around each guard's `engine.run`; the
+        // stack is shared with the parent context via `with_guard_stack_from`
+        // above, so nested templates inside guards see every enclosing
+        // guard's key.
+        for (guard_key, guard) in self.engine.applicable_guards_for(project, &dsl_key) {
+            if child_ctx.is_guard_on_stack(&guard_key) {
+                continue;
+            }
+            let _guard_frame = child_ctx.push_guard(guard_key)?;
             let guard_result = self.engine.run(&guard, &child_ctx).await?;
             if guard_result.status >= 400 {
                 if let Some(result_name) = &self.step.result {

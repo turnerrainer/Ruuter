@@ -17,6 +17,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`src/dsl/parser.rs` `ACTION_KEYS`) accepts it. Added `"ws_tag"` to the
   linter's key list; the two lists now match.
 
+- **Issue #79 — `template:` inside a guard no longer stack-overflows.**
+  Reporter (sviljus) hit a fatal-abort regression in v0.9.11-rc / v0.9.12-rc:
+  a project-wide `.guard.yml` that delegates its auth check to a
+  `template:` step whose target is under the same guard would recurse
+  forever. The chain was `HTTP entry → run guard → template → target's
+  applicable_guards → same guard → template → …` — no cycle break
+  anywhere, so the tokio worker aborted with `fatal runtime error:
+  stack overflow` and the container exited 134. Introduced by v0.9.11-rc
+  H1 (PR #72), where the template step started enforcing guards on its
+  target for the first time; the recursion was inherent to that design
+  but the cycle detector never landed.
+
+  Fix threads a `guard_stack: Arc<Mutex<Vec<String>>>` through
+  `ExecutionContext`. All three guard-loop call sites (HTTP entry,
+  WS upgrade, template step) now:
+  1. **Skip** any guard whose key is already on the stack (breaks
+     the reporter's cycle at step 3 above).
+  2. **Push** the guard's key before calling `engine.run(&guard, …)`
+     and pop via an RAII `GuardStackGuard` drop-guard (works across
+     the `>= 400` short-circuit and step-error return paths).
+  3. **Cap** nesting at `MAX_GUARD_DEPTH = 32` — belt-and-braces
+     against exotic mutual-recursion patterns (three guards
+     circling) that slip past the same-key check. Hitting the cap
+     surfaces as `RuuterError::DslExecution { step: "guard", … }`
+     with a diagnostic naming every key on the stack and citing
+     issue #79, so a DSL author sees the guard chain instead of a
+     bare 500.
+
+  The template step's child context now propagates the parent's
+  stack Arc via `ExecutionContext::with_guard_stack_from` — the
+  child context is a fresh `ExecutionContext::with_state` (not a
+  clone), so the propagation is explicit.
+
+  **Not a breaking change** for any correctly-shaped DSL. The pre-fix
+  crash meant no operator could have shipped this shape in production.
+  The one behaviour delta: if a guard's DSL previously invoked a
+  `template:` step whose target's guards would have re-run the SAME
+  guard, that redundant re-run no longer happens. The redundant run
+  was a bug (H1 semantics = "check on the child context"; the check
+  is already active from the enclosing invocation).
+
+  Docs: `book/src/dsl/steps/template.md` and `book/src/dsl/guards.md`
+  gained a "recursion / cycles" paragraph pointing at the guard-stack
+  behaviour and the `MAX_GUARD_DEPTH` cap.
+
+  Tests: `tests/issue_79_guard_template_recursion.rs` — 11 cases
+  covering the reporter's minimal repro, the H1-preservation case
+  (non-guard DSL still triggers target guards), a two-guard
+  interleave, and RAII / cycle / cap unit tests on `push_guard`.
+
 ## [0.9.12-rc] - 2026-09-08
 
 Issue #75 (sviljus / kemit-ee/efti-gate-ee) — full `declaration.allowlist`

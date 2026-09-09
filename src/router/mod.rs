@@ -178,12 +178,17 @@ impl DslRouter {
     /// skipped and only the closest-match (longest key) override guard
     /// runs. Non-override guards stack normally when no override is
     /// present anywhere on the path.
-    fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<Dsl> {
+    fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<(String, Dsl)> {
         // Delegate the matching rules to the shared audit helper
         // (issue #45) so this hot-path resolver, `dsl-lint
         // --require-guard`, and `GET /_/unguarded` all agree on which
         // guards apply. If the rules ever change (fourth convention,
         // new precedence, override tweak), edit ONE function.
+        //
+        // Issue #79 — returns `(key, dsl)` pairs so the guard-loop
+        // caller can push the key onto the execution stack before
+        // running the guard (recursion detection for the H1 template
+        // path).
         let snapshot = self.guards.load();
         let keys = crate::dsl::guard_audit::guard_keys_for_dsl(
             project,
@@ -199,7 +204,7 @@ impl DslRouter {
         // the average request has 1-3 applicable guards — HashMap
         // reads are negligible next to the guard's own DSL run.
         keys.into_iter()
-            .filter_map(|k| project_guards.get(&k).cloned())
+            .filter_map(|k| project_guards.get(&k).cloned().map(|dsl| (k, dsl)))
             .collect()
     }
 
@@ -334,7 +339,13 @@ impl DslRouter {
         // DSL. Filtering / strict-key rejection do NOT apply to
         // guards — guards check, they don't reshape the request for
         // downstream.
-        for guard in self.applicable_guards(project, &matched_key) {
+        //
+        // Issue #79 — push each guard's key onto the execution stack
+        // before running it. Nested `template:` steps consult the
+        // stack to break `guard → template → same-guard` recursion.
+        // RAII pop via `_guard_frame` covers both the success path
+        // and the `>= 400` short-circuit / step-error path.
+        for (guard_key, guard) in self.applicable_guards(project, &matched_key) {
             if let Some(decl) = &guard.declaration {
                 enforce_guard_declaration(
                     decl,
@@ -344,6 +355,7 @@ impl DslRouter {
                     &uppercase_method,
                 )?;
             }
+            let _guard_frame = context.push_guard(guard_key)?;
             let guard_result = self.engine.run(&guard, &context).await?;
             if guard_result.status >= 400 {
                 return Ok(guard_result);
@@ -1119,7 +1131,22 @@ impl DslRouter {
             self.state.clone(),
         )
         .with_expr_registry(self.engine.expr_registry().clone());
-        for guard in self.applicable_guards(&project, &dsl_key) {
+        for (guard_key, guard) in self.applicable_guards(&project, &dsl_key) {
+            // Issue #79 — same recursion-guard as the HTTP path; a WS
+            // upgrade guard whose DSL runs a `template:` step to a
+            // route under the same guard would otherwise loop.
+            let _guard_frame = match guard_ctx.push_guard(guard_key) {
+                Ok(g) => g,
+                Err(e) => {
+                    error!(
+                        project = %project,
+                        dsl_key = %dsl_key,
+                        error = %e,
+                        "WS upgrade guard stack error"
+                    );
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            };
             match self.engine.run(&guard, &guard_ctx).await {
                 Ok(res) if res.status >= 400 => {
                     let status = StatusCode::from_u16(res.status).unwrap_or(StatusCode::FORBIDDEN);

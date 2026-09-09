@@ -1,8 +1,18 @@
 use crate::scripting::ExpressionRegistry;
 use crate::state::StateStore;
+use crate::{Result, RuuterError};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+/// Issue #79 — hard cap on nested guard invocations. The cycle check
+/// in `push_guard` handles the common case (same guard key on the
+/// stack). This is belt-and-braces: exotic patterns (e.g. mutual
+/// recursion via three different guards) still fail loudly with a
+/// clear `RuuterError::DslExecution` instead of an aborting stack
+/// overflow. 32 is well beyond any legitimate nested-template
+/// composition.
+pub const MAX_GUARD_DEPTH: usize = 32;
 
 /// Task 036 — per-request QuickJS session cache. Holds the Runtime
 /// + Context pair together so the Runtime outlives the Context (the
@@ -69,6 +79,52 @@ pub struct ExecutionContext {
     /// it. Empty registry (default) is fine — backends fall back to
     /// per-eval compilation.
     expr_registry: ExpressionRegistry,
+    /// Issue #79 — stack of guard keys currently mid-execution.
+    /// Guard-loop call sites (HTTP entry, WS upgrade, template step)
+    /// push a guard's key before running it and pop after. Nested
+    /// `template:` steps consult the stack to filter out guards that
+    /// would recurse into themselves (the reporter's project-wide
+    /// `.guard.yml` that delegates to a template on a route the
+    /// same guard covers).
+    ///
+    /// Shared via `Arc<Mutex>` so a template step's child
+    /// `ExecutionContext` sees the caller's stack (call sites must
+    /// invoke `with_guard_stack_from` on the child).
+    guard_stack: Arc<Mutex<Vec<String>>>,
+}
+
+/// Issue #79 — RAII guard for the `ExecutionContext::guard_stack`.
+/// Constructed by `push_guard`; drops (and pops the stack) when it
+/// goes out of scope. Two properties this gives us:
+///
+/// 1. **Panic safety.** A guard-loop iteration that panics or
+///    returns Err still pops the entry — no leaked stack frames
+///    across request boundaries.
+/// 2. **Exception safety at the ?/return sites.** The template
+///    step returns early on `>= 400` guard results; the pop still
+///    fires because the `_pushed` binding drops at scope exit.
+#[must_use = "drop this guard when the enclosed engine.run() returns \
+              to pop the guard key off the execution stack"]
+pub struct GuardStackGuard {
+    stack: Arc<Mutex<Vec<String>>>,
+}
+
+impl std::fmt::Debug for GuardStackGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardStackGuard").finish_non_exhaustive()
+    }
+}
+
+impl Drop for GuardStackGuard {
+    fn drop(&mut self) {
+        // Best-effort pop. A poisoned mutex means an earlier holder
+        // panicked; the pop still runs against the poisoned inner
+        // state so a subsequent legitimate acquirer sees a coherent
+        // (if shorter) stack.
+        if let Ok(mut s) = self.stack.lock() {
+            s.pop();
+        }
+    }
 }
 
 impl ExecutionContext {
@@ -92,6 +148,7 @@ impl ExecutionContext {
             #[cfg(feature = "scripting-quickjs")]
             quickjs_session: Arc::new(std::sync::OnceLock::new()),
             expr_registry: ExpressionRegistry::default(),
+            guard_stack: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -120,6 +177,7 @@ impl ExecutionContext {
             #[cfg(feature = "scripting-quickjs")]
             quickjs_session: Arc::new(std::sync::OnceLock::new()),
             expr_registry: ExpressionRegistry::default(),
+            guard_stack: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -249,5 +307,90 @@ impl ExecutionContext {
         self.request_body = body;
         self.request_query = query;
         self.request_headers = headers;
+    }
+
+    /// Issue #79 — share the caller's guard stack with a freshly-built
+    /// child context. The `template:` step builds its `child_ctx` from
+    /// scratch via `ExecutionContext::with_state` rather than cloning;
+    /// without this call the child would start with an empty stack and
+    /// the recursion detector would miss ancestor guards.
+    ///
+    /// Cheap — an `Arc::clone` on the shared mutex handle.
+    pub fn with_guard_stack_from(mut self, parent: &ExecutionContext) -> Self {
+        self.guard_stack = parent.guard_stack.clone();
+        self
+    }
+
+    /// Issue #79 — true when `key` is on the currently-executing guard
+    /// stack. Consulted by every guard-loop call site to skip guards
+    /// that would recurse into themselves (project-wide `.guard.yml`
+    /// with a `template:` step to a route under the same guard).
+    pub fn is_guard_on_stack(&self, key: &str) -> bool {
+        self.guard_stack
+            .lock()
+            .map(|s| s.iter().any(|k| k == key))
+            .unwrap_or(false)
+    }
+
+    /// Issue #79 — push a guard's key onto the execution stack and
+    /// return an RAII drop-guard that pops it. Two hard-error paths:
+    ///
+    /// - **Cycle.** The key is already on the stack. Returning an
+    ///   error here is defence in depth: callers should have already
+    ///   filtered against `is_guard_on_stack`, so hitting this branch
+    ///   means the filter was skipped (a bug). Errors as
+    ///   `DslExecution` so the caller-facing response points at the
+    ///   offending guard.
+    /// - **Depth cap.** More than `MAX_GUARD_DEPTH` (32) guards on the
+    ///   stack. Belt-and-braces for exotic mutual-recursion patterns
+    ///   that slip past the cycle check.
+    ///
+    /// Errors surface as `RuuterError::DslExecution { step: "guard",
+    /// message: ... }` — the caller-facing shape a DSL author already
+    /// recognises from other guard-related failure modes.
+    pub fn push_guard(&self, key: String) -> Result<GuardStackGuard> {
+        let mut stack = self
+            .guard_stack
+            .lock()
+            .map_err(|_| RuuterError::DslExecution {
+                step: "guard".into(),
+                message: "guard stack mutex poisoned".into(),
+            })?;
+        if stack.len() >= MAX_GUARD_DEPTH {
+            return Err(RuuterError::DslExecution {
+                step: "guard".into(),
+                message: format!(
+                    "guard nesting exceeded MAX_GUARD_DEPTH ({}); stack: [{}]. \
+                     Likely a `template:` step whose target's guard chain \
+                     re-enters via more than {} intermediate guards. See \
+                     issue #79.",
+                    MAX_GUARD_DEPTH,
+                    stack.join(", "),
+                    MAX_GUARD_DEPTH,
+                ),
+            });
+        }
+        if stack.iter().any(|k| k == &key) {
+            return Err(RuuterError::DslExecution {
+                step: "guard".into(),
+                message: format!(
+                    "guard cycle detected: '{}' is already on the execution \
+                     stack [{}]. A `template:` step whose target is covered \
+                     by the same guard would recurse forever (issue #79).",
+                    key,
+                    stack.join(", "),
+                ),
+            });
+        }
+        stack.push(key);
+        Ok(GuardStackGuard {
+            stack: self.guard_stack.clone(),
+        })
+    }
+
+    /// Issue #79 — read-only accessor on the depth. Handy for tests
+    /// and any future diagnostic logging.
+    pub fn guard_stack_depth(&self) -> usize {
+        self.guard_stack.lock().map(|s| s.len()).unwrap_or(0)
     }
 }
