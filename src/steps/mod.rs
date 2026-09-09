@@ -19,6 +19,58 @@ pub mod template;
 pub mod ws_send;
 pub mod ws_tag;
 
+/// Issue #82 — single source of truth for step-primitive YAML keys.
+/// Consumed by two call sites that MUST stay in sync but historically
+/// drifted (PR #80 fixed a two-year gap where `ws_tag:` landed in the
+/// runtime parser without a matching update to the linter):
+///
+/// - `src/dsl/parser.rs` uses `ACTION_STEP_KEYS` (subset — excludes
+///   `declaration:` because that's metadata, not an action; a step
+///   listing both `declaration:` and `assign:` is valid and must not
+///   trip the "one step = one action" check from issue #56).
+/// - `src/bin/dsl_lint.rs` uses `STEP_KEYS` (full list — includes
+///   `declaration:` because `declaration:`-only steps are legal
+///   top-level DSL elements the linter must recognise).
+///
+/// Adding a new step primitive:
+/// 1. Add the key here (both lists if it's an action, only `STEP_KEYS`
+///    if it's metadata-only).
+/// 2. Add the parse dispatch in `src/dsl/parser.rs::parse_step`.
+/// 3. Add a variant to `DslStep` below.
+/// The invariant `ACTION_STEP_KEYS = STEP_KEYS \ {"declaration"}` is
+/// pinned by a unit test at the bottom of this module.
+pub const STEP_KEYS: &[&str] = &[
+    "assign",
+    "call",
+    "declaration",
+    "iterate",
+    "log",
+    "return",
+    "single_flight",
+    "state",
+    "switch",
+    "template",
+    "ws_send",
+    "ws_tag",
+];
+
+/// See `STEP_KEYS`. `declaration:` is metadata, not an action, so it
+/// is intentionally absent from this subset — used by the parser's
+/// "one step = one action" check (issue #56).
+pub const ACTION_STEP_KEYS: &[&str] = &[
+    "assign",
+    "call",
+    "iterate",
+    "log",
+    "return",
+    "single_flight",
+    "state",
+    "switch",
+    "template",
+    "ws_send",
+    "ws_tag",
+];
+
 /// Java-Ruuter base step fields shared by every non-Declaration
 /// step. Every executor consults these via [`DslStep::base()`] and
 /// the engine wraps step dispatch with the corresponding behaviour:
@@ -704,5 +756,47 @@ mod log_extras_tests {
             rendered
         );
         assert!(rendered.contains("state.key=\"counter\""));
+    }
+}
+
+#[cfg(test)]
+mod step_keys_tests {
+    use super::{ACTION_STEP_KEYS, STEP_KEYS};
+    use std::collections::HashSet;
+
+    /// Issue #82 — pin the invariant that `ACTION_STEP_KEYS` is
+    /// exactly `STEP_KEYS` minus `"declaration"`. Adding a new step
+    /// primitive without keeping the two lists aligned trips this
+    /// test, catching the class of drift that PR #80 fixed (`ws_tag:`
+    /// landed in the parser only for two release cycles).
+    #[test]
+    fn action_step_keys_is_step_keys_minus_declaration() {
+        let all: HashSet<&str> = STEP_KEYS.iter().copied().collect();
+        let actions: HashSet<&str> = ACTION_STEP_KEYS.iter().copied().collect();
+        let expected: HashSet<&str> = all
+            .iter()
+            .copied()
+            .filter(|k| *k != "declaration")
+            .collect();
+        assert_eq!(
+            actions, expected,
+            "ACTION_STEP_KEYS drifted from STEP_KEYS \\ {{declaration}} — \
+             adding a new step primitive requires updating both lists in \
+             `src/steps/mod.rs`."
+        );
+    }
+
+    /// Sanity: every step key must be a valid YAML identifier (no
+    /// spaces, no punctuation) — otherwise `contains_key` in the
+    /// parser and linter wouldn't match anything.
+    #[test]
+    fn step_keys_are_valid_yaml_identifiers() {
+        for k in STEP_KEYS {
+            assert!(
+                k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.'),
+                "step key {k:?} contains a character that won't parse as a YAML key"
+            );
+        }
     }
 }

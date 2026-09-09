@@ -91,6 +91,17 @@ impl StepExecutor for TemplateStepExecutor {
         // `evaluateScripts(headers, …)`). Evaluated result is
         // coerced to a header-safe String — objects/arrays become
         // JSON text (same as Java's `convertMapObjectValuesToString`).
+        //
+        // Issue #85 — DROP null-valued headers instead of emitting
+        // `X-Foo: "null"` (the literal string). This matches the
+        // same value's fate at every other outbound seam:
+        // `http_client` at `src/http_client/mod.rs` (issue #57) and
+        // `return_step` at `src/steps/return_step.rs`. Pre-fix, a
+        // template `headers: { x: "${incoming.headers['missing']}" }`
+        // sent the child DSL the string `"null"` under
+        // `incoming.headers.x`, which then propagated to any
+        // downstream http step as a real four-byte `null` header
+        // value — very wrong.
         let child_headers: HashMap<String, String> = evaluate_map_arg(
             self.step.headers.as_ref(),
             &self.script_engine,
@@ -100,6 +111,7 @@ impl StepExecutor for TemplateStepExecutor {
         )?
         .map(|m| {
             m.into_iter()
+                .filter(|(_, v)| !matches!(v, Value::Null))
                 .map(|(k, v)| {
                     let as_str = match v {
                         Value::String(s) => s,
