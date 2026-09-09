@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dsl-lint` rejected valid `ws_tag:` steps.** `KNOWN_STEP_KEYS` in
+  `src/bin/dsl_lint.rs` was never updated when the `ws_tag` step landed
+  (0.9.8-rc, issue #52), so `dsl-lint` reported
+  `step '<name>': unrecognised step` and exited 1 on any DSL that stamps
+  a connection tag — even though the runtime parser
+  (`src/dsl/parser.rs` `ACTION_KEYS`) accepts it. Added `"ws_tag"` to the
+  linter's key list; the two lists now match.
+
 ## [0.9.12-rc] - 2026-09-08
 
 Issue #75 (sviljus / kemit-ee/efti-gate-ee) — full `declaration.allowlist`
