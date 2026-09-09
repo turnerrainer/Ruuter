@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #83 — `dsl-lint` and `dsl-test` now ship in the published
+  image.** The same `cargo build --release` that produces
+  `ruuter-on-rust` already produces both CI tools; they now COPY into
+  the runtime layer with symlinks under `/usr/local/bin/` so a
+  downstream CI can `docker run --rm -v "$PWD:/w" -w /w
+  turnerrainer/ruuter:<tag> dsl-lint --dsl DSL` without a full path.
+  Version-alignment guarantee: tools built from exactly the engine
+  version they'll be linting against. Extra layer weight ~15 MB.
+  `publish.yml` smoke test extended to invoke `dsl-lint --help` and
+  `dsl-test --help` on both linux/amd64 and linux/arm64 (via QEMU)
+  before cosign signs. New "Lint / test your DSL tree in CI" section
+  in `README.md`.
+
+### Fixed
+
+- **Issue #85 — `template:` step no longer sends the string `"null"`
+  as a header value.** A template step's `headers:` map whose value
+  evaluated to `undefined` (e.g. `${incoming.headers['no-such-header']}`)
+  used to pass the child DSL `incoming.headers.<name> = "null"` — the
+  four-byte string — because the child_headers construction fell
+  through `other.to_string()` for `Value::Null`. Downstream, any
+  http step forwarding that value would send `X-Foo: null` on the
+  wire. Fixed by filtering `Value::Null` out of the child headers
+  map before stringifying, matching what `http_client` (issue #57)
+  and `return_step` already do at their outbound seams. Tests:
+  `null_valued_template_header_is_omitted_not_stringified`,
+  `non_null_template_headers_still_forward`,
+  `non_string_non_null_template_headers_stringify`,
+  `null_header_dropped_alongside_other_kept_headers`.
+
 ## [0.9.13-rc] - 2026-09-09
 
 Two fixes on top of v0.9.12-rc: issue #79 (stack-overflow abort when a
