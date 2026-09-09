@@ -38,6 +38,7 @@ const KNOWN_STEP_KEYS: &[&str] = &[
     "state",
     "iterate",
     "ws_send",
+    "ws_tag",
     "single_flight",
     "declaration",
 ];
