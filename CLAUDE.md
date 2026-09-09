@@ -29,14 +29,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-09 on `688a4a2`):
+Expected on a clean `dev` (verified 2026-09-09 on `6c699b7`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 533 passed / 0 failed / 3 ignored across 66 test binaries |
+| `cargo test --no-fail-fast` | 541 passed / 0 failed / 3 ignored across 68 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 63 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
@@ -50,6 +50,31 @@ push, PR, and a daily 06:00 UTC cron. Exceptions live in
 `.cargo/audit.toml` — currently RUSTSEC-2024-0384 (`instant`) and
 RUSTSEC-2024-0436 (`paste`), both transitive-only, review date
 2026-10-01.
+
+## Behaviour-change surface as of v0.9.14-rc (issues #82 / #83 / #85)
+
+Three small fixes on top of v0.9.13-rc. Landed in commit `6c699b7`
+(PR #86). Full detail in
+[CHANGELOG.md § 0.9.14-rc](CHANGELOG.md#0914-rc---2026-09-09).
+
+- **Tools ship in the image (#83).** `dsl-lint` and `dsl-test` are
+  under `/usr/local/bin/` in the published image; downstream CI can
+  `docker run … turnerrainer/ruuter:<tag> dsl-lint --dsl DSL` with
+  no full path and no separate build. `publish.yml` smoke test
+  invokes `--help` on both arches before cosign signs.
+- **Template header nulls dropped (#85).** A `template:` step whose
+  `headers:` value evaluates to `undefined` no longer forwards
+  `header: "null"` (the four-byte string) to the child DSL. Matches
+  the pre-existing null-drop at `http_client` (#57) and
+  `return_step`. DSLs that intentionally sent the string `"null"`
+  as a header value must send it explicitly.
+- **Step-key list unified (#82).** `src/steps/mod.rs::{STEP_KEYS,
+  ACTION_STEP_KEYS}` are the single source of truth consumed by
+  both `src/dsl/parser.rs` and `src/bin/dsl_lint.rs`. Pinned by a
+  unit test + a `tests/issue_82_dsl_lint_step_recognition.rs`
+  integration test that would have caught PR #80 the day it landed.
+  New `DSL/samples/WS/inbound/roles.yml` closes the coverage gap
+  where `dsl-lint DSL/samples` had no shipped `ws_tag:` DSL.
 
 ## Behaviour-change surface as of v0.9.13-rc (issue #79 + PR #80)
 

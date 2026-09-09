@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.14-rc] - 2026-09-09
+
+Three fixes on top of v0.9.13-rc: `dsl-lint` / `dsl-test` shipped in
+the image (#83), template-step null headers (#85), and step-key-list
+drift prevention (#82). Release-gate green: 541 passed / 0 failed /
+3 ignored across 68 test binaries, dsl-lint 64 files clean, dsl-test
+100/100, cargo audit 0 warnings, mdbook builds.
+
+**Behaviour change surface (grep before upgrading):**
+
+- The published image now includes `dsl-lint` and `dsl-test` under
+  `/usr/local/bin/`. Any container harness that inspects the image's
+  file list will see two extra binaries (~15 MB); nothing existing
+  is renamed or removed.
+- A `template:` step whose `headers:` map contains a value that
+  evaluates to `undefined` no longer forwards the header at all.
+  Previously that entry became `header: "null"` (four-byte string)
+  on the child DSL's `incoming.headers`; downstream http steps
+  forwarding the child's headers could then send `header: null` on
+  the wire. Any DSL that intentionally relied on the string `"null"`
+  as a header value must send it explicitly (`headers: { x: 'null' }`).
+
 ### Changed
 
 - **Issue #82 — step-key list is now a single source of truth.** The
