@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13-rc] - 2026-09-09
+
+Two fixes on top of v0.9.12-rc: issue #79 (stack-overflow abort when a
+guard's `template:` step targets a resource under the same guard) and
+PR #80 (`dsl-lint` rejected valid `ws_tag:` steps). Release-gate green:
+533 passed / 0 failed / 3 ignored across 66 test binaries, dsl-lint
+clean, dsl-test 100/100, cargo audit 0 warnings, mdbook builds.
+
+**Behaviour change surface (grep before upgrading):**
+
+- Guards that contain a `template:` step whose target is covered by
+  the same guard no longer crash the process. The template step now
+  filters the target's guard chain against a per-request "guards
+  currently executing" stack; the same-key guard is skipped, breaking
+  the recursion. If any DSL relied on the pre-fix crash as an
+  accidental circuit-breaker (it can't have — the process aborted),
+  it now returns a real response.
+- A hard `MAX_GUARD_DEPTH = 32` cap surfaces exotic mutual-recursion
+  patterns (three-guard cycles) as `RuuterError::DslExecution { step:
+  "guard", … }` instead of a stack overflow. Legitimate nested-template
+  compositions are nowhere near 32 deep.
+- `dsl-lint` now accepts `ws_tag:` as a step primitive. Downstream CI
+  pipelines that ran `dsl-lint` on DSLs using `ws_tag:` and grepped
+  for a clean exit will now pass.
+
 ### Fixed
 
 - **`dsl-lint` rejected valid `ws_tag:` steps.** `KNOWN_STEP_KEYS` in

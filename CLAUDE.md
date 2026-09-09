@@ -29,14 +29,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-08 on `223f2a1`):
+Expected on a clean `dev` (verified 2026-09-09 on `688a4a2`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 522 passed / 0 failed / 3 ignored across 65 test binaries |
+| `cargo test --no-fail-fast` | 533 passed / 0 failed / 3 ignored across 66 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 63 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
@@ -50,6 +50,32 @@ push, PR, and a daily 06:00 UTC cron. Exceptions live in
 `.cargo/audit.toml` — currently RUSTSEC-2024-0384 (`instant`) and
 RUSTSEC-2024-0436 (`paste`), both transitive-only, review date
 2026-10-01.
+
+## Behaviour-change surface as of v0.9.13-rc (issue #79 + PR #80)
+
+Issue #79 (sviljus): a `template:` step inside a guard whose target
+is under the same guard used to stack-overflow the tokio worker
+(fatal-abort regression from v0.9.11-rc H1). Landed in commit `688a4a2`
+(PR #81). PR #80 (also sviljus): `dsl-lint` now accepts `ws_tag:`
+steps. Full detail in
+[CHANGELOG.md § 0.9.13-rc](CHANGELOG.md#0913-rc---2026-09-09).
+
+- **Guard `template:` recursion is broken by a per-request stack.**
+  `ExecutionContext::guard_stack` holds keys of guards currently
+  mid-execution. All three guard-loop call sites (HTTP entry, WS
+  upgrade, template step) push before running and pop via RAII
+  drop-guard. Template step filters `applicable_guards_for(target)`
+  against the stack, so same-key cycles are skipped. Not a breaking
+  change for any correctly-shaped DSL — the pre-fix crash made
+  shipping the bad shape impossible.
+- **`MAX_GUARD_DEPTH = 32`** — belt-and-braces for exotic
+  mutual-recursion (three-guard cycle) patterns. Breach surfaces as
+  `RuuterError::DslExecution { step: "guard", … }` with a diagnostic
+  listing every key on the stack.
+- **`dsl-lint` now accepts `ws_tag:`.** Two-year drift between the
+  parser's `ACTION_KEYS` and the linter's `KNOWN_STEP_KEYS` closed.
+  Follow-up work (single source of truth + regression test + sample
+  DSL) tracked in issue #82.
 
 ## Behaviour-change surface as of v0.9.12-rc (issue #75)
 
