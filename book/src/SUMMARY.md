@@ -32,6 +32,7 @@
 - [Guards](./dsl/guards.md)
 - [Idempotency pattern](./dsl/idempotency-pattern.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
+- [YAML gotchas](./dsl/yaml-gotchas.md)
 
 # Configuration deep dive
 

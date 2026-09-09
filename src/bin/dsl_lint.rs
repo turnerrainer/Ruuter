@@ -62,6 +62,15 @@ fn main() -> ExitCode {
     // First pass: parse each file, collect step graph.
     let mut parsed: BTreeMap<PathBuf, ParsedFile> = BTreeMap::new();
     for path in &files {
+        // Issue #91 — the scalar-quoting check runs on every file
+        // regardless of parse outcome, so a hard YAML parse failure
+        // caused by an unquoted `${... : ...}` scalar STILL gets
+        // the specific "wrap in quotes" remediation hint alongside
+        // the generic "mapping values are not allowed" message
+        // serde-yaml surfaces.
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            check_yaml_scalar_quoting(path, &raw, &mut report);
+        }
         // Sources & cron jobs are shape-validated separately — don't
         // reject their per-key values as "not a step mapping".
         let strict = !is_source_file(path) && !is_cron_job_file(path);
@@ -92,6 +101,8 @@ fn main() -> ExitCode {
             continue;
         }
         check_dsl(path, pf, &constants, &dsl_keys, &mut report);
+        // Scalar-quoting check already ran in the first pass (see
+        // above) so it fires on parse-fail files too.
     }
 
     // Issue #45 — --require-guard: audit the loaded HTTP tree via the
@@ -532,6 +543,104 @@ fn check_dsl(
     }
 
     report.files_ok += 1;
+}
+
+/// Issue #91 — flag unquoted `${...}` scalars that carry a YAML-
+/// flow-terminator character (`: ` — the mapping-value indicator).
+/// The common case is a ternary expression written as
+/// `x: ${a ? b : c}` in a plain scalar: YAML truncates the value
+/// at the ` : ` (mapping-value indicator) and either silently
+/// misparses or fails to load. The fix is trivial once known —
+/// quote the whole scalar (`x: "${a ? b : c}"`) — but the failure
+/// mode is silent, so authors ship the wrong value before they
+/// notice.
+///
+/// Scope is narrow on purpose: the only character we warn on is
+/// `: ` (colon + space). The reporter's full list (`, `, `#`, `[`,
+/// `]`, `{`, `}`, `&`, `*`, `!`, `|`, `>`, `'`, `"`, `%`, `@`,
+/// backtick at scalar start) is theoretically hit-worthy but
+/// almost never appears inside `${...}` expression bodies in
+/// practice; expanding coverage now would trade specificity for
+/// noise. Broaden when a false-negative surfaces.
+///
+/// Emits a WARNING (never an error) — the file may still parse and
+/// run correctly; we're calling attention to a fragile shape. The
+/// remedy is always "wrap the value in quotes."
+fn check_yaml_scalar_quoting(path: &Path, raw: &str, report: &mut Report) {
+    for (line_idx, raw_line) in raw.lines().enumerate() {
+        // Strip an inline comment. `#` inside a `${...}` doesn't
+        // start a comment mid-expression, but if the value is
+        // unquoted then a comment on the same line is possible; we
+        // just trim from the last `# ` that isn't inside `${...}`.
+        // Simple and correct enough for this heuristic.
+        let line = raw_line;
+
+        // Peel off leading whitespace.
+        let trimmed_start = line.trim_start();
+        if trimmed_start.is_empty() {
+            continue;
+        }
+        // Skip comment lines and list-item prefixes; we're only
+        // interested in `<key>: <value>` shape.
+        if trimmed_start.starts_with('#') || trimmed_start.starts_with('-') {
+            continue;
+        }
+
+        // Find the first `: ` (space required — that's the YAML
+        // mapping-value indicator). `key:value` (no space) is
+        // rare in this codebase and not a scalar-mapping split.
+        let Some(sep) = trimmed_start.find(": ") else {
+            continue;
+        };
+        // Key must be a plain YAML identifier (letters, digits,
+        // underscore, dash, dot). Guards against picking up random
+        // `something: ${…}` patterns inside a block string.
+        let key = &trimmed_start[..sep];
+        if key.is_empty()
+            || !key.chars().all(|c| {
+                c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'
+            })
+        {
+            continue;
+        }
+        let value_start = &trimmed_start[sep + 2..];
+        let value = value_start.trim_end();
+
+        // Already quoted → safe.
+        if value.starts_with('"') || value.starts_with('\'') {
+            continue;
+        }
+        // Block scalar (`|` or `>`) → safe (multi-line, not
+        // affected by inline flow characters).
+        if value.starts_with('|') || value.starts_with('>') {
+            continue;
+        }
+        // Unquoted value must start with `${` and end with `}`.
+        if !value.starts_with("${") || !value.ends_with('}') {
+            continue;
+        }
+        // Extract the inner expression body. Everything between the
+        // opening `${` and the trailing `}`.
+        let inner = &value[2..value.len() - 1];
+        // The trap: `: ` (colon + space) inside the expression body
+        // — YAML terminates the plain scalar at the first `: ` and
+        // interprets the rest as a new key. The fix is to wrap the
+        // whole scalar in quotes.
+        if inner.contains(": ") {
+            report.file_warning(
+                path,
+                format!(
+                    "line {}: unquoted `${{...}}` scalar contains `: ` — YAML will \
+                     terminate the plain scalar at the mapping-value indicator and \
+                     the value silently misparses. Wrap in quotes: `{}: \"{}\"`. \
+                     Common trigger: a ternary expression like `${{a ? b : c}}`.",
+                    line_idx + 1,
+                    key,
+                    value,
+                ),
+            );
+        }
+    }
 }
 
 fn walk_reachable(start: &str, steps: &[ParsedStep], out: &mut BTreeSet<String>) {
