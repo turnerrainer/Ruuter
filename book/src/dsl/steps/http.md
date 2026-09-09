@@ -66,7 +66,7 @@ upstreams without special-casing.
 - URL and body are validated against the SSRF allow-list (see [SSRF allow-list](../../framework/ssrf.md)).
 - Response body is capped at `http_response_size_limit`; over-cap = step error.
 - Upstream status is filtered against `http_codes_allow_list` when non-empty; disallowed = step error.
-- On network error / timeout: the step returns an error; the DSL response is `500` unless the DSL handles it via a wrapping guard.
+- **Transport failure** (connection refused, DNS, TLS handshake, read/write timeout, mid-body read error) — issue #89: the step binds an in-band stub `{response: {status: 0, error: "<kind>", body: {error, message}, headers: {}}}` under `result:` instead of raising. The DSL can then branch on `${result.response.status == 0}` (or on the specific kind via `${result.response.error == 'timeout'}`) in a subsequent `check_*` switch, or wire an `error:` handler on the step. Stable kinds: `timeout`, `connect`, `request`, `body`, `decode`, `unknown`. Policy-level pre-flight rejections (SSRF, host-allowlist, malformed URL, response-size cap) still raise — those are ops decisions, not availability events.
 
 ## Dynamic `headers:` / `query:` maps
 

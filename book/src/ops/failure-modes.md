@@ -17,7 +17,6 @@ Every HTTP status the framework itself can emit, and what it means.
 | `500`  | `{"error": "HTTP request rejected: url host '<h>' not in internal_requests.allowed_ips"}` | SSRF IP allow-list |
 | `500`  | `{"error": "HTTP request rejected: upstream response body … exceeds http_response_size_limit …"}` | Response size cap |
 | `500`  | `{"error": "HTTP request rejected: upstream status … not in http_codes_allow_list"}` | Upstream status filter |
-| `500`  | `{"error": "HTTP error: …"}` | Network / TLS / timeout on an `http` step |
 | `500`  | `{"error": "template not found: …"}` | `template` step target missing |
 | `500`  | `{"error": "ws_send: no such connection '…'"}` | `ws_send` to an unknown connection id |
 | `500`  | `{"error": "ws_send: no `to`, no `broadcast_prefix`, and context has no connection_id"}` | `ws_send` in an HTTP DSL without addressing |
@@ -25,6 +24,23 @@ Every HTTP status the framework itself can emit, and what it means.
 | `500`  | `{"error": "Configuration error: …"}` | Constants file / config file / source config error at boot time |
 
 Guards may emit ANY 4xx/5xx status — those come from the guard DSL's own `return.status`, not the framework.
+
+## `http.*` transport failures do NOT produce a framework 500 (issue #89)
+
+Connection refused / DNS / TLS handshake / read-write timeout / mid-body read on an `http.*` step no longer aborts the run. The step binds an in-band stub under `result:`:
+
+```json
+{
+  "response": {
+    "status":  0,
+    "error":   "<kind>",
+    "body":    {"error": "<kind>", "message": "<full reqwest source chain>"},
+    "headers": {}
+  }
+}
+```
+
+Stable kinds: `timeout`, `connect`, `request`, `body`, `decode`, `unknown`. DSL branches on `${result.response.status == 0}` or `${result.response.error == 'timeout'}`, or wires an `error:` handler on the step. Whatever status the DSL then emits becomes the framework response — 502 is the typical shape for a gateway/adapter DSL. See [`http` step docs](../dsl/steps/http.md#framework-behaviour).
 
 ## Cache-hit replay
 
