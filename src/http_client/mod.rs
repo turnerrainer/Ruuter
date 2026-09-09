@@ -635,16 +635,24 @@ impl HttpClient {
             Ok(r) => r,
             Err(err) => {
                 let kind = classify_transport_error(&err);
+                // Issue #89 — surface the FULL cause chain in
+                // `body.message`, not just the top-level reqwest
+                // Display (which hides the actual OS/DNS/TLS
+                // reason inside `.source()`). Matches what
+                // `logging::error_chain` does for raised errors,
+                // so the DSL author sees the same detail either
+                // way.
+                let full_message = format!("{}{}", err, crate::logging::error_chain(&err));
                 tracing::warn!(
                     http.error.kind = %kind,
-                    http.error.message = %err,
+                    http.error.message = %full_message,
                     "outbound http transport failure — binding stub result"
                 );
                 return Ok(HttpResponse {
                     status: 0,
                     body: Some(serde_json::json!({
                         "error": kind.clone(),
-                        "message": err.to_string(),
+                        "message": full_message,
                     })),
                     headers: HashMap::new(),
                     error: Some(kind),
@@ -709,16 +717,17 @@ impl HttpClient {
                     None => break,
                     Some(Err(e)) => {
                         let kind = classify_transport_error(&e);
+                        let full_message = format!("{}{}", e, crate::logging::error_chain(&e));
                         tracing::warn!(
                             http.error.kind = %kind,
-                            http.error.message = %e,
+                            http.error.message = %full_message,
                             "upstream body-read failure — binding stub result"
                         );
                         return Ok(HttpResponse {
                             status: 0,
                             body: Some(serde_json::json!({
                                 "error": kind.clone(),
-                                "message": e.to_string(),
+                                "message": full_message,
                             })),
                             headers: HashMap::new(),
                             error: Some(kind),
@@ -741,16 +750,17 @@ impl HttpClient {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
                     let kind = classify_transport_error(&e);
+                    let full_message = format!("{}{}", e, crate::logging::error_chain(&e));
                     tracing::warn!(
                         http.error.kind = %kind,
-                        http.error.message = %e,
+                        http.error.message = %full_message,
                         "upstream body-read failure — binding stub result"
                     );
                     return Ok(HttpResponse {
                         status: 0,
                         body: Some(serde_json::json!({
                             "error": kind.clone(),
-                            "message": e.to_string(),
+                            "message": full_message,
                         })),
                         headers: HashMap::new(),
                         error: Some(kind),
