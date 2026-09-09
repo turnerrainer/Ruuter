@@ -11,8 +11,12 @@ look first.
 
 **When in doubt, quote.** Double-quoting a `${…}` scalar
 (`x: "${…}"`) neutralises every trap listed here. `dsl-lint` warns
-on the most common one (`: ` inside an unquoted `${…}` — see issue
-#91) but the safe habit is broader than the automated check.
+on the classes below (issue #91): `: ` inside an unquoted `${…}`,
+` #` inside an unquoted `${…}`, `,` inside a `${…}` that sits in
+flow context, unquoted values that start with a YAML metasyntax
+character (`!`, `&`, `*`, `%`, `@`, backtick), and Unicode
+homoglyphs (fullwidth colon, en/em dash, hyphen). Quoting is the
+one-line fix for every case.
 
 ## `: ` (space + colon + space) — the ternary trap
 
@@ -37,8 +41,8 @@ step:
     x: "${a ? b : c}"
 ```
 
-`dsl-lint` flags this shape: `line N: unquoted ${...} scalar
-contains ': '`.
+`dsl-lint` flags this shape with a "mapping-value indicator"
+warning naming the offending line.
 
 ## `, ` (comma + space) inside a flow context
 
@@ -70,6 +74,10 @@ step:
     y: 42
 ```
 
+`dsl-lint` flags the flow-context variant with a "flow context"
+warning. The block-style variant is left alone — a `,` in block
+context is a normal expression character.
+
 ## `#` — comment start after a space
 
 **Trap:**
@@ -94,6 +102,9 @@ step:
     hash: "${some_expr}"
     also: "value #with a hash"
 ```
+
+`dsl-lint` flags ` #` inside an unquoted `${…}` with a
+"start a comment" warning.
 
 ## Special characters at scalar start
 
@@ -120,6 +131,11 @@ x: "[not a list]"
 y: "|literal-pipe"
 z: "*ref"
 ```
+
+`dsl-lint` flags an unquoted value that starts with `!`, `&`, `*`,
+`%`, `@`, or backtick with a "YAML reserves that character"
+warning. `[` and `{` are not flagged because they legitimately
+start flow containers; if you meant the literal characters, quote.
 
 ## `\n` and multi-line scalars
 
@@ -155,16 +171,23 @@ step:
 ## Unicode homoglyphs
 
 **Trap:** copy-pasted YAML sometimes carries a Unicode `:` (`：`, U+FF1A)
-or `-` (`–`, U+2013) that looks like ASCII but doesn't parse.
+or `-` (`–`, U+2013 en dash / `—`, U+2014 em dash / `‐`, U+2010
+hyphen) that looks like ASCII but doesn't parse.
 
 **Fix:** open the file in an editor that highlights non-ASCII
 whitespace / punctuation. `hexdump -C file.yml | grep <suspect-line>`
 if in doubt.
 
+`dsl-lint` flags each of these homoglyphs once per line, so a
+copy-pasted block with a dozen occurrences doesn't spam.
+
 ## Summary
 
 - **When in doubt, quote.** `x: "${…}"` is safe.
-- `dsl-lint` catches the `: ` ternary case programmatically.
+- `dsl-lint` catches (all as WARN, exit 0): `: ` inside an unquoted
+  `${…}`, ` #` inside an unquoted `${…}`, `,` inside a `${…}` in
+  flow context, reserved metasyntax-start characters (`!`, `&`,
+  `*`, `%`, `@`, backtick), and Unicode homoglyphs.
 - Prefer block style over flow style (`{ … }` / `[ … ]`) in DSL
   authoring — block style has fewer YAML metasyntax hazards, and
   matches the sample DSLs shipped under `DSL/samples/`.

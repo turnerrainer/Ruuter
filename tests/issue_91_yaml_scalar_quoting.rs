@@ -188,9 +188,279 @@ fn scalar_quoting_finding_is_categorised_as_warning() {
     // Summary line must show at least one warning. The exact
     // format is `dsl-lint: <N> file(s) scanned, <M> ok, <E> error(s),
     // <W> warning(s)` — we grep for a non-zero warning count.
-    let has_warning = output.contains("1 warning(s)") || output.contains("2 warning(s)");
+    let has_warning = output.contains("1 warning(s)")
+        || output.contains("2 warning(s)")
+        || output.contains("3 warning(s)");
     assert!(
         has_warning,
         "scalar-quoting finding must be counted as a warning in the summary: {output}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Broader YAML flow-terminator coverage — the extended check set
+// closes the gap between the reporter's full character list and
+// the initial "just `: `" scope.
+// ────────────────────────────────────────────────────────────────
+
+/// ` # ` (space + hash) inside a `${...}` scalar starts a YAML
+/// comment and truncates the plain scalar. Warn.
+#[test]
+fn hash_in_unquoted_expression_body_is_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        "stamp:\n  assign:\n    x: ${foo #note}\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("` #`") && output.contains("comment"),
+        "` #` inside `${{…}}` must warn with the comment-cut hint: {output}"
+    );
+}
+
+/// Same expression body but the scalar is quoted → no warning.
+#[test]
+fn quoted_hash_expression_is_not_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        "stamp:\n  assign:\n    x: \"${foo #note}\"\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.to_lowercase().contains("comment"),
+        "quoted body must not warn about ` #`: {output}"
+    );
+}
+
+/// `,` inside a `${...}` scalar WHEN the surrounding line is in
+/// flow context (unclosed `{` before the `${`) — YAML uses the
+/// `,` as flow-element separator and misparses the rest.
+#[test]
+fn comma_in_flow_context_expression_is_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // Line puts the `${format(a, b)}` inside a flow-mapping;
+        // the `,` inside the expression body terminates the flow
+        // element. Only warns in flow context.
+        "stamp: { assign: { x: ${format(a, b)} } }\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("flow context") && output.contains(","),
+        "`,` in flow-context `${{…}}` must warn: {output}"
+    );
+}
+
+/// `,` inside a `${...}` scalar in BLOCK context (no unclosed flow
+/// container before the `${`) must NOT warn — false-positive
+/// avoidance for legitimate `${arr.map((a, b) => …)}` shape.
+#[test]
+fn comma_in_block_context_expression_is_not_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // Block-style: `x: ${format(a, b)}` — no unclosed flow
+        // container before the `${`. `,` inside inner is fine.
+        "stamp:\n  assign:\n    x: ${format(a, b)}\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.contains("flow context"),
+        "`,` in block-context `${{…}}` must NOT noise-warn: {output}"
+    );
+}
+
+/// A value starting with `!` (YAML tag) is a reserved metasyntax.
+/// Warn — unquoted `x: !foo` fails to load in most YAML parsers.
+#[test]
+fn value_starting_with_yaml_metasyntax_char_is_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // `x: !important` — `!` starts a YAML tag; parser errors
+        // on unknown tag. Same fix (quote) applies.
+        "stamp:\n  assign:\n    x: !important\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("reserves") || output.contains("YAML reserves"),
+        "value-start `!` must warn about YAML metasyntax: {output}"
+    );
+}
+
+/// Every reserved scalar-start character warns.
+#[test]
+fn every_reserved_scalar_start_char_warns() {
+    // `!` `&` `*` `%` `@` backtick — the six characters our
+    // check flags. Each in its own fixture so a per-char failure
+    // is precise.
+    for (name, ch) in &[
+        ("bang", '!'),
+        ("amp", '&'),
+        ("star", '*'),
+        ("percent", '%'),
+        ("at", '@'),
+        ("backtick", '`'),
+    ] {
+        let tmp = make_tree(&[(
+            &format!("svc/GET/{name}.yml"),
+            &format!(
+                "stamp:\n  assign:\n    x: {ch}value\n  next: end\nend:\n  return: ok\n  status: 200\n"
+            ),
+        )]);
+        let (_code, stdout, stderr) = run_lint(&tmp);
+        let output = format!("{stdout}\n{stderr}");
+        assert!(
+            output.contains("reserves"),
+            "value-start `{ch}` in fixture `{name}` must warn: {output}"
+        );
+    }
+}
+
+/// Unicode fullwidth colon (U+FF1A) looks like `:` but doesn't
+/// parse as a mapping-value indicator. Copy-paste from rendered
+/// docs is the usual entry point.
+#[test]
+fn fullwidth_colon_homoglyph_is_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // Note the `：` between `key` and `value` — that's U+FF1A,
+        // not U+003A. YAML doesn't recognise it as `:`.
+        "key\u{FF1A}value\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("fullwidth colon") || output.contains("U+FF1A"),
+        "U+FF1A homoglyph must warn: {output}"
+    );
+}
+
+/// Unicode en dash (U+2013) and em dash (U+2014) both warn as
+/// look-alikes for ASCII `-`. Ships as separate fixtures so a
+/// per-glyph regression is easy to name.
+#[test]
+fn en_dash_and_em_dash_homoglyphs_are_warned() {
+    // en dash
+    let tmp = make_tree(&[(
+        "svc/GET/en.yml",
+        "en_dash\u{2013}key: value\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("en dash") || output.contains("U+2013"),
+        "U+2013 (en dash) must warn: {output}"
+    );
+
+    // em dash
+    let tmp = make_tree(&[(
+        "svc/GET/em.yml",
+        "em_dash\u{2014}key: value\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("em dash") || output.contains("U+2014"),
+        "U+2014 (em dash) must warn: {output}"
+    );
+}
+
+/// A repeated homoglyph on the same line surfaces exactly one
+/// warning (not one per occurrence) — otherwise a copy-pasted
+/// block from a rendered doc could spam.
+#[test]
+fn repeated_homoglyph_on_one_line_warns_once() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // Two U+FF1A on the same line → one warning.
+        "a\u{FF1A}b\u{FF1A}c\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    let hits = output.matches("fullwidth colon").count();
+    assert_eq!(
+        hits, 1,
+        "repeated homoglyph on one line must warn once, got {hits}: {output}"
+    );
+}
+
+/// A homoglyph inside a `#` comment is stylistic (typographers'
+/// em dash inside a doc comment is fine — YAML treats the whole
+/// comment as opaque). Must NOT warn.
+#[test]
+fn homoglyph_inside_comment_is_not_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // `# heading — with em dash` — em dash sits after the `#`
+        // comment start. Structural YAML is unaffected.
+        "# heading \u{2014} with em dash\nstamp:\n  assign:\n    x: 1\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.contains("em dash") && !output.contains("U+2014"),
+        "homoglyph inside `#` comment must NOT warn (stylistic use): {output}"
+    );
+}
+
+/// A homoglyph inside a quoted string is the author's literal
+/// intent (rendered docs, i18n strings, prose). Must NOT warn.
+#[test]
+fn homoglyph_inside_quoted_string_is_not_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // Value is a double-quoted string carrying an em dash on
+        // purpose. Not a YAML-structure hazard.
+        "stamp:\n  assign:\n    title: \"foo \u{2014} bar\"\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.contains("em dash"),
+        "homoglyph inside a quoted string must NOT warn: {output}"
+    );
+}
+
+/// A trailing-comment homoglyph on a mapping line is still
+/// stylistic ("real" YAML structure is to the left of the ` #`).
+/// Must NOT warn.
+#[test]
+fn homoglyph_in_trailing_comment_is_not_warned() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        "stamp:\n  assign:\n    x: 1 # value \u{2014} note\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.contains("em dash"),
+        "homoglyph in trailing comment must NOT warn: {output}"
+    );
+}
+
+/// Multiple traps on ONE `${...}` scalar surface as separate
+/// warnings — one per class — so a DSL author fixing the file
+/// sees every reason to quote it.
+#[test]
+fn multiple_traps_on_one_scalar_produce_multiple_warnings() {
+    let tmp = make_tree(&[(
+        "svc/GET/probe.yml",
+        // `${a ? b : c #d}` has BOTH `: ` AND ` #` inside the
+        // inner. Two warnings expected on the same line.
+        "stamp:\n  assign:\n    x: ${a ? b : c #d}\n  next: end\nend:\n  return: ok\n  status: 200\n",
+    )]);
+    let (_code, stdout, stderr) = run_lint(&tmp);
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        output.contains("mapping-value indicator"),
+        "must warn about `: `: {output}"
+    );
+    assert!(
+        output.contains("start a comment"),
+        "must warn about ` #`: {output}"
     );
 }

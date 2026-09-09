@@ -546,100 +546,372 @@ fn check_dsl(
 }
 
 /// Issue #91 — flag unquoted `${...}` scalars that carry a YAML-
-/// flow-terminator character (`: ` — the mapping-value indicator).
-/// The common case is a ternary expression written as
-/// `x: ${a ? b : c}` in a plain scalar: YAML truncates the value
-/// at the ` : ` (mapping-value indicator) and either silently
-/// misparses or fails to load. The fix is trivial once known —
-/// quote the whole scalar (`x: "${a ? b : c}"`) — but the failure
-/// mode is silent, so authors ship the wrong value before they
-/// notice.
+/// flow character which either terminates the plain scalar or
+/// starts a comment. Failure mode is silent misparse: file "loads,"
+/// step runs, value on the wire is wrong. Fix is always the same —
+/// wrap in quotes.
 ///
-/// Scope is narrow on purpose: the only character we warn on is
-/// `: ` (colon + space). The reporter's full list (`, `, `#`, `[`,
-/// `]`, `{`, `}`, `&`, `*`, `!`, `|`, `>`, `'`, `"`, `%`, `@`,
-/// backtick at scalar start) is theoretically hit-worthy but
-/// almost never appears inside `${...}` expression bodies in
-/// practice; expanding coverage now would trade specificity for
-/// noise. Broaden when a false-negative surfaces.
+/// Four checks, each additive; a single line can fire more than one:
 ///
-/// Emits a WARNING (never an error) — the file may still parse and
-/// run correctly; we're calling attention to a fragile shape. The
-/// remedy is always "wrap the value in quotes."
+/// - **`: ` inside the expression body** (mapping-value indicator).
+///   Common trigger: `x: ${a ? b : c}` ternary. Fires always.
+/// - **` # ` inside the expression body** (comment start).
+///   Trigger: `x: ${foo # bar}`. Fires always.
+/// - **`,` inside the expression body when the line is in flow
+///   context** (unbalanced `{` or `[` before the `${`). Trigger:
+///   `stamp: { x: ${format(a, b)} }`. Skipped when not in flow
+///   context so `x: ${arr.map(a, b)}` in block-style doesn't
+///   noise-warn.
+/// - **Unicode homoglyphs anywhere on the line** — `：` (U+FF1A
+///   fullwidth colon), `–` (U+2013 en dash), `—` (U+2014 em dash).
+///   Copy-paste-driven pain; YAML doesn't recognise these as their
+///   ASCII counterparts and the wrong value ships silently.
+///
+/// Also flags a fifth class:
+///
+/// - **Special char at value start** — an unquoted value starting
+///   with `[`, `{`, `!`, `&`, `*`, `%`, `@`, or a backtick has YAML
+///   metasyntax semantics (flow sequence start, tag, anchor,
+///   alias, directive, reserved). Warns unless the value is a
+///   flow-sequence / flow-mapping that's meant literally, which
+///   we can't tell apart heuristically — flagged and remediable by
+///   quoting.
+///
+/// Emits WARNING (never an error). The file may still parse; we're
+/// calling attention to a fragile shape.
 fn check_yaml_scalar_quoting(path: &Path, raw: &str, report: &mut Report) {
     for (line_idx, raw_line) in raw.lines().enumerate() {
-        // Strip an inline comment. `#` inside a `${...}` doesn't
-        // start a comment mid-expression, but if the value is
-        // unquoted then a comment on the same line is possible; we
-        // just trim from the last `# ` that isn't inside `${...}`.
-        // Simple and correct enough for this heuristic.
         let line = raw_line;
+        let line_no = line_idx + 1;
 
-        // Peel off leading whitespace.
+        // Check 4: Unicode homoglyphs anywhere on the line, even
+        // inside comments — copy-pasted YAML from a rendered doc
+        // often carries these.
+        check_line_for_unicode_homoglyphs(path, line_no, line, report);
+
         let trimmed_start = line.trim_start();
         if trimmed_start.is_empty() {
             continue;
         }
-        // Skip comment lines and list-item prefixes; we're only
-        // interested in `<key>: <value>` shape.
         if trimmed_start.starts_with('#') || trimmed_start.starts_with('-') {
             continue;
         }
 
-        // Find the first `: ` (space required — that's the YAML
-        // mapping-value indicator). `key:value` (no space) is
-        // rare in this codebase and not a scalar-mapping split.
-        let Some(sep) = trimmed_start.find(": ") else {
-            continue;
-        };
-        // Key must be a plain YAML identifier (letters, digits,
-        // underscore, dash, dot). Guards against picking up random
-        // `something: ${…}` patterns inside a block string.
-        let key = &trimmed_start[..sep];
-        if key.is_empty()
-            || !key
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/')
-        {
-            continue;
+        // Check 5: special-char plain-scalar start on a top-level
+        // key/value split. Only fires when the whole line matches
+        // `<key>: <value>` and `<value>` starts with a YAML-
+        // metasyntax char that isn't `[` / `{` (those are
+        // legitimate flow containers). Flagging `[` / `{` would
+        // false-positive on every intended flow-map value.
+        if let Some(sep) = trimmed_start.find(": ") {
+            let key = &trimmed_start[..sep];
+            if !key.is_empty()
+                && key.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'
+                })
+            {
+                let value = trimmed_start[sep + 2..].trim_end();
+                if !value.is_empty()
+                    && !value.starts_with('"')
+                    && !value.starts_with('\'')
+                    && !value.starts_with('|')
+                    && !value.starts_with('>')
+                {
+                    let first = value.chars().next().unwrap();
+                    if matches!(first, '!' | '&' | '*' | '%' | '@' | '`') {
+                        report.file_warning(
+                            path,
+                            format!(
+                                "line {}: unquoted plain scalar starts with `{}` \
+                                 — YAML reserves that character (tag / anchor / \
+                                 alias / directive / reserved for future). Wrap \
+                                 in quotes: `{}: \"{}\"`.",
+                                line_no, first, key, value,
+                            ),
+                        );
+                    }
+                }
+            }
         }
-        let value_start = &trimmed_start[sep + 2..];
-        let value = value_start.trim_end();
 
-        // Already quoted → safe.
-        if value.starts_with('"') || value.starts_with('\'') {
-            continue;
+        // Checks 1, 2, 3: enumerate EVERY `${...}` occurrence on
+        // the line (not just the top-level scalar's value) so
+        // expressions embedded in flow-mapping shapes like
+        // `stamp: { x: ${format(a, b)} }` also get inspected. For
+        // each occurrence:
+        //  - skip if inside single/double quotes at the `${`
+        //  - `: ` in inner → warn (mapping-value indicator)
+        //  - ` #` in inner → warn (comment cut)
+        //  - `,` in inner + flow depth > 0 at the `${` → warn
+        //    (flow-element separator)
+        let dollar_positions: Vec<usize> = line
+            .char_indices()
+            .filter_map(|(i, c)| {
+                if c == '$' && line[i..].starts_with("${") {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for dollar_start in dollar_positions {
+            if is_inside_string_literal_at(line, dollar_start) {
+                continue;
+            }
+            let inner_start = dollar_start + 2;
+            let Some(inner_len) = find_expression_body_end(&line[inner_start..]) else {
+                continue;
+            };
+            let inner = &line[inner_start..inner_start + inner_len];
+            let full_expr = &line[dollar_start..inner_start + inner_len + 1];
+
+            if inner.contains(": ") {
+                report.file_warning(
+                    path,
+                    format!(
+                        "line {}: unquoted `{}` contains `: ` — YAML will \
+                         terminate the plain scalar at the mapping-value \
+                         indicator and the value silently misparses. Wrap in \
+                         quotes: `\"{}\"`. Common trigger: a ternary expression \
+                         like `${{a ? b : c}}`.",
+                        line_no, full_expr, full_expr,
+                    ),
+                );
+            }
+            if inner.contains(" #") {
+                report.file_warning(
+                    path,
+                    format!(
+                        "line {}: unquoted `{}` contains ` #` — YAML will start \
+                         a comment there and truncate the plain scalar. Wrap in \
+                         quotes: `\"{}\"`.",
+                        line_no, full_expr, full_expr,
+                    ),
+                );
+            }
+            if flow_depth_at(line, dollar_start) > 0 && inner.contains(',') {
+                report.file_warning(
+                    path,
+                    format!(
+                        "line {}: unquoted `{}` contains `,` inside a flow \
+                         context (line has an unclosed `{{` or `[` before it). \
+                         YAML will end the current flow element at the `,` and \
+                         misparse the rest. Wrap in quotes: `\"{}\"`, or move \
+                         to block style.",
+                        line_no, full_expr, full_expr,
+                    ),
+                );
+            }
         }
-        // Block scalar (`|` or `>`) → safe (multi-line, not
-        // affected by inline flow characters).
-        if value.starts_with('|') || value.starts_with('>') {
-            continue;
+    }
+}
+
+/// Issue #91 — find the byte length of the expression body that
+/// starts at `s[0]` (i.e., the char just after `${`). Returns the
+/// number of bytes up to the matching `}`, honoring nested `{`.
+/// Returns None if no matching `}` is found on the line.
+///
+/// Balances `{` and `}` naïvely; not a full JS parser (doesn't
+/// handle `}` inside string literals inside the expression body,
+/// which would be a real edge case). Good enough for the lint.
+fn find_expression_body_end(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 1;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
         }
-        // Unquoted value must start with `${` and end with `}`.
-        if !value.starts_with("${") || !value.ends_with('}') {
-            continue;
+        i += 1;
+    }
+    None
+}
+
+/// Issue #91 — determine whether `at` is inside a `"…"` or `'…'`
+/// string literal in `line[..at]`. Rough (doesn't fully honour
+/// YAML block-scalar semantics), but good enough to prevent the
+/// false positive on `x: "${a ? b : c}"` — the `${` sits inside
+/// the double-quoted region, so we skip.
+fn is_inside_string_literal_at(line: &str, at: usize) -> bool {
+    let bytes = line.as_bytes();
+    let cap = at.min(bytes.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < cap {
+        let c = bytes[i];
+        if in_single {
+            if c == b'\'' {
+                in_single = false;
+            }
+        } else if in_double {
+            if c == b'\\' && i + 1 < cap {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_double = false;
+            }
+        } else {
+            match c {
+                b'\'' => in_single = true,
+                b'"' => in_double = true,
+                _ => {}
+            }
         }
-        // Extract the inner expression body. Everything between the
-        // opening `${` and the trailing `}`.
-        let inner = &value[2..value.len() - 1];
-        // The trap: `: ` (colon + space) inside the expression body
-        // — YAML terminates the plain scalar at the first `: ` and
-        // interprets the rest as a new key. The fix is to wrap the
-        // whole scalar in quotes.
-        if inner.contains(": ") {
-            report.file_warning(
-                path,
-                format!(
-                    "line {}: unquoted `${{...}}` scalar contains `: ` — YAML will \
-                     terminate the plain scalar at the mapping-value indicator and \
-                     the value silently misparses. Wrap in quotes: `{}: \"{}\"`. \
-                     Common trigger: a ternary expression like `${{a ? b : c}}`.",
-                    line_idx + 1,
-                    key,
-                    value,
-                ),
-            );
+        i += 1;
+    }
+    in_single || in_double
+}
+
+/// Issue #91 — count unmatched `{` / `[` in `line[..up_to_byte]`,
+/// skipping characters inside single- or double-quoted strings.
+/// Returns positive depth when unclosed opens > closes (flow
+/// context); zero or negative in block context. Cheap: single
+/// linear scan.
+fn flow_depth_at(line: &str, up_to_byte: usize) -> i32 {
+    let mut depth: i32 = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let bytes = line.as_bytes();
+    let cap = up_to_byte.min(bytes.len());
+    let mut i = 0;
+    while i < cap {
+        let c = bytes[i];
+        if in_single {
+            if c == b'\'' {
+                in_single = false;
+            }
+        } else if in_double {
+            if c == b'\\' && i + 1 < cap {
+                // Skip the escaped char so `\"` inside `"…"` doesn't
+                // pop us out of the string.
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_double = false;
+            }
+        } else {
+            match c {
+                b'\'' => in_single = true,
+                b'"' => in_double = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                _ => {}
+            }
         }
+        i += 1;
+    }
+    depth
+}
+
+/// Issue #91 — check a raw line for Unicode homoglyphs that look
+/// like ASCII YAML metasyntax but don't parse as such. Emits ONE
+/// warning per distinct homoglyph per line so a copy-paste block
+/// that carries a dozen of the same character doesn't spam.
+fn check_line_for_unicode_homoglyphs(path: &Path, line_no: usize, line: &str, report: &mut Report) {
+    // Table of (char, ascii lookalike, hint). Extend if a new
+    // homoglyph shows up in a downstream project's DSLs.
+    const HOMOGLYPHS: &[(char, char, &str)] = &[
+        (
+            '\u{FF1A}',
+            ':',
+            "fullwidth colon (U+FF1A) — YAML doesn't recognise it as `:`",
+        ),
+        (
+            '\u{2013}',
+            '-',
+            "en dash (U+2013) — YAML doesn't recognise it as `-`",
+        ),
+        (
+            '\u{2014}',
+            '-',
+            "em dash (U+2014) — YAML doesn't recognise it as `-`",
+        ),
+        (
+            '\u{2010}',
+            '-',
+            "hyphen (U+2010) — YAML doesn't recognise it as `-`",
+        ),
+    ];
+    // Only scan the structural portion of the line — before the
+    // first ` #` comment-start outside quotes, and skipping bytes
+    // inside `"..."` / `'...'` quoted regions. An em dash inside
+    // a comment or inside a quoted string is stylistic, not a
+    // YAML-breaking bug, and false-positive noise here trains
+    // authors to ignore the check.
+    let bytes = line.as_bytes();
+    let mut structural_end = bytes.len();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_single {
+            if c == b'\'' {
+                in_single = false;
+            }
+        } else if in_double {
+            if c == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_double = false;
+            }
+        } else {
+            match c {
+                b'\'' => in_single = true,
+                b'"' => in_double = true,
+                // ` #` (space + hash) or `#` at start of line is a
+                // comment start.
+                b'#' if i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t' => {
+                    structural_end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    let mut seen: [bool; 4] = [false; 4];
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut byte_idx = 0;
+    for c in line.chars() {
+        if byte_idx >= structural_end {
+            break;
+        }
+        let inside_string = in_single || in_double;
+        if !inside_string {
+            for (i, (bad, ascii, hint)) in HOMOGLYPHS.iter().enumerate() {
+                if c == *bad && !seen[i] {
+                    seen[i] = true;
+                    report.file_warning(
+                        path,
+                        format!(
+                            "line {}: contains {} (looks like `{}`). \
+                             Replace with the ASCII character.",
+                            line_no, hint, ascii,
+                        ),
+                    );
+                }
+            }
+        }
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            _ => {}
+        }
+        byte_idx += c.len_utf8();
     }
 }
 
