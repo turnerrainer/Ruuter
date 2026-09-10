@@ -29,16 +29,16 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-09 on `6c699b7`):
+Expected on a clean `dev` (verified 2026-09-10 on `11dae74`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 541 passed / 0 failed / 3 ignored across 68 test binaries |
+| `cargo test --no-fail-fast` | 606 passed / 0 failed / 3 ignored across 71 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
-| `dsl-lint DSL/samples` | 63 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
+| `dsl-lint DSL/samples` | 64 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
 | `mdbook build` | html backend, no warnings |
 
@@ -50,6 +50,68 @@ push, PR, and a daily 06:00 UTC cron. Exceptions live in
 `.cargo/audit.toml` — currently RUSTSEC-2024-0384 (`instant`) and
 RUSTSEC-2024-0436 (`paste`), both transitive-only, review date
 2026-10-01.
+
+## Behaviour-change surface as of v0.9.15-rc (issues #89 / #90 / #91 / #92)
+
+One catchability contract change, one config-default flip, and a
+docs/tooling round. Landed as three separate PRs on top of v0.9.14-rc.
+Full detail in [CHANGELOG.md § 0.9.15-rc](CHANGELOG.md#0915-rc---2026-09-10).
+
+- **`http.*` transport failures are catchable by the DSL (#89, PR #94).**
+  Pre-fix, connection-refused / DNS failure / TLS-handshake error /
+  read-or-write timeout on an `http.get` / `http.post` step
+  propagated as `RuuterError::Http`, aborting the run and producing
+  the framework's generic 500. Post-fix, the transport error is
+  surfaced in-band as a stub `HttpResponse { status: 0,
+  error: Some(kind), body: {error, message}, headers: {} }` bound
+  to the DSL's `result:`. Author options:
+    - Branch in a subsequent `check_*` switch on
+      `${result.response.status == 0}` (the reporter's pattern for
+      gateway/adapter DSLs emitting semantic 502s).
+    - Inspect the specific kind via `${result.response.error}` —
+      stable short strings: `timeout`, `connect`, `request`, `body`,
+      `decode`, `unknown`. Mapping helper is public:
+      `http_client::classify_transport_error`.
+    - Wire an `error:` handler on the step.
+    - Fall through to `next:` if neither `error:` nor an inspection
+      is set.
+  Policy-level pre-flight rejections (SSRF blocked, host-allowlist
+  denial, malformed URL, response-size cap) still raise — those are
+  ops decisions, not availability events. The allow-list-miss path
+  (upstream returns a real status outside `http_codes_allow_list`)
+  is unchanged: still raises when no `error:` handler is set. New
+  field on `HttpResponse`: `error: Option<String>`. Pre-existing
+  tests that asserted `res.is_err()` on transport failure paths
+  were updated to assert on the stub shape instead.
+- **`stop_in_case_of_exception` default is now `true` (#92, PR #95).**
+  Rust's `bool` Default is `false`, so `#[serde(default)]` on the
+  field deserialised an absent value as `false`, tripping
+  `warn_on_stale_config_fields` on every boot for operators who
+  never set the field. Fix: `#[serde(default =
+  "default_stop_in_case_of_exception")]` returning `true`, matching
+  the engine's actual behaviour (always halts on step error).
+  Explicit `false` in `ruuter.yaml` still WARNs — that's the
+  intended surface for "you set a value we can't honour."
+- **Supported JS subset documented and empirically verified (#90,
+  PR #96).** `book/src/dsl/expressions.md` rewritten with a 26-row
+  support matrix pinned by `tests/issue_90_js_subset.rs` — every row
+  runs against BOTH Boa (default) and QuickJS
+  (`--no-default-features --features scripting-quickjs`) on every
+  release-gate cycle. New "Deliberately unsupported" section names
+  `console.*`, `fetch`, `require`, `eval`, `new Function`, async /
+  Promise, `setTimeout`, filesystem / process — each with a
+  DSL-shaped alternative. Not runtime-visible; docs + test-pin only.
+- **`dsl-lint` scalar-quoting warnings across five classes (#91,
+  PR #96).** New `book/src/dsl/yaml-gotchas.md`. `dsl-lint` now
+  emits WARNs (never errors) for: `: ` inside an unquoted `${…}`,
+  ` #` inside one, `,` inside one in flow context, values starting
+  with reserved YAML metasyntax (`!`, `&`, `*`, `%`, `@`, backtick),
+  and Unicode homoglyphs in structural YAML (fullwidth colon, en
+  dash, em dash, hyphen). Homoglyph check is scoped to
+  pre-`#`-comment structural region and skips quoted regions, so
+  em dashes in doc comments / quoted prose don't false-positive.
+  `dsl-lint DSL/samples` baseline unchanged (64 files, 0 errors,
+  3 warnings — all pre-existing unresolved-constant refs).
 
 ## Behaviour-change surface as of v0.9.14-rc (issues #82 / #83 / #85)
 

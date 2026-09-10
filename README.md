@@ -3,17 +3,23 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.9.14-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.9.15-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.13-rc?** Three fixes on top of v0.9.13-rc:
-> `dsl-lint` and `dsl-test` now ship inside the published image
-> (`docker run … turnerrainer/ruuter:<tag> dsl-lint --dsl DSL`);
-> the `template:` step no longer sends the literal string `"null"`
-> as a header value when the source expression evaluates to
-> `undefined`; and the parser + linter step-key lists are now a
-> single source of truth (`src/steps/mod.rs`) with a regression
-> test that guards against future drift. Details in
-> [CHANGELOG.md § 0.9.14-rc](CHANGELOG.md#0914-rc---2026-09-09).
+> **Upgrading from v0.9.14-rc?** Three fixes and a docs/tooling
+> round on top of v0.9.14-rc: `http.*` transport failures
+> (connection-refused, DNS, TLS, timeout) are now catchable by the
+> DSL — the step binds a stub `HttpResponse { status: 0, error:
+> Some(kind), body: {error, message} }` to `result:`, so a
+> `check_status` switch can branch on it (#89); the
+> `stop_in_case_of_exception` config field no longer WARNs on every
+> boot for operators who never touched it (#92); the supported
+> JavaScript subset is documented and empirically verified on both
+> Boa and QuickJS (#90); `dsl-lint` warns on five classes of YAML
+> plain-scalar hazard: `: ` inside an unquoted `${…}`, ` #` inside
+> one, `,` inside one in flow context, values starting with reserved
+> metasyntax (`!`, `&`, `*`, `%`, `@`, backtick), and Unicode
+> homoglyphs in structural YAML (#91). Details in
+> [CHANGELOG.md § 0.9.15-rc](CHANGELOG.md#0915-rc---2026-09-10).
 
 ## Try it in one command
 
@@ -21,7 +27,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.9.14-rc
+    turnerrainer/ruuter:0.9.15-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -35,7 +41,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.9.14-rc
+    turnerrainer/ruuter:0.9.15-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -58,12 +64,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.14-rc \
+    turnerrainer/ruuter:0.9.15-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.14-rc \
+    turnerrainer/ruuter:0.9.15-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 
