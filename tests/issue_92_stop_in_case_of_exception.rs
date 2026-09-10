@@ -181,8 +181,7 @@ fn absent_field_emits_no_warn_line() {
 fn explicit_true_emits_no_warn_line() {
     let buf = SharedBuf::new();
     let _g = capture(buf.clone());
-    let cfg: AppConfig =
-        serde_yaml_ng::from_str("stop_in_case_of_exception: true").unwrap();
+    let cfg: AppConfig = serde_yaml_ng::from_str("stop_in_case_of_exception: true").unwrap();
     ruuter_on_rust::config::warn_on_stale_config_fields(&cfg);
     drop(_g);
     let out = buf.contents();
@@ -199,8 +198,7 @@ fn explicit_true_emits_no_warn_line() {
 fn explicit_false_emits_warn_line_naming_the_field() {
     let buf = SharedBuf::new();
     let _g = capture(buf.clone());
-    let cfg: AppConfig =
-        serde_yaml_ng::from_str("stop_in_case_of_exception: false").unwrap();
+    let cfg: AppConfig = serde_yaml_ng::from_str("stop_in_case_of_exception: false").unwrap();
     ruuter_on_rust::config::warn_on_stale_config_fields(&cfg);
     drop(_g);
     let out = buf.contents();
@@ -209,9 +207,7 @@ fn explicit_false_emits_warn_line_naming_the_field() {
         "explicit false must emit a WARN naming the field; got:\n{out}"
     );
     assert!(
-        out.contains("not honoured")
-            || out.contains("not implemented")
-            || out.contains("halts"),
+        out.contains("not honoured") || out.contains("not implemented") || out.contains("halts"),
         "WARN must explain the field is inert; got:\n{out}"
     );
     assert!(
@@ -227,8 +223,7 @@ fn explicit_false_emits_warn_line_naming_the_field() {
 fn explicit_false_emits_exactly_one_warn_line() {
     let buf = SharedBuf::new();
     let _g = capture(buf.clone());
-    let cfg: AppConfig =
-        serde_yaml_ng::from_str("stop_in_case_of_exception: false").unwrap();
+    let cfg: AppConfig = serde_yaml_ng::from_str("stop_in_case_of_exception: false").unwrap();
     ruuter_on_rust::config::warn_on_stale_config_fields(&cfg);
     drop(_g);
     let out = buf.contents();
