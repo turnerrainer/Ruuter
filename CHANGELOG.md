@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #90 — supported JavaScript subset is now documented and
+  test-verified.** `book/src/dsl/expressions.md` rewritten with the
+  full "supported constructs" table: primitives, strings, arrays,
+  objects, conversion, JSON, math, regex, functions. Every entry is
+  pinned by `tests/issue_90_js_subset.rs` (24 test functions, ~90
+  assertions) that runs against BOTH the Boa and QuickJS backends
+  on every release-gate cycle — a regression on either engine fails
+  CI. New "Deliberately unsupported" section names the categories
+  that will not be added (`console.*`, `fetch`, `require`, `eval`,
+  `new Function`, async / Promise, `setTimeout`, filesystem /
+  process). "Adding a construct to the supported list" section
+  documents the empirical-verification workflow: add a row to the
+  test file, get it green on both backends, PR to update the doc.
+
+- **Issue #91 — YAML gotchas doc + `dsl-lint` scalar-quoting
+  warning.** New `book/src/dsl/yaml-gotchas.md` page covering the
+  YAML plain-scalar edge cases that trap DSL authors (`: ` inside
+  a ternary, `, ` in flow context, `#` comment starts, block-scalar
+  indicators, multi-line continuations, Unicode homoglyphs). The
+  common thread: silent misparse, no error near the offending
+  line, wrong value on the wire. `dsl-lint` now programmatically
+  catches the highest-hit case — an unquoted `${...}` scalar whose
+  expression body contains `: ` — and emits a WARNING (never an
+  error) with a suggested quoted form. Runs on every file including
+  ones that fail to parse, so the "wrap in quotes" remediation
+  surfaces alongside the generic "mapping values not allowed"
+  message serde-yaml emits. Tests: 6 cases in
+  `tests/issue_91_yaml_scalar_quoting.rs` covering the trap, the
+  quoted (double + single) forms, plain scalars without `: `,
+  comments and list-item prefixes (not inspected), and the
+  warning severity.
+
 ### Fixed
 
 - **Issue #89 — `http.*` transport failures are now catchable by the
