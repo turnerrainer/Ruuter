@@ -10,7 +10,15 @@ pub struct AppConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
-    #[serde(default)]
+    /// Java-shape parity. Continue-on-error semantics (`false`) are
+    /// not implemented — the engine always halts a run on step
+    /// error. Kept in the config surface so ported Java DSLs load
+    /// unchanged; explicitly setting `false` fires a boot WARN
+    /// naming the field (see `warn_on_stale_config_fields`). Issue
+    /// #92: absent → `true` (was `false` via `Default::default()` on
+    /// `bool`, which tripped the WARN on every boot for operators
+    /// who never touched the field).
+    #[serde(default = "default_stop_in_case_of_exception")]
     pub stop_in_case_of_exception: bool,
 
     #[serde(default)]
@@ -251,6 +259,16 @@ pub struct ResponseConfig {
 }
 
 fn default_response_wrapper() -> bool {
+    true
+}
+
+/// Issue #92 — absent `stop_in_case_of_exception` defaults to
+/// `true`, matching the actual engine behaviour (the engine always
+/// halts a run on step error). Prior to this, `#[serde(default)]`
+/// on `bool` deserialised an absent field as `false` via
+/// `Default::default()`, which tripped `warn_on_stale_config_fields`
+/// on every boot for operators who never touched the field.
+fn default_stop_in_case_of_exception() -> bool {
     true
 }
 
