@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Issue #89 — `http.*` transport failures are now catchable by the
+  DSL.** Pre-fix, connection-refused / DNS / TLS handshake / read-
+  or-write timeout on an `http.get` / `http.post` (etc.) step
+  propagated `reqwest::Error` as `RuuterError::Http`, aborted the
+  whole run, and produced Ruuter's generic 500 response — the DSL
+  author's `check_*` switch never ran, so semantic 502 responses
+  from gateway / adapter DSLs were impossible for the availability-
+  failure class. Post-fix, the transport error is surfaced in-band
+  as a stub `HttpResponse { status: 0, body: {error, message},
+  headers: {}, error: Some(kind) }`, which the http step binds to
+  the DSL's `result:` — the author can then either branch on
+  `${result.response.status == 0}` in a subsequent `check_*` switch
+  (the reporter's motivating pattern), inspect the specific kind via
+  `${result.response.error == 'timeout'}`, or wire an `error:`
+  handler on the step. Fall-through to `next:` when neither `error:`
+  nor an inspection is set. Policy-level pre-flight rejections (SSRF
+  blocked, host-allowlist denial, malformed URL, response-size cap)
+  still raise — they are ops decisions, not availability events, and
+  making them catchable would leak internal reachability. The
+  allow-list-miss path (real upstream response with a status outside
+  `http_codes_allow_list`) is unchanged: still raises when no
+  `error:` handler is set. New public helper:
+  `http_client::classify_transport_error` mapping `reqwest::Error`
+  to stable short kinds (`timeout`, `connect`, `request`, `body`,
+  `decode`, `unknown`). New field on `HttpResponse`:
+  `error: Option<String>`. Tests: 10 cases in
+  `tests/issue_89_http_transport_catch.rs` — connect-refused,
+  timeout, `error:` routing, fall-through, allow-list back-compat
+  (both with and without `error:`), successful-response shape, stub
+  body shape, and a documentation-pin on the stable kind list.
+
 ## [0.9.14-rc] - 2026-09-09
 
 Three fixes on top of v0.9.13-rc: `dsl-lint` / `dsl-test` shipped in

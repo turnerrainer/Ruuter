@@ -147,6 +147,7 @@ pub async fn request_over_unix(
             status,
             body: parsed_body,
             headers: response_headers,
+            error: None,
         })
     };
 

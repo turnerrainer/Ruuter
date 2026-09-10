@@ -272,8 +272,12 @@ respond:
 async fn non_matching_url_falls_through_to_network_path() {
     // Configure a SelfOrigins that does NOT include the target
     // URL's host. HttpClient MUST NOT short-circuit; it should try
-    // the real network (which will fail to resolve, proving no
-    // hidden dispatch occurred).
+    // the real network. Post-#89 the network-path failure surfaces
+    // as an in-band stub `HttpResponse { status: 0, error:
+    // Some(...) }` instead of an Err. Either shape proves no
+    // hidden dispatch to the wired router occurred (a real self-
+    // call return would carry status:200 and `{"ok": true}` from
+    // the DSL).
     let router = build_router_with_dsls(&[(
         "svc/GET/x.yml",
         "respond:\n  return: { ok: true }\n  next: end\n",
@@ -296,10 +300,16 @@ async fn non_matching_url_falls_through_to_network_path() {
             None,
         )
         .await;
+    let resp = res.expect("network path returns Ok(stub) after #89");
+    assert_eq!(
+        resp.status, 0,
+        "network path must produce a transport-failure stub, not a self-call self-serve: {:?}",
+        resp
+    );
     assert!(
-        res.is_err(),
-        "non-matching URL must not short-circuit; got {:?}",
-        res
+        resp.error.is_some(),
+        "transport failure must carry an error kind: {:?}",
+        resp
     );
 }
 
@@ -307,7 +317,8 @@ async fn non_matching_url_falls_through_to_network_path() {
 async fn no_handler_wired_falls_through_to_network_path() {
     // Even when the URL matches SelfOrigins, if no router handle
     // was wired, we must not silently succeed — fall through to
-    // the network path (which will fail to reach anything).
+    // the network path. Post-#89, the network failure surfaces as
+    // a stub with status:0 rather than an Err.
     let mut origins = SelfOrigins::default();
     origins.tcp.insert(("localhost".to_string(), 65500));
     let client = HttpClient::with_timeout_ms(500).with_self_origins(origins);
@@ -323,10 +334,16 @@ async fn no_handler_wired_falls_through_to_network_path() {
             None,
         )
         .await;
+    let resp = res.expect("network path returns Ok(stub) after #89");
+    assert_eq!(
+        resp.status, 0,
+        "no handler → transport failure stub, not silent success: {:?}",
+        resp
+    );
     assert!(
-        res.is_err(),
-        "no handler → must not silently succeed; got {:?}",
-        res
+        resp.error.is_some(),
+        "stub must carry error kind: {:?}",
+        resp
     );
 }
 

@@ -219,6 +219,13 @@ async fn uds_alias_no_match_falls_through_to_tcp() {
     // No alias configured for "unknown-host" → HttpClient tries TCP,
     // which resolves to a nonexistent host and fails. What we're
     // verifying: no accidental UDS attempt on a non-matching host.
+    //
+    // Post-#89 the TCP-fail surface is an in-band stub
+    // `HttpResponse { status: 0, error: Some(...) }` rather than
+    // an Err. The assertion moved from "res.is_err()" to
+    // "status:0 stub" — both prove the TCP path was taken (a
+    // successful UDS dispatch would return a real response from
+    // the echo server).
     let client = HttpClient::with_timeout_ms(500);
     let res = client
         .request(
@@ -230,7 +237,17 @@ async fn uds_alias_no_match_falls_through_to_tcp() {
             None,
         )
         .await;
-    assert!(res.is_err(), "expected TCP failure, got {:?}", res);
+    let resp = res.expect("network path returns Ok(stub) after #89");
+    assert_eq!(
+        resp.status, 0,
+        "TCP path must produce a transport-failure stub, not a UDS self-serve: {:?}",
+        resp
+    );
+    assert!(
+        resp.error.is_some(),
+        "transport failure must carry an error kind: {:?}",
+        resp
+    );
 }
 
 // ── Outbound via explicit unix:// scheme ──────────────────────────
