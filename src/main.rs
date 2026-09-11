@@ -124,7 +124,11 @@ async fn main() {
 
     // Shared state store (project-namespaced k/v) — used by HTTP DSLs
     // today, and by event-trigger DSLs once the WS/cron sources land.
-    let state = StateStore::new();
+    // h2ck.me v1 T-5 — bounded via `config.state.max_entries_per_project`
+    // (default 100_000). `null` in ruuter.yaml opts back into
+    // unbounded for operators who know their DSLs key on a bounded
+    // namespace.
+    let state = StateStore::with_config(&config.state);
 
     // Shared WS connection registry. The HTTP router (server-side
     // WS), source supervisor (outbound WS), and step engine

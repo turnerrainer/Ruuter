@@ -263,9 +263,13 @@ async fn run_mock_http(
                 mock.register(&setup.mocks);
             }
             for seed in &setup.state {
+                // h2ck.me v1 T-5 — StateStore::set returns Result; a
+                // cap breach during seeding is a harness misconfig,
+                // not a test failure. Expect-panic surfaces the cause.
                 harness
                     .state
-                    .set(&seed.project, &seed.key, seed.value.clone());
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
 
@@ -299,9 +303,13 @@ async fn run_trigger_inject(
                 mock.register(&setup.mocks);
             }
             for seed in &setup.state {
+                // h2ck.me v1 T-5 — StateStore::set returns Result; a
+                // cap breach during seeding is a harness misconfig,
+                // not a test failure. Expect-panic surfaces the cause.
                 harness
                     .state
-                    .set(&seed.project, &seed.key, seed.value.clone());
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
 
@@ -362,7 +370,12 @@ async fn run_ws_client(
     for s in &file.tests {
         if let Some(setup) = &s.setup {
             for seed in &setup.state {
-                state.set(&seed.project, &seed.key, seed.value.clone());
+                // h2ck.me v1 T-5 — StateStore::set is fallible; on a
+                // ws-client seed collision with the cap we surface
+                // the harness failure rather than swallow it.
+                state
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
         let outcome = run_ws_scenario(addr, &state, s).await;
@@ -383,7 +396,8 @@ async fn run_http_scenario(
         for seed in &setup.state {
             harness
                 .state
-                .set(&seed.project, &seed.key, seed.value.clone());
+                .set(&seed.project, &seed.key, seed.value.clone())
+                .expect("state store cap must not be reached during test setup");
         }
     }
 
