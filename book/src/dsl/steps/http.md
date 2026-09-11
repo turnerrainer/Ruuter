@@ -36,19 +36,56 @@ Reference downstream: `${upstream.response.status}`, `${upstream.response.body.f
 
 ### Response body decoding
 
-- **JSON** upstream (any body that parses as JSON) → parsed value
-  (object / array / number / string / bool / null).
-- **Non-JSON** upstream (XML, HTML, plaintext, or any body that
-  fails JSON parse) → the raw text as a string, accessible via
-  `${upstream.response.body}`. UTF-8 lossy: invalid byte
-  sequences render as U+FFFD rather than failing the step.
-- **Empty** body (`content-length: 0` or a chunked response with no bytes) → `""` (empty string), matching Java Ruuter and the wire truth. A DSL that forwards `${upstream.response.body}` as a plaintext outbound body sends the same empty payload it received — not the string `"null"`. Prior to issue #63, empty bodies bound as JSON `null`, which surfaced downstream as `"null"` when re-serialised as plaintext.
+Issue #98: decoding is driven by the response `Content-Type` header,
+not by attempting a speculative JSON parse. The same rules apply on
+every transport — TCP, `unix://` URLs, and the `unix_socket_map` host
+aliases.
 
-Before issue #23 was fixed, non-JSON responses silently became
-`null`, losing the payload — an XML mapper couldn't return XML,
-a plaintext error message from an upstream disappeared, etc. The
-fallback-to-string behaviour lets DSLs forward or inspect non-JSON
-upstreams without special-casing.
+| Response `Content-Type`                     | `${…response.body}` type    |
+|---------------------------------------------|-----------------------------|
+| `application/json` (with or without `; …`)  | parsed JSON value           |
+| `application/*+json` (`problem+json`, `hal+json`, `ld+json`, `vnd.api+json`, …) | parsed JSON value |
+| anything else (`text/*`, `application/xml`, `image/*`, `application/octet-stream`, …) | UTF-8 lossy string |
+| missing header                              | UTF-8 lossy string          |
+| empty body (any Content-Type)               | `""` (empty string)         |
+
+Notes:
+
+- **Content-Type matching is case-insensitive on both the type and
+  the `+json` subtree** (RFC 9110 §8.3.1). Media-type parameters
+  (`; charset=utf-8`, `; q=…`) are tolerated.
+- **UTF-8 fallback is lossy** — invalid byte sequences render as
+  U+FFFD rather than failing the step. Applies to every non-JSON
+  path.
+- **`Content-Type: application/json` with a body that fails to
+  parse** (a gateway-502 pattern where the proxy returns HTML with
+  a lying Content-Type) logs a WARN naming the parse error and
+  binds the raw text as a string — so the DSL can still forward /
+  inspect and emit a semantic 502 without the step raising.
+- **Empty body** binds `""` (not `null`) regardless of
+  `Content-Type`, preserving the issue #63 fix. A DSL that
+  forwards `${upstream.response.body}` as a plaintext outbound
+  sends the same empty payload it received — never the four-byte
+  string `"null"`.
+
+Behaviour change vs pre-#98 releases: a `text/plain` or
+missing-`Content-Type` response whose body happens to be valid JSON
+(`123`, `null`, `true`, `"hello"`, `{"a":1}`) used to be parsed and
+reach the DSL as a JSON number / null / bool / string / object. It
+now stays as the raw text, matching the wire declaration. Two
+migration paths for DSLs that relied on the old byte-heuristic:
+
+- Preferred: fix the upstream to send
+  `Content-Type: application/json`.
+- Otherwise: `${JSON.parse(r.response.body)}` in the DSL.
+
+Historical context: before issue #23 was fixed, non-JSON responses
+silently became `null`, losing the payload — an XML mapper couldn't
+return XML, a plaintext error message from an upstream disappeared,
+etc. The #23 fix added a string fallback on the TCP path. The #98
+fix generalised that fallback to all three transports (TCP was still
+guessing rather than reading the header; UDS silently discarded
+non-JSON) and put `Content-Type` in charge of the decode.
 
 ## Verbs
 

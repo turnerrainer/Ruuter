@@ -55,12 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       application/json`.
     - Otherwise: `${JSON.parse(r.response.body)}` in the DSL.
 
-  Tests: 22 assertions across
+  Tests: 19 test functions in
   `tests/issue_98_content_type_decode.rs` covering the acceptance
-  matrix (2xx JSON, 4xx `application/problem+json`, JSON arrays,
-  `; charset=utf-8`, missing `Content-Type`, invalid JSON under
-  `application/json`, `text/plain` valid-JSON-shaped bodies, and
-  case-insensitive header lookup).
+  matrix (2xx JSON, `application/problem+json`, JSON arrays,
+  `; charset=utf-8`, `text/plain` with a JSON-shaped body, invalid
+  JSON under `application/json`, `text/xml`, empty body across
+  Content-Types, case-insensitive header lookup, and the
+  `content_type_is_json` matcher).
 
 ## [0.9.15-rc] - 2026-09-10
 

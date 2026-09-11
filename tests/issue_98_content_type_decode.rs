@@ -269,9 +269,8 @@ reply:
 }
 
 fn reflect(response_wire_body: &str) -> Value {
-    serde_json::from_str::<Value>(response_wire_body).unwrap_or_else(|e| {
-        panic!("could not parse reflect envelope {response_wire_body:?}: {e}")
-    })
+    serde_json::from_str::<Value>(response_wire_body)
+        .unwrap_or_else(|e| panic!("could not parse reflect envelope {response_wire_body:?}: {e}"))
 }
 
 #[tokio::test]
@@ -428,4 +427,229 @@ async fn e2e_text_xml_stays_as_string() {
     let reflected = reflect(&body);
     assert_eq!(reflected["type"], "string");
     assert_eq!(reflected["body"], json!("<root><item>hello</item></root>"));
+}
+
+// ---------------------------------------------------------------------------
+// UDS transport — the specific regression the pre-#98 code silently broke.
+// Non-JSON payloads on UDS used to bind as `body: None` (→ `Value::Null` in
+// the DSL), discarding the payload. The TCP path had a Value::String
+// fallback since #23; the UDS paths did not. Post-#98 all three transports
+// share `decode_response_body`.
+// ---------------------------------------------------------------------------
+
+use axum::body::Bytes;
+use axum::extract::Request as AxumRequest;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::Router;
+use ruuter_on_rust::http_client::HttpClient as RawHttpClient;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
+
+fn uds_socket_path(tag: &str) -> PathBuf {
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("ruuter-issue98-{tag}-{ns}.sock"))
+}
+
+/// Spawns a minimal axum server on a UDS that returns a fixed
+/// `(Content-Type, body)` pair based on the request path. Keeps the
+/// test data outside the URL so path-encoding quirks don't leak in:
+///
+/// | Path                     | Content-Type       | Body                    |
+/// |--------------------------|--------------------|-------------------------|
+/// | `/json-object`           | `application/json` | `{"id":1}`              |
+/// | `/text-plain-with-json`  | `text/plain`       | `{"ok":true}`           |
+/// | `/text-xml`              | `text/xml`         | `<root>hi</root>`       |
+async fn spawn_ct_choosing_uds(sock: &std::path::Path) -> oneshot::Sender<()> {
+    let app = Router::new().route(
+        "/*rest",
+        any(|req: AxumRequest| async move {
+            let (ct, body) = match req.uri().path() {
+                "/json-object" => ("application/json", r#"{"id":1}"#),
+                "/text-plain-with-json" => ("text/plain", r#"{"ok":true}"#),
+                "/text-xml" => ("text/xml", "<root>hi</root>"),
+                _ => ("text/plain", ""),
+            };
+            let mut resp = (StatusCode::OK, Bytes::from(body)).into_response();
+            resp.headers_mut()
+                .insert("content-type", ct.parse().unwrap());
+            resp
+        }),
+    );
+    if sock.exists() {
+        std::fs::remove_file(sock).ok();
+    }
+    let listener = tokio::net::UnixListener::bind(sock).expect("bind uds");
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let sock_owned = sock.to_path_buf();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = &mut rx => break,
+                accepted = listener.accept() => {
+                    let Ok((stream, _)) = accepted else { continue };
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let io = hyper_util::rt::TokioIo::new(stream);
+                        let service =
+                            hyper_util::service::TowerToHyperService::new(app);
+                        let _ = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(io, service)
+                            .await;
+                    });
+                }
+            }
+        }
+        std::fs::remove_file(&sock_owned).ok();
+    });
+    // Let the accept loop settle.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    tx
+}
+
+#[tokio::test]
+async fn uds_response_non_json_content_type_binds_string_not_null() {
+    // Pre-#98 this returned `body: None` (→ Value::Null in the DSL).
+    let sock = uds_socket_path("non-json");
+    let _shutdown = spawn_ct_choosing_uds(&sock).await;
+
+    let mut alias = HashMap::new();
+    alias.insert("upstream".to_string(), sock.clone());
+    let client = RawHttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
+
+    let resp = client
+        .request(
+            reqwest::Method::GET,
+            "http://upstream/text-xml",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("uds request");
+
+    assert_eq!(resp.status, 200);
+    // Pre-#98 bug: body would be `None` here — the whole payload lost.
+    let body = resp
+        .body
+        .expect("body must not be None for non-JSON UDS response");
+    assert_eq!(body, Value::String("<root>hi</root>".to_string()));
+}
+
+#[tokio::test]
+async fn uds_response_json_content_type_still_parses() {
+    // Regression guard: parsing JSON on UDS must survive the #98 refactor.
+    let sock = uds_socket_path("json");
+    let _shutdown = spawn_ct_choosing_uds(&sock).await;
+
+    let mut alias = HashMap::new();
+    alias.insert("upstream".to_string(), sock.clone());
+    let client = RawHttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
+
+    let resp = client
+        .request(
+            reqwest::Method::GET,
+            "http://upstream/json-object",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("uds request");
+
+    assert_eq!(resp.status, 200);
+    let body = resp.body.expect("body");
+    assert_eq!(body, json!({"id": 1}));
+}
+
+#[tokio::test]
+async fn uds_response_text_plain_valid_json_stays_string() {
+    // The behaviour change on TCP applies equally on UDS: text/plain
+    // + JSON-looking body stays as string, matching wire semantics.
+    let sock = uds_socket_path("text-json");
+    let _shutdown = spawn_ct_choosing_uds(&sock).await;
+
+    let mut alias = HashMap::new();
+    alias.insert("upstream".to_string(), sock.clone());
+    let client = RawHttpClient::with_timeout_ms(2000).with_unix_socket_map(alias);
+
+    let resp = client
+        .request(
+            reqwest::Method::GET,
+            "http://upstream/text-plain-with-json",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("uds request");
+
+    assert_eq!(resp.status, 200);
+    let body = resp.body.expect("body");
+    assert_eq!(body, Value::String(r#"{"ok":true}"#.to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// `json_override` — the DSL's `content_type: json_override` opt-in must still
+// force JSON decode even when the upstream sends a non-JSON Content-Type,
+// because the transport rewrites the response Content-Type header to
+// `application/json` before decode (see http_client/mod.rs::force_json_response).
+// ---------------------------------------------------------------------------
+
+async fn setup_json_override_route(tmp: &TempDir, upstream_url: &str) -> Arc<DslRouter> {
+    write_dsl(
+        tmp.path(),
+        "svc/GET/proxy.yml",
+        &format!(
+            r#"
+fetch:
+  call: http.get
+  args:
+    url: "{upstream_url}"
+    content_type: json_override
+  result: r
+  next: reply
+reply:
+  return:
+    type: "${{typeof r.response.body}}"
+    body: "${{r.response.body}}"
+  wrapper: false
+  status: 200
+"#
+        ),
+    );
+    build_router(tmp.path())
+}
+
+#[tokio::test]
+async fn json_override_forces_json_decode_even_on_wrong_content_type() {
+    // Upstream lies (sends text/plain) but returns valid JSON; the
+    // DSL explicitly opts into JSON decode via `content_type:
+    // json_override`. Post-#98 the transport rewrites the response
+    // Content-Type to application/json before `decode_response_body`
+    // runs, so the parse path is chosen.
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/lie")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body(r#"{"forced":true}"#)
+        .create_async()
+        .await;
+
+    let tmp = TempDir::new().unwrap();
+    let url = format!("{}/lie", server.url());
+    let router = setup_json_override_route(&tmp, &url).await;
+    let (_status, body) = get(router, "/svc/proxy").await;
+    let reflected = reflect(&body);
+    assert_eq!(reflected["type"], "object");
+    assert_eq!(reflected["body"], json!({"forced": true}));
 }
