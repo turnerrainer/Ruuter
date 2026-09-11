@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.16-rc] - 2026-09-11
+
 ### Changed
 
 - **Issue #98 — `http.*` response-body decode is now driven by
@@ -55,13 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       application/json`.
     - Otherwise: `${JSON.parse(r.response.body)}` in the DSL.
 
-  Tests: 19 test functions in
+  Tests: 23 test functions in
   `tests/issue_98_content_type_decode.rs` covering the acceptance
   matrix (2xx JSON, `application/problem+json`, JSON arrays,
   `; charset=utf-8`, `text/plain` with a JSON-shaped body, invalid
   JSON under `application/json`, `text/xml`, empty body across
-  Content-Types, case-insensitive header lookup, and the
-  `content_type_is_json` matcher).
+  Content-Types, case-insensitive header lookup, the
+  `content_type_is_json` matcher, three UDS regression pins that
+  exercise the real transport with an in-process axum server on a
+  temp socket — one for the non-JSON-becomes-null bug that pre-#98
+  UDS silently exhibited — and a `content_type: json_override`
+  test that pins the "force JSON decode regardless of upstream
+  Content-Type" opt-in path).
 
 ## [0.9.15-rc] - 2026-09-10
 
