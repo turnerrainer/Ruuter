@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **h2ck.me v1 T-3 — DNS-rebinding TOCTOU in
+  `HttpClient::check_ssrf`.** Pre-fix, `check_ssrf` resolved the URL
+  host via `tokio::net::lookup_host` and rejected the request if any
+  candidate address was private / link-local, then handed the URL
+  back to reqwest. Reqwest performed a FRESH resolve at connect
+  time; an attacker controlling the DNS record could flip the answer
+  between check and connect (`public → check pass → connect fires
+  → private`), completing a metadata-SSRF that the F2 fix was
+  designed to block.
+
+  Post-fix, `check_ssrf` returns a new internal `SsrfResolution`
+  enum: `NoPinning` for IP-literal URLs / allowlist-approved hosts /
+  `block_private_networks=false`, and `Pinned { host, addrs }` for
+  the hostname-with-block-active path. The caller
+  (`build_pinned_client`) constructs a per-request `reqwest::Client`
+  via `ClientBuilder::resolve(host, addr)` for every addr that
+  passed the check, so the connect is bound to those exact
+  addresses. A fresh DNS answer at connect time cannot flip the
+  target. Multi-A-record failover still works because all resolved
+  addrs get pinned. The shared `HttpClient::client` pool is
+  preserved for the no-pinning path — pinning applies only when
+  DNS actually ran.
+
+  No breaking changes for DSL authors. Config surface unchanged —
+  the pinning is driven off the pre-existing
+  `internal_requests.block_private_networks` flag.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T3_dns_rebinding_pinning.rs` — the `.resolve()`
+  primitive really pins the connect (proves the reqwest mechanism),
+  multi-addr disambiguation by port, IP-literal URL skips pinning,
+  `block_private_networks=false` skips pinning, allowlist-approved
+  host skips pinning, hostname resolving to a private IP still gets
+  rejected (F2 regression pin), rejection message names the
+  resolved IP (proves the resolver ran), per-request check runs
+  independently (no first-request-cache-poisoning).
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
