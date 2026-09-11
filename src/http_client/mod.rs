@@ -769,29 +769,13 @@ impl HttpClient {
             }
         };
 
-        // Issue #23 — non-JSON responses used to become `null` in the
-        // DSL (`serde_json::from_slice(...).ok()` returned `None`),
-        // silently discarding the payload. Now: try JSON first; on
-        // parse failure keep the raw text as a Value::String so the
-        // DSL can still forward / inspect it (e.g. an XML mapper
-        // returning `<root>…</root>`, or an upstream returning
-        // `text/plain` diagnostics). UTF-8 lossy so a binary blob
-        // doesn't crash the step — invalid sequences map to U+FFFD.
-        //
-        // Issue #63 — an empty upstream body used to bind as `None`,
-        // which surfaced under `${result.response.body}` as JSON null
-        // (Java-parity: Java returns `""`). Now: empty body binds
-        // as `Value::String("")` so the DSL sees the wire truth. A
-        // DSL that forwards the value as plaintext body gets `""`
-        // on the outgoing wire, not the string `"null"`.
-        let body: Option<Value> = if bytes.is_empty() {
-            Some(Value::String(String::new()))
-        } else {
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(v) => Some(v),
-                Err(_) => Some(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
-            }
-        };
+        // Issue #98 — Content-Type-driven decode. See
+        // `decode_response_body` for the full matrix; the summary is
+        // "parse JSON only when the upstream declared JSON; otherwise
+        // pass the raw UTF-8 text through." Preserves #23 (non-JSON
+        // upstreams reach the DSL as `Value::String`, not `null`) and
+        // #63 (empty body binds as `""`, not `null`).
+        let body: Option<Value> = decode_response_body(&bytes, &response_headers);
 
         Ok(HttpResponse {
             status,
@@ -913,6 +897,83 @@ impl HttpClient {
     /// everything.
     pub fn is_status_allowed(&self, status: u16) -> bool {
         self.status_allow_list.is_empty() || self.status_allow_list.contains(&status)
+    }
+}
+
+/// Issue #98 — true when a raw HTTP `Content-Type` value declares
+/// JSON. Matches `application/json`, any `application/…+json` (e.g.
+/// `application/problem+json`, `application/vnd.api+json`), and
+/// tolerates a media-type parameter (`; charset=utf-8`, `; q=…`).
+/// Case-insensitive on both the type and subtree, per RFC 9110 §8.3.1.
+///
+/// Missing or unrelated Content-Type (`text/*`, `application/xml`,
+/// `application/octet-stream`, `image/*`, empty string, …) returns
+/// `false` — the caller will pass the raw bytes through as a string.
+pub fn content_type_is_json(ct: &str) -> bool {
+    let mime = ct
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if mime == "application/json" {
+        return true;
+    }
+    if let Some(subtype) = mime.strip_prefix("application/") {
+        return subtype.ends_with("+json");
+    }
+    false
+}
+
+/// Issue #98 — decode the upstream response bytes into a
+/// DSL-visible `Value` using the response `Content-Type` to decide
+/// the shape.
+///
+/// | Response `Content-Type`           | Result                     |
+/// |-----------------------------------|----------------------------|
+/// | `application/json` (+ `; …`)      | parsed JSON                |
+/// | `application/*+json`              | parsed JSON                |
+/// | anything else / missing           | UTF-8 lossy string         |
+/// | (any Content-Type) empty bytes    | `Value::String("")` (#63)  |
+///
+/// When Content-Type declares JSON but the body fails to parse
+/// (gateway 502s that lie about Content-Type are a real pattern),
+/// emit a WARN naming the parse error and fall back to the raw
+/// string. The DSL author can still branch on the payload; the
+/// operator sees the mismatch in the log stream.
+///
+/// UTF-8 fallback is lossy so a binary blob (unlikely under a
+/// non-JSON Content-Type but not disallowed) doesn't crash the
+/// step — invalid sequences map to U+FFFD.
+///
+/// Preserves the #23 fix (non-JSON upstream reaches the DSL as
+/// `Value::String`, not `null`) and the #63 fix (empty body →
+/// `""`, not `null`).
+pub fn decode_response_body(bytes: &[u8], headers: &HashMap<String, String>) -> Option<Value> {
+    if bytes.is_empty() {
+        return Some(Value::String(String::new()));
+    }
+    let content_type = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    if content_type_is_json(content_type) {
+        match serde_json::from_slice::<Value>(bytes) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    http.response.content_type = %content_type,
+                    http.response.decode_error = %e,
+                    "upstream declared Content-Type: application/json but the body \
+                     failed JSON parse — binding raw string so the DSL can still \
+                     inspect / forward it"
+                );
+                Some(Value::String(String::from_utf8_lossy(bytes).into_owned()))
+            }
+        }
+    } else {
+        Some(Value::String(String::from_utf8_lossy(bytes).into_owned()))
     }
 }
 
