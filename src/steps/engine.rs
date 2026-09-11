@@ -5,7 +5,7 @@
 
 use crate::config::{GuardMode, LoggingConfig};
 use crate::context::ExecutionContext;
-use crate::dsl::loader::{HttpDsls, SharedGuards, SharedHttpDsls};
+use crate::dsl::loader::{GuardDsls, HttpDsls, SharedGuards, SharedHttpDsls};
 use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
 use crate::logging::{duration_ms, error_chain};
@@ -82,15 +82,31 @@ pub struct StepEngine {
     logging: Arc<LoggingConfig>,
     /// h2ck.me H1 — atomically-swappable handle to the loaded guard
     /// tree, used by the `template:` step to enforce access control
-    /// on the target DSL before dispatching. `None` = no guard
-    /// enforcement (backward-compat for callers that don't wire the
-    /// handle; also the shape the engine had pre-fix). When
-    /// populated, the template step invokes every applicable guard
-    /// for the callee's `<METHOD>/<path>` key before running the
-    /// callee body — closing the "public DSL templates into guarded
-    /// admin route" bypass path.
-    guards: Option<SharedGuards>,
+    /// on the target DSL before dispatching. Populated at
+    /// construction time; the template step invokes every applicable
+    /// guard for the callee's `<METHOD>/<path>` key before running
+    /// the callee body — closing the "public DSL templates into
+    /// guarded admin route" bypass path.
+    ///
+    /// h2ck.me v1 T-4: this is now a REQUIRED constructor arg (not
+    /// `Option`). Pre-T-4, an `Option<SharedGuards>` field paired
+    /// with a `with_guards` builder meant any caller who forgot to
+    /// wire guards silently reopened H1. Callers with genuinely no
+    /// guards (test fixtures, dsl-test harness) must pass
+    /// `empty_shared_guards()` explicitly so the intent is visible
+    /// at the call site.
+    guards: SharedGuards,
     guards_mode: GuardMode,
+}
+
+/// h2ck.me v1 T-4 — an empty `SharedGuards` handle. Used by
+/// test fixtures, `dsl-test`, and any StepEngine caller that
+/// legitimately has no guards. Explicit call at the constructor
+/// site makes the "no guards" choice reviewable in code, so a
+/// future refactor that omits this by accident won't compile
+/// (T-4's compile-time regression pin).
+pub fn empty_shared_guards() -> SharedGuards {
+    Arc::new(ArcSwap::from_pointee(GuardDsls::new()))
 }
 
 #[derive(Debug)]
@@ -109,7 +125,15 @@ pub struct DslExecutionResult {
 }
 
 impl StepEngine {
-    pub fn new(http_client: HttpClient) -> Self {
+    /// h2ck.me v1 T-4 — `guards` and `guards_mode` are now REQUIRED
+    /// positional args. Pre-T-4, `guards: Option<SharedGuards>`
+    /// meant any caller who forgot to wire the guard tree silently
+    /// skipped template-step guard enforcement, reopening the H1
+    /// bypass. Callers with legitimately no guards (test fixtures,
+    /// `dsl-test`, engines built before the guard tree is loaded)
+    /// pass `empty_shared_guards()` — an explicit call that
+    /// reviewers can spot.
+    pub fn new(http_client: HttpClient, guards: SharedGuards, guards_mode: GuardMode) -> Self {
         Self {
             http_client,
             ws_registry: WsRegistry::new(),
@@ -124,19 +148,9 @@ impl StepEngine {
             reload_handler: Arc::new(once_cell::sync::OnceCell::new()),
             default_exception_dsl: None,
             logging: Arc::new(LoggingConfig::default()),
-            guards: None,
-            guards_mode: GuardMode::default(),
+            guards,
+            guards_mode,
         }
-    }
-
-    /// h2ck.me H1 — install the shared guard tree + mode so the
-    /// `template:` step enforces the same access control on
-    /// template-invoked DSLs that the HTTP entry path enforces.
-    /// Called from `main.rs` after the guards `ArcSwap` is built.
-    pub fn with_guards(mut self, guards: SharedGuards, mode: GuardMode) -> Self {
-        self.guards = Some(guards);
-        self.guards_mode = mode;
-        self
     }
 
     /// Return `(key, guard)` pairs for every guard that gates
@@ -151,10 +165,7 @@ impl StepEngine {
     /// on the stack (the reporter's project-wide `.guard.yml` that
     /// templates into a route the same guard covers).
     pub fn applicable_guards_for(&self, project: &str, dsl_key: &str) -> Vec<(String, Dsl)> {
-        let Some(handle) = self.guards.as_ref() else {
-            return Vec::new();
-        };
-        let snapshot = handle.load();
+        let snapshot = self.guards.load();
         let keys = crate::dsl::guard_audit::guard_keys_for_dsl(
             project,
             dsl_key,
