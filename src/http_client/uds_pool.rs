@@ -266,11 +266,12 @@ pub async fn request_over_unix_pooled(
         .map_err(|e| RuuterError::HttpRequest(format!("uds body (pooled): {}", e)))?
         .to_bytes();
 
-    let parsed_body: Option<Value> = if bytes.is_empty() {
-        None
-    } else {
-        serde_json::from_slice::<Value>(&bytes).ok()
-    };
+    // Issue #98 — Content-Type-driven decode, shared with the TCP
+    // path. Fixes a pre-#98 bug on this seam: non-JSON UDS
+    // upstreams silently bound `body` as `None`, which surfaced in
+    // the DSL as JSON null and dropped the payload.
+    let parsed_body: Option<Value> =
+        crate::http_client::decode_response_body(&bytes, &response_headers);
 
     Ok(HttpResponse {
         status,

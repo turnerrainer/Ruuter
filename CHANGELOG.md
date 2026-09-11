@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Issue #98 — `http.*` response-body decode is now driven by
+  the upstream `Content-Type` header instead of a
+  parse-JSON-and-see-what-sticks heuristic.** Pre-fix, every
+  response body was fed through `serde_json::from_slice`
+  regardless of `Content-Type`; parse-success bound a structured
+  value, parse-failure bound a `Value::String`. Two subtle
+  surprises fell out:
+    - A `text/plain` (or missing-`Content-Type`) response whose
+      body happened to be valid JSON — `123`, `null`, `true`,
+      `"hello"`, `{"a":1}` — reached the DSL as a JSON number /
+      null / bool / string / object, not as the raw text the wire
+      declared.
+    - The UDS transport (both single and pooled) silently
+      discarded non-JSON payloads: `serde_json::from_slice(...).ok()`
+      returned `None`, which surfaced in the DSL as JSON null,
+      dropping the response body entirely. The TCP path already
+      handled this via a `Value::String` fallback (issue #23); the
+      UDS path did not.
+
+  Post-fix, all three transports (TCP, UDS, pooled UDS) share
+  `decode_response_body`, which inspects `Content-Type` before
+  choosing:
+
+  | Response `Content-Type`             | `response.body` type   |
+  |-------------------------------------|------------------------|
+  | `application/json` (± `; …`)        | parsed JSON            |
+  | `application/*+json`                | parsed JSON            |
+  | anything else / missing             | UTF-8 lossy string     |
+  | (any Content-Type) empty bytes      | `""` (preserves #63)   |
+
+  When the upstream declares `Content-Type: application/json` but
+  the body fails to parse (a gateway-502 pattern where the proxy
+  returns HTML with a lying Content-Type), Ruuter emits a WARN
+  naming the parse error and falls back to a raw string so the DSL
+  can still forward / inspect the payload. New public helpers:
+  `ruuter_on_rust::http_client::content_type_is_json` and
+  `decode_response_body`.
+
+  **Behaviour change for DSL authors:** if a route relied on the
+  old byte-heuristic to parse JSON out of a `text/plain` or
+  missing-`Content-Type` upstream, the value now arrives as a
+  string. Two migration paths:
+    - Preferred: fix the upstream to send `Content-Type:
+      application/json`.
+    - Otherwise: `${JSON.parse(r.response.body)}` in the DSL.
+
+  Tests: 22 assertions across
+  `tests/issue_98_content_type_decode.rs` covering the acceptance
+  matrix (2xx JSON, 4xx `application/problem+json`, JSON arrays,
+  `; charset=utf-8`, missing `Content-Type`, invalid JSON under
+  `application/json`, `text/plain` valid-JSON-shaped bodies, and
+  case-insensitive header lookup).
+
 ## [0.9.15-rc] - 2026-09-10
 
 ### Added
