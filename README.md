@@ -3,23 +3,24 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.9.15-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.9.16-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.14-rc?** Three fixes and a docs/tooling
-> round on top of v0.9.14-rc: `http.*` transport failures
-> (connection-refused, DNS, TLS, timeout) are now catchable by the
-> DSL — the step binds a stub `HttpResponse { status: 0, error:
-> Some(kind), body: {error, message} }` to `result:`, so a
-> `check_status` switch can branch on it (#89); the
-> `stop_in_case_of_exception` config field no longer WARNs on every
-> boot for operators who never touched it (#92); the supported
-> JavaScript subset is documented and empirically verified on both
-> Boa and QuickJS (#90); `dsl-lint` warns on five classes of YAML
-> plain-scalar hazard: `: ` inside an unquoted `${…}`, ` #` inside
-> one, `,` inside one in flow context, values starting with reserved
-> metasyntax (`!`, `&`, `*`, `%`, `@`, backtick), and Unicode
-> homoglyphs in structural YAML (#91). Details in
-> [CHANGELOG.md § 0.9.15-rc](CHANGELOG.md#0915-rc---2026-09-10).
+> **Upgrading from v0.9.15-rc?** One fix on top of v0.9.15-rc.
+> `http.*` response bodies are now decoded by the upstream
+> `Content-Type` header instead of a parse-JSON-and-see-what-sticks
+> heuristic — `application/json` (with or without `; charset=…`) and
+> `application/*+json` parse; everything else, including missing
+> `Content-Type`, arrives as a UTF-8 lossy string. A
+> `Content-Type: application/json` that lies (gateway-502 pattern
+> returning HTML) logs a WARN and falls back to a raw string so the
+> DSL can still forward / inspect. The UDS transport (both single and
+> pooled) now uses the same helper — pre-fix it silently discarded
+> non-JSON payloads. **Behaviour change for DSL authors:** routes
+> that relied on the old byte-heuristic to parse JSON out of a
+> `text/plain` or missing-`Content-Type` upstream now see a string;
+> fix the upstream to send `Content-Type: application/json`, or add
+> `${JSON.parse(r.response.body)}` in the DSL (#98). Details in
+> [CHANGELOG.md § 0.9.16-rc](CHANGELOG.md#0916-rc---2026-09-11).
 
 ## Try it in one command
 
@@ -27,7 +28,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.9.15-rc
+    turnerrainer/ruuter:0.9.16-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -41,7 +42,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.9.15-rc
+    turnerrainer/ruuter:0.9.16-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -64,12 +65,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.15-rc \
+    turnerrainer/ruuter:0.9.16-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.15-rc \
+    turnerrainer/ruuter:0.9.16-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 
