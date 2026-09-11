@@ -21,8 +21,8 @@ async fn main() {
     // Load configuration BEFORE initialising tracing so
     // `logging.format` is honoured. If config load fails, fall back
     // to `eprintln!` because there is no subscriber yet.
-    let (config, config_source) = match AppConfig::load_or_default() {
-        Ok(pair) => pair,
+    let (config, config_source, config_notes) = match AppConfig::load_or_default_with_notes() {
+        Ok(tuple) => tuple,
         Err(e) => {
             eprintln!("Failed to load config: {}", e);
             std::process::exit(1);
@@ -46,6 +46,12 @@ async fn main() {
     // Java operators port `application.yml` verbatim and get a
     // no-op at runtime for fields the framework doesn't wire yet.
     ruuter_on_rust::config::warn_on_stale_config_fields(&config);
+
+    // T-1 — WARNs that need the raw YAML (can't be observed from
+    // the parsed `AppConfig` alone). Explicit
+    // `http_response_size_limit: null` fires here; absent fields do
+    // not, thanks to `default_http_response_size_limit`.
+    ruuter_on_rust::config::warn_on_raw_config_notes(&config_notes);
 
     // h2ck.me M2 — flag `RUUTER_HTTP_REWRITE` in release builds. The
     // env var is documented as test-only but the code path is
