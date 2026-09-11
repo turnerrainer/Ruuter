@@ -202,6 +202,14 @@ impl HttpClient {
         self
     }
 
+    /// Test-only builder: set the outbound response-body cap. Every
+    /// transport (TCP, UDS, pooled UDS) honours this cap; see
+    /// h2ck.me v1 T-1 (default) and T-2 (UDS mid-stream enforcement).
+    pub fn with_response_size_limit(mut self, limit: Option<usize>) -> Self {
+        self.response_size_limit = limit;
+        self
+    }
+
     /// Task 044 — one-shot wiring: register the router as the
     /// SelfCallHandler this client will dispatch to when an outbound
     /// URL matches a self-origin. Called from `main.rs` after the
@@ -821,9 +829,9 @@ impl HttpClient {
             body,
             headers,
             timeout.unwrap_or(self.default_timeout),
+            self.response_size_limit,
         )
         .await?;
-        self.enforce_status_and_size(&resp)?;
         Ok(resp)
     }
 
@@ -861,34 +869,10 @@ impl HttpClient {
             body,
             headers,
             timeout.unwrap_or(self.default_timeout),
+            self.response_size_limit,
         )
         .await?;
-        self.enforce_status_and_size(&resp)?;
         Ok(resp)
-    }
-
-    fn enforce_status_and_size(&self, resp: &HttpResponse) -> Result<()> {
-        // Audit finding 04: allow-list check moved to caller (see
-        // `is_status_allowed`). We only enforce the response-size
-        // cap here — that's a transport concern (OOM guard), not a
-        // DSL-flow concern.
-        if let Some(cap) = self.response_size_limit {
-            // UDS path reads the full body via `.collect()` — we can
-            // only enforce the cap post-hoc. For streaming UDS with
-            // mid-read abort, see follow-up task.
-            let approx = resp
-                .body
-                .as_ref()
-                .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(0))
-                .unwrap_or(0);
-            if approx > cap {
-                return Err(RuuterError::HttpRequest(format!(
-                    "uds upstream body {} bytes exceeds http_response_size_limit {}",
-                    approx, cap
-                )));
-            }
-        }
-        Ok(())
     }
 
     /// Audit finding 04: expose the allow-list decision so callers
