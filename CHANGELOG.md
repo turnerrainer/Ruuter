@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **h2ck.me v1 T-13 — boot WARN when `csrf.allowed_origins` is
+  empty.** Pre-fix, empty `allowed_origins` silently disabled the
+  Origin/Referer CSRF check for state-changing methods; documented
+  at `book/src/framework/csrf.md` but no boot-time signal.
+  Post-fix, `warn_on_stale_config_fields` names the field and
+  points at the doc, matching the fleet's default-off-warn pattern.
+  5 tests in `tests/issue_T13_csrf_empty_origins_warn.rs`.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
