@@ -234,6 +234,12 @@ impl DslRouter {
         Router::new()
             .route("/_/unguarded", get(handle_unguarded))
             .route("/_/openapi.json", get(openapi_handler))
+            // h2ck.me v1 T-5 — per-project state-store footprint.
+            // Cap-diagnostic. Only meaningful once the operator has
+            // set `state.max_entries_per_project`; the endpoint
+            // works with the cap-off store too but the response
+            // notes `cap: null` and scans the map to count.
+            .route("/_/state-stats", get(handle_state_stats))
             .with_state(self)
     }
 
@@ -245,6 +251,10 @@ impl DslRouter {
     /// dispatch a self-call.
     pub fn build_axum_router_from_arc(self: Arc<Self>) -> Router {
         let cors = build_cors_layer(&self.config.cors);
+        // h2ck.me v1 T-7 — inbound request wall-clock deadline via
+        // tower_http::timeout::TimeoutLayer. Snapshot the config
+        // value before consuming `self` into the router state.
+        let request_timeout = self.config.incoming_requests.request_timeout_ms;
         let state = self;
 
         // h2ck.me M1 — `/_/openapi.json` moved to admin_router. The
@@ -256,6 +266,18 @@ impl DslRouter {
             .with_state(state);
         if let Some(layer) = cors {
             router = router.layer(layer);
+        }
+        // h2ck.me v1 T-7 — layered AFTER CORS so pre-flight OPTIONS
+        // still responds fast even under heavy load. `None` opts
+        // out of the timeout (matches pre-T-7 behaviour); a numeric
+        // value produces a `504 Gateway Timeout` on breach with
+        // tower_http's default body. See
+        // `book/src/ops/incoming-request-timeout.md` for the
+        // full contract.
+        if let Some(ms) = request_timeout {
+            router = router.layer(tower_http::timeout::TimeoutLayer::new(
+                std::time::Duration::from_millis(ms),
+            ));
         }
         router
     }
@@ -486,6 +508,64 @@ async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResp
     }))
 }
 
+/// h2ck.me v1 T-5 — per-project state-store footprint for operator
+/// diagnostics. Admin-gated (`RUUTER_ADMIN_ENABLED=true` and mounted
+/// via `admin_router`). Body shape:
+/// ```json
+/// {
+///   "cap": 100000,
+///   "totals": { "projects": 3, "entries": 42 },
+///   "projects": [
+///     { "project": "orders", "entries": 12, "cap": 100000, "used_pct": 0.012 },
+///     ...
+///   ]
+/// }
+/// ```
+/// `cap: null` at the top and per-project when the operator opted
+/// out of the cap (`state.max_entries_per_project: null`). Sorted
+/// alphabetically by project so dashboards can key on order.
+async fn handle_state_stats(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
+    let cap = router.state.max_entries_per_project();
+    let mut stats = router.state.project_stats();
+    stats.sort_by(|a, b| a.project.cmp(&b.project));
+
+    let total_entries: usize = stats.iter().map(|s| s.entries).sum();
+    let projects: Vec<serde_json::Value> = stats
+        .iter()
+        .map(|s| {
+            let used_pct = s.cap.and_then(|c| {
+                if c == 0 {
+                    None
+                } else {
+                    Some(s.entries as f64 / c as f64)
+                }
+            });
+            let mut obj = json!({
+                "project": s.project,
+                "entries": s.entries,
+            });
+            if let Some(c) = s.cap {
+                obj["cap"] = json!(c);
+            } else {
+                obj["cap"] = serde_json::Value::Null;
+            }
+            if let Some(p) = used_pct {
+                obj["used_pct"] = json!(p);
+            }
+            obj
+        })
+        .collect();
+
+    Json(json!({
+        "cap": cap,
+        "totals": {
+            "projects": stats.len(),
+            "entries": total_entries,
+        },
+        "projects": projects,
+    }))
+}
+
 async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Request) -> Response {
     use tracing::Instrument;
     let start = std::time::Instant::now();
@@ -697,8 +777,47 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         headers_map.insert(k.to_ascii_lowercase(), v.clone());
     }
 
-    // Read body bytes (up to 16 MiB) then parse as JSON object.
-    let body_bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await {
+    // h2ck.me v1 T-8 — Content-Length preflight. `axum::body::to_bytes`
+    // uses `http_body_util::Limited` internally and DOES reject
+    // mid-stream on the first over-limit frame — user-space
+    // accumulation is bounded at ~16 MiB. But when the client
+    // declares a Content-Length above the cap, we can reject the
+    // request BEFORE reading any body bytes off the socket, cutting
+    // out the hyper socket-buffer accumulation the RUNTIME audit
+    // observed as a 100 → 117 MB RSS spike on a 100 MB POST. The
+    // response body shape mirrors the mid-stream body_too_large the
+    // Limited path already produces so #92-style callers see the
+    // same structured error either way.
+    const MAX_INBOUND_BODY_BYTES: usize = 16 * 1024 * 1024;
+    if let Some(cl_str) = request
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Ok(declared) = cl_str.parse::<usize>() {
+            if declared > MAX_INBOUND_BODY_BYTES {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "body_too_large",
+                        "declared": declared,
+                        "cap": MAX_INBOUND_BODY_BYTES,
+                        "message": format!(
+                            "declared Content-Length {} exceeds inbound body cap {} (h2ck.me v1 T-8)",
+                            declared, MAX_INBOUND_BODY_BYTES
+                        ),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Read body bytes (up to 16 MiB) then parse as JSON object. The
+    // Limited body in `to_bytes` catches over-cap chunked / unknown-
+    // length payloads mid-stream; the preflight above handles the
+    // declared-CL case before any body reads.
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_INBOUND_BODY_BYTES).await {
         Ok(b) => b,
         Err(e) => {
             return (

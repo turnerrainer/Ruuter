@@ -39,7 +39,11 @@ async fn run_patch(url: String, timeout_ms: Option<u64>) -> Result<serde_json::V
     // The mockito fixture binds on 127.0.0.1; disable the N4 default
     // private-network block so the acceptance test can hit it.
     cfg.internal_requests.block_private_networks = false;
-    let engine = StepEngine::new(HttpClient::new(&cfg));
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    );
     let ctx = ExecutionContext::new(
         HashMap::new(),
         HashMap::new(),

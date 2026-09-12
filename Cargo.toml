@@ -11,7 +11,7 @@ repository = "https://github.com/turnerrainer/Ruuter"
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "timeout", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
@@ -76,6 +76,16 @@ default = ["scripting-boa"]
 scripting-boa = ["dep:boa_engine"]
 scripting-quickjs = ["dep:rquickjs"]
 spike-quickjs = ["dep:rquickjs"]
+# h2ck.me v1 T-6 — opt-in for the RUUTER_HTTP_REWRITE env-var URL
+# rewriter in release builds. Off by default; in a release build
+# WITHOUT this feature the rewriter code path is not compiled at
+# all, so an operator who accidentally sets the env var in prod
+# gets no behaviour change (previously they silently disabled SSRF
+# for the rewritten origin). Debug builds (`cfg!(debug_assertions)`)
+# always include the rewriter — dsl-test and integration harnesses
+# rely on it. Turn on `dev-http-rewrite` for a staging binary that
+# still needs to redirect outbound URLs (rare).
+dev-http-rewrite = []
 
 # Clippy posture. `cargo clippy --all-targets -- -D warnings` is the CI
 # gate. Style lints below are downgraded because the test suite uses
