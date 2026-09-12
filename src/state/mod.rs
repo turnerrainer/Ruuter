@@ -213,6 +213,16 @@ impl StateStore {
         self.max_entries_per_project
     }
 
+    /// h2ck.me v1 T-5 — test accessor that returns whether the
+    /// store has already emitted the once-per-project 80% WARN
+    /// for `project`. Exposed so regression tests can assert on
+    /// the deterministic internal state without racing against
+    /// the (thread-local) tracing subscriber capture. Not part of
+    /// the operator-facing API surface.
+    pub fn warned_projects_contains(&self, project: &str) -> bool {
+        self.warned_projects.contains_key(project)
+    }
+
     /// h2ck.me v1 T-5 — every project that has state in the store.
     /// Snapshot; concurrent modification isn't reflected.
     pub fn project_stats(&self) -> Vec<ProjectStats> {
