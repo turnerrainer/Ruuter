@@ -117,13 +117,19 @@ reply:
 
 #[tokio::test]
 async fn inbound_multipart_form_data_parses_file_parts() {
+    // h2ck.me v1 T-10 — post-fix, the field NAME wins over
+    // filename as the incoming.body map key. Pre-fix this DSL
+    // read `${incoming.body['note.txt']}` (the client-controlled
+    // filename); post-fix it must read `${incoming.body.file}`
+    // (the stable form-field name), which is the shape a DSL
+    // author would write against known form contracts.
     let tmp = TempDir::new().unwrap();
     write_dsl(
         tmp.path(),
         "svc/POST/upload.yml",
         r#"
 reply:
-  return: "${incoming.body['note.txt']}"
+  return: "${incoming.body.file}"
   status: 200
 "#,
     );
