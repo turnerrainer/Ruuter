@@ -583,6 +583,26 @@ pub struct IncomingRequestsConfig {
 
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// h2ck.me v1 T-7 — inbound request wall-clock deadline in
+    /// milliseconds. Applied via `tower_http::timeout::TimeoutLayer`
+    /// around every DSL fallback route, so a slow-body / slow-
+    /// header client (or an infinite-`next:` DSL that skipped the
+    /// engine's step-recursion cap) is cut off before it can tie up
+    /// a tokio worker indefinitely. The engine's existing
+    /// `max_step_recursions` / `max_iterations` / per-outbound
+    /// timeouts cover the DSL-side path; this closes the OTHER
+    /// leak: inbound clients doing malicious slow-header /
+    /// slow-body probes that never fire a step at all.
+    ///
+    /// - `Some(n)` → 504 after `n` ms wall clock.
+    /// - `None` → no timeout (pre-T-7 behaviour).
+    ///
+    /// Default is `Some(30_000)` (30 seconds) — comfortably above
+    /// any legitimate DSL's outbound-timeout budget and well below
+    /// the load-balancer defaults operators typically run behind.
+    #[serde(default = "default_incoming_request_timeout_ms")]
+    pub request_timeout_ms: Option<u64>,
 }
 
 /// h2ck.me S4 — trusted reverse-proxy list. Only requests whose
@@ -663,6 +683,17 @@ fn default_processed_filetypes() -> Vec<String> {
     vec![".yml".to_string(), ".yaml".to_string()]
 }
 
+/// h2ck.me v1 T-7 — 30 seconds is the default inbound request
+/// deadline. Above the sane DSL's outbound-timeout budget
+/// (15 s default per `http.*` step); below common load-balancer
+/// defaults (typically 60 s for AWS ALB / GCP HTTPS LB). Operators
+/// with legitimate long-running requests should raise it explicitly
+/// in ruuter.yaml; the WARN in `warn_on_stale_config_fields` will
+/// eventually be extended to flag values > LB defaults.
+fn default_incoming_request_timeout_ms() -> Option<u64> {
+    Some(30_000)
+}
+
 fn default_allowed_methods() -> Vec<String> {
     vec![
         "GET".to_string(),
@@ -690,6 +721,7 @@ impl Default for IncomingRequestsConfig {
         Self {
             allowed_method_types: default_allowed_methods(),
             headers: HashMap::new(),
+            request_timeout_ms: default_incoming_request_timeout_ms(),
         }
     }
 }

@@ -896,6 +896,9 @@ async fn method_allowlist_case_insensitive_reject() {
     cfg.incoming_requests = IncomingRequestsConfig {
         allowed_method_types: vec!["GET".into()],
         headers: HashMap::new(),
+        // h2ck.me v1 T-7 — required field on IncomingRequestsConfig
+        // now; None preserves pre-T-7 no-inbound-timeout behaviour.
+        request_timeout_ms: None,
     };
     let router = build_router(
         cfg,

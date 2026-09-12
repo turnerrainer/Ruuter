@@ -245,6 +245,10 @@ impl DslRouter {
     /// dispatch a self-call.
     pub fn build_axum_router_from_arc(self: Arc<Self>) -> Router {
         let cors = build_cors_layer(&self.config.cors);
+        // h2ck.me v1 T-7 — inbound request wall-clock deadline via
+        // tower_http::timeout::TimeoutLayer. Snapshot the config
+        // value before consuming `self` into the router state.
+        let request_timeout = self.config.incoming_requests.request_timeout_ms;
         let state = self;
 
         // h2ck.me M1 — `/_/openapi.json` moved to admin_router. The
@@ -256,6 +260,18 @@ impl DslRouter {
             .with_state(state);
         if let Some(layer) = cors {
             router = router.layer(layer);
+        }
+        // h2ck.me v1 T-7 — layered AFTER CORS so pre-flight OPTIONS
+        // still responds fast even under heavy load. `None` opts
+        // out of the timeout (matches pre-T-7 behaviour); a numeric
+        // value produces a `504 Gateway Timeout` on breach with
+        // tower_http's default body. See
+        // `book/src/ops/incoming-request-timeout.md` for the
+        // full contract.
+        if let Some(ms) = request_timeout {
+            router = router.layer(tower_http::timeout::TimeoutLayer::new(
+                std::time::Duration::from_millis(ms),
+            ));
         }
         router
     }

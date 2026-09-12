@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **h2ck.me v1 T-7 — inbound request wall-clock timeout via
+  `tower_http::timeout::TimeoutLayer`.** Pre-fix, every inbound
+  request rode a tokio task with no wall-clock ceiling. The
+  engine's `max_step_recursions` / `max_iterations` / per-outbound
+  timeouts covered the DSL-execution phase; they didn't cover a
+  slow-body / slow-header probe (Slowloris-style attack, or a
+  client that never finished sending) that tied up a worker
+  before any DSL ran.
+
+  Post-fix: new config field
+  `incoming_requests.request_timeout_ms`, default `Some(30_000)`
+  (30 seconds). Applied via `TimeoutLayer` around the DSL
+  fallback, layered after CORS so pre-flight OPTIONS still
+  respond fast. Breaches surface as `408 Request Timeout`
+  (tower_http's default in axum 0.7). Explicit `null` in
+  ruuter.yaml opts back into the pre-T-7 no-timeout behaviour.
+
+  Public-API surface: `IncomingRequestsConfig` gains a required
+  field `request_timeout_ms: Option<u64>`. Test fixtures that
+  built the struct directly (`security_hardening.rs`,
+  `security.rs`) updated to pass `None`.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T7_inbound_request_timeout.rs` — config default,
+  absent-field, explicit-numeric, explicit-null, slow-handler
+  gets 408/504 within timeout, fast-handler still 200, null
+  timeout lets slow handler complete, generous timeout lets
+  short handler complete without waiting for the cap.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
