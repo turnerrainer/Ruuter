@@ -47,6 +47,21 @@ async fn main() {
     // no-op at runtime for fields the framework doesn't wire yet.
     ruuter_on_rust::config::warn_on_stale_config_fields(&config);
 
+    // h2ck.me v1 T-14 — flag `RUUTER_OFFLINE=true`. When set, every
+    // outbound HTTP short-circuits to the #89 transport-error stub
+    // (`status: 0`, `error: Some("offline")`). Boot WARN so ops
+    // teams don't confuse offline-mode zero-status responses for a
+    // real upstream outage.
+    if ruuter_on_rust::http_client::ruuter_offline_env_active() {
+        tracing::warn!(
+            env = ruuter_on_rust::http_client::RUUTER_OFFLINE_ENV,
+            "RUUTER_OFFLINE is set — every outbound HTTP call short-circuits to a \
+             stub response (status: 0, error: \"offline\"). Intended for staging / \
+             integration harnesses that must not reach the network. Unset the env \
+             for production."
+        );
+    }
+
     // h2ck.me M2 — flag `RUUTER_HTTP_REWRITE` in release builds. The
     // env var is documented as test-only but the code path is
     // compiled into the release binary; a stray setting in prod
