@@ -488,6 +488,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DSL-tests/framework/{fallback-404, method-allowlist}.test.yml`
   scenarios updated to the new 405 contract.
 
+- **h2ck.me v1 T-16 — unknown-project 404s no longer echo the
+  client's URL path segment as `dsl.project` in the trace span /
+  access log.** Pre-fix, `handle_request` set `dsl.project` from
+  the raw first URL segment. An attacker probing `POST
+  /candidate-name/foo` for every candidate name saw their guess
+  reflected in structured logs — a mild project-name enumeration
+  signal for operators consuming the logs.
+
+  Post-fix, `dsl.project` is populated from
+  `router.dsls.contains_key(first_segment)`: known projects
+  appear verbatim; unknown first-segments (including the empty
+  string) render as `<unknown>`. The full URL path is still in
+  `http.route` so debugging isn't impaired — the fix is scoped
+  to the semantic `dsl.project` field only.
+
+  Regression coverage: 4 test functions in
+  `tests/issue_T16_project_trace_leak.rs` — known project
+  verbatim, unknown project → `<unknown>` (and NOT the client's
+  segment), `http.route` preserved for debugging, empty path
+  falls through to `<unknown>`.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
