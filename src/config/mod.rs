@@ -31,7 +31,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub max_step_recursions: Option<u32>,
 
-    #[serde(default)]
+    /// T-1 — outbound response-body cap, in bytes, per `http.*` step.
+    /// Absent-in-YAML defaults to `Some(16 * 1024 * 1024)` (matches
+    /// `AppConfig::default()`); explicit `null` opts into uncapped
+    /// reads and fires a boot WARN naming the field. Before the fix,
+    /// `#[serde(default)]` on `Option<usize>` yielded `None` — every
+    /// operator whose ruuter.yaml omitted the field silently ran
+    /// uncapped, so a misbehaving upstream could OOM the process by
+    /// returning a very large body.
+    #[serde(default = "default_http_response_size_limit")]
     pub http_response_size_limit: Option<usize>,
 
     #[serde(default = "default_http_request_timeout")]
@@ -92,6 +100,14 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub optimistic_concurrency: OptimisticConcurrencyConfig,
+
+    /// h2ck.me v1 T-5 — process-wide state store bounds. Prevents
+    /// a DSL that keys state on request data (`state.set(key =
+    /// ${incoming.body.foo})`) from OOMing the process by growing
+    /// the map without bound. `None` = unbounded (pre-T-5 behaviour;
+    /// safe only when every DSL keys on a bounded namespace).
+    #[serde(default)]
+    pub state: StateConfig,
 
     /// Task 043 — outbound Unix-domain-socket transport aliases.
     ///
@@ -169,6 +185,44 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// h2ck.me v1 T-5 — process-wide state store bounds. Config sub-tree
+/// under `state:` in ruuter.yaml. Absent block = defaults (100_000
+/// entries per project, WARN at 80% of cap). Set
+/// `max_entries_per_project: null` to opt out of the cap entirely
+/// (matches the pre-T-5 unbounded behaviour); the boot-time notes
+/// don't emit a WARN for that opt-out today (unlike T-1's cap null)
+/// because the state store is not a DoS-adjacent surface if the DSL
+/// author knows their keys are bounded.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateConfig {
+    /// Per-project cap on the number of entries in the state store.
+    /// `None` = unbounded (pre-T-5 behaviour). The DSL author can
+    /// exceed this by writing to a NEW project name; the cap is
+    /// per-project, not global.
+    #[serde(default = "default_state_max_entries_per_project")]
+    pub max_entries_per_project: Option<usize>,
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self {
+            max_entries_per_project: default_state_max_entries_per_project(),
+        }
+    }
+}
+
+/// h2ck.me v1 T-5 — 100_000 entries per project is the ratio the
+/// audit picked: high enough that legitimate DSLs (session tables,
+/// dedup markers with sensible TTLs enforced upstream, small
+/// counters) never hit it; low enough that a DSL that keys on
+/// request data trips the cap before the process is under real
+/// memory pressure. Operators with larger legitimate state (e.g.
+/// long-lived per-user sessions in projects with millions of users)
+/// should raise it explicitly.
+fn default_state_max_entries_per_project() -> Option<usize> {
+    Some(100_000)
 }
 
 /// Audit finding 14 — guard evaluation mode.
@@ -270,6 +324,17 @@ fn default_response_wrapper() -> bool {
 /// on every boot for operators who never touched the field.
 fn default_stop_in_case_of_exception() -> bool {
     true
+}
+
+/// T-1 — 16 MiB cap for outbound `http.*` response bodies. Matches
+/// `AppConfig::default()` so `serde(default = ...)` deserialisation
+/// (used when an operator's ruuter.yaml exists but omits the key)
+/// produces the same value as the no-config-file fallback path.
+/// Explicit `null` in YAML still deserialises to `None` — that's the
+/// operator opt-in for uncapped, and `warn_on_raw_config_notes`
+/// surfaces it as a WARN at boot.
+fn default_http_response_size_limit() -> Option<usize> {
+    Some(16 * 1024 * 1024)
 }
 
 impl Default for ResponseConfig {
@@ -583,6 +648,26 @@ pub struct IncomingRequestsConfig {
 
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// h2ck.me v1 T-7 — inbound request wall-clock deadline in
+    /// milliseconds. Applied via `tower_http::timeout::TimeoutLayer`
+    /// around every DSL fallback route, so a slow-body / slow-
+    /// header client (or an infinite-`next:` DSL that skipped the
+    /// engine's step-recursion cap) is cut off before it can tie up
+    /// a tokio worker indefinitely. The engine's existing
+    /// `max_step_recursions` / `max_iterations` / per-outbound
+    /// timeouts cover the DSL-side path; this closes the OTHER
+    /// leak: inbound clients doing malicious slow-header /
+    /// slow-body probes that never fire a step at all.
+    ///
+    /// - `Some(n)` → 504 after `n` ms wall clock.
+    /// - `None` → no timeout (pre-T-7 behaviour).
+    ///
+    /// Default is `Some(30_000)` (30 seconds) — comfortably above
+    /// any legitimate DSL's outbound-timeout budget and well below
+    /// the load-balancer defaults operators typically run behind.
+    #[serde(default = "default_incoming_request_timeout_ms")]
+    pub request_timeout_ms: Option<u64>,
 }
 
 /// h2ck.me S4 — trusted reverse-proxy list. Only requests whose
@@ -663,6 +748,17 @@ fn default_processed_filetypes() -> Vec<String> {
     vec![".yml".to_string(), ".yaml".to_string()]
 }
 
+/// h2ck.me v1 T-7 — 30 seconds is the default inbound request
+/// deadline. Above the sane DSL's outbound-timeout budget
+/// (15 s default per `http.*` step); below common load-balancer
+/// defaults (typically 60 s for AWS ALB / GCP HTTPS LB). Operators
+/// with legitimate long-running requests should raise it explicitly
+/// in ruuter.yaml; the WARN in `warn_on_stale_config_fields` will
+/// eventually be extended to flag values > LB defaults.
+fn default_incoming_request_timeout_ms() -> Option<u64> {
+    Some(30_000)
+}
+
 fn default_allowed_methods() -> Vec<String> {
     vec![
         "GET".to_string(),
@@ -690,6 +786,7 @@ impl Default for IncomingRequestsConfig {
         Self {
             allowed_method_types: default_allowed_methods(),
             headers: HashMap::new(),
+            request_timeout_ms: default_incoming_request_timeout_ms(),
         }
     }
 }
@@ -715,6 +812,7 @@ impl Default for AppConfig {
             proxy: ProxyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
+            state: StateConfig::default(),
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
@@ -756,6 +854,42 @@ fn config_search_paths() -> Vec<PathBuf> {
     out
 }
 
+/// T-1 — observations that can only be made against the raw YAML,
+/// not the parsed `AppConfig` (which cannot distinguish
+/// "field-absent" from "field-explicitly-null"). Populated by
+/// `AppConfig::load_or_default_with_notes` and consumed by
+/// `warn_on_raw_config_notes` after the tracing subscriber is up.
+#[derive(Debug, Default, Clone)]
+pub struct RawConfigNotes {
+    /// True when the loaded ruuter.yaml contains an explicit
+    /// `http_response_size_limit: null` — an operator opt-in to
+    /// uncapped outbound response body reads. WARNed at boot so a
+    /// mistake (typo, copy-paste of a Java template that used null
+    /// as a sentinel) doesn't silently disable the cap.
+    pub http_response_size_limit_explicit_null: bool,
+}
+
+/// T-1 — scan a raw ruuter.yaml body for observations that the typed
+/// `AppConfig` can't preserve after serde deserialisation. Public so
+/// tests can exercise the detection independently of file I/O.
+pub fn raw_config_notes(body: &str) -> RawConfigNotes {
+    let mut notes = RawConfigNotes::default();
+    let Ok(root) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(body) else {
+        return notes;
+    };
+    let Some(map) = root.as_mapping() else {
+        return notes;
+    };
+    if let Some(v) = map.get(serde_yaml_ng::Value::String(
+        "http_response_size_limit".to_string(),
+    )) {
+        if v.is_null() {
+            notes.http_response_size_limit_explicit_null = true;
+        }
+    }
+    notes
+}
+
 impl AppConfig {
     /// Resolve, load, and return the operator's AppConfig. Falls back to
     /// `AppConfig::default()` when no config file is found on any of the
@@ -764,7 +898,18 @@ impl AppConfig {
     /// Returns a tuple `(config, source)` — `source` is `Some(path)` when
     /// a file was loaded, `None` when defaults were used. Caller logs the
     /// choice at INFO so ops can see which config took effect.
+    ///
+    /// Prefer `load_or_default_with_notes` in `main.rs` so raw-YAML
+    /// observations (T-1: explicit-null cap) reach
+    /// `warn_on_raw_config_notes`.
     pub fn load_or_default() -> crate::Result<(Self, Option<PathBuf>)> {
+        Self::load_or_default_with_notes().map(|(c, p, _)| (c, p))
+    }
+
+    /// T-1 — same as `load_or_default` but also returns the raw-YAML
+    /// observation struct so the boot path can emit
+    /// `warn_on_raw_config_notes` after the tracing subscriber is up.
+    pub fn load_or_default_with_notes() -> crate::Result<(Self, Option<PathBuf>, RawConfigNotes)> {
         for path in config_search_paths() {
             if path.exists() {
                 let body = std::fs::read_to_string(&path).map_err(|e| {
@@ -781,11 +926,38 @@ impl AppConfig {
                         e
                     ))
                 })?;
-                return Ok((cfg, Some(path)));
+                let notes = raw_config_notes(&body);
+                return Ok((cfg, Some(path), notes));
             }
         }
-        Ok((Self::default(), None))
+        Ok((Self::default(), None, RawConfigNotes::default()))
     }
+}
+
+/// h2ck.me v1 T-11 — load with an OPTIONAL explicit override path
+/// (used by `ruuter-doctor --config <path>`). When `override_path`
+/// is `Some(p)`, that path is used exclusively; the conventional
+/// search order is skipped. When `None`, delegates to
+/// `AppConfig::load_or_default` so behaviour matches the main
+/// binary exactly.
+///
+/// Returns the same `(Self, Option<PathBuf>)` tuple as
+/// `load_or_default` — with the override, `source` is
+/// `Some(override_path)` on success.
+pub fn load_or_default_via_env_or_path(
+    override_path: Option<&std::path::Path>,
+) -> crate::Result<(AppConfig, Option<PathBuf>)> {
+    if let Some(p) = override_path {
+        let path = p.to_path_buf();
+        let body = std::fs::read_to_string(&path).map_err(|e| {
+            crate::RuuterError::Config(format!("reading config file {}: {}", path.display(), e))
+        })?;
+        let cfg: AppConfig = serde_yaml_ng::from_str(&body).map_err(|e| {
+            crate::RuuterError::Config(format!("parsing config file {}: {}", path.display(), e))
+        })?;
+        return Ok((cfg, Some(path)));
+    }
+    AppConfig::load_or_default()
 }
 
 /// Audit finding 15 — startup warning for config fields that the
@@ -812,6 +984,12 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // book/src/logging/) all four are wired end-to-end.
     // No WARN emitted regardless of value.
 
+    // T-1 — the numeric-vs-none WARN lives in
+    // `warn_on_raw_config_notes` because "operator wrote null" is
+    // observable only against the raw YAML body, not the parsed
+    // `AppConfig` (which cannot distinguish an absent field from a
+    // field explicitly set to null).
+
     // allowed_filetypes vs processed_filetypes — pre-fix Rust only
     // reads processed_filetypes. Warn when they differ so operators
     // know allowed_filetypes was silently the same list.
@@ -825,6 +1003,20 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
              processed_filetypes or accept that allowed_filetypes is inert."
         );
     }
+
+    // h2ck.me v1 T-9 — non-loopback bind + missing OWASP baseline
+    // response headers. Any listener bound to a non-loopback address
+    // (0.0.0.0, a public IP, or absence of `listeners` at all — the
+    // default fallback binds 0.0.0.0:port) is on the network; the
+    // OWASP baseline (X-Content-Type-Options, X-Frame-Options,
+    // Strict-Transport-Security, Referrer-Policy) SHOULD be set via
+    // `response_default_headers`. Silent absence is the leak T-9
+    // closes: `response_default_headers` machinery exists and
+    // `book/src/ops/security-checklist.md` documents the posture, but
+    // there was no boot-time signal telling operators they missed a
+    // header. Now WARN once at boot, naming each missing header, when
+    // any listener is non-loopback.
+    warn_on_missing_owasp_baseline_headers(config);
 
     // h2ck.me v1 T-13 — CSRF `allowed_origins` empty means the
     // Origin/Referer check is silently OFF for state-changing
@@ -840,6 +1032,125 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
              your web app posts from, or intentionally accept the bypass (single- \
              tenant admin surface behind a same-origin reverse proxy). See \
              book/src/framework/csrf.md for the mechanism."
+        );
+    }
+}
+
+/// h2ck.me v1 T-9 — true when at least one configured listener
+/// binds to a non-loopback address. `0.0.0.0`, an explicit public
+/// IP, or the fallback default (empty `listeners` list → bind
+/// `0.0.0.0:port`) all count as "reachable from the network."
+/// Loopback (`127.0.0.1`, `::1`) and UDS listeners return false.
+///
+/// Public so tests can pin the classification independently of the
+/// WARN emission. Not called from the hot path.
+pub fn has_non_loopback_listener(config: &AppConfig) -> bool {
+    if config.listeners.is_empty() {
+        // Default fallback in `main.rs` binds `0.0.0.0:<port>` —
+        // definitely non-loopback.
+        return true;
+    }
+    for l in &config.listeners {
+        if let Some(bind) = &l.bind {
+            // Extract just the host portion of `host:port`. Simple
+            // parsing that handles IPv4, IPv6 in brackets, and
+            // hostnames.
+            let host_part: &str = if let Some(bracket_end) = bind.find(']') {
+                // IPv6 form: `[host]:port` → strip brackets, host.
+                bind.get(1..bracket_end).unwrap_or(bind)
+            } else if let Some(colon) = bind.rfind(':') {
+                bind.get(..colon).unwrap_or(bind)
+            } else {
+                bind.as_str()
+            };
+            if !host_is_loopback(host_part) {
+                return true;
+            }
+        }
+        // UDS listeners (`l.unix.is_some()`) skip — they can't be
+        // reached from the network at all.
+    }
+    false
+}
+
+/// h2ck.me v1 T-9 — classify a bind host as loopback (safe) or
+/// non-loopback (needs the OWASP baseline). `127.0.0.1`, `::1`,
+/// and `localhost` count as loopback. Everything else (including
+/// `0.0.0.0` — which binds ALL interfaces, including public) is
+/// non-loopback.
+fn host_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    false
+}
+
+/// h2ck.me v1 T-9 — the four response headers OWASP recommends as
+/// baseline for a network-reachable HTTP service. Missing entries
+/// aren't fatal; the WARN just names each one so operators know
+/// what to add to `response_default_headers`.
+pub const OWASP_BASELINE_HEADERS: &[&str] = &[
+    "X-Content-Type-Options",
+    "X-Frame-Options",
+    "Strict-Transport-Security",
+    "Referrer-Policy",
+];
+
+/// h2ck.me v1 T-9 — subset of `OWASP_BASELINE_HEADERS` that is NOT
+/// present in `response_default_headers`. Case-insensitive on the
+/// header name because operators variously spell them
+/// `X-Frame-Options` / `x-frame-options` / `X-FRAME-OPTIONS`.
+/// Returns names in the canonical (baseline-list) casing.
+pub fn missing_owasp_baseline_headers(config: &AppConfig) -> Vec<&'static str> {
+    let present: std::collections::HashSet<String> = config
+        .response_default_headers
+        .keys()
+        .map(|k| k.to_ascii_lowercase())
+        .collect();
+    OWASP_BASELINE_HEADERS
+        .iter()
+        .copied()
+        .filter(|expected| !present.contains(&expected.to_ascii_lowercase()))
+        .collect()
+}
+
+/// h2ck.me v1 T-9 — the actual WARN emitter. Fires when there IS a
+/// non-loopback listener AND there IS at least one missing baseline
+/// header. Loopback-only deployments (dev laptops, test harnesses,
+/// sidecar-only listeners on UDS) never see the WARN.
+fn warn_on_missing_owasp_baseline_headers(config: &AppConfig) {
+    if !has_non_loopback_listener(config) {
+        return;
+    }
+    let missing = missing_owasp_baseline_headers(config);
+    if missing.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        missing = ?missing,
+        "config: response_default_headers is missing OWASP baseline entries on a \
+         network-reachable listener (h2ck.me v1 T-9). Add these keys to \
+         response_default_headers or set the listener bind to loopback. See \
+         book/src/ops/security-checklist.md for recommended values."
+    );
+}
+
+/// T-1 — emit WARNs for observations that need the raw YAML body
+/// (see `RawConfigNotes`). Called from `main.rs` right after
+/// `warn_on_stale_config_fields`, in the same "post-tracing-init,
+/// pre-listener-startup" window.
+pub fn warn_on_raw_config_notes(notes: &RawConfigNotes) {
+    if notes.http_response_size_limit_explicit_null {
+        tracing::warn!(
+            "config: http_response_size_limit=null explicitly disables the outbound \
+             response body cap. Every http.* step will read the full upstream body \
+             into memory, so a misbehaving upstream can OOM the process. Intended \
+             for internal-only deployments where the trade-off is understood. \
+             Set a numeric cap in bytes (default 16777216 = 16 MiB) unless this \
+             opt-in is deliberate."
         );
     }
 }

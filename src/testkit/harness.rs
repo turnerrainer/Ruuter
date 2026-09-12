@@ -66,7 +66,12 @@ impl Harness {
         let ws_registry = WsRegistry::new();
         let http_client = HttpClient::new(&config);
         let shared_http_dsls = Arc::new(loaded.http);
-        let mut engine = StepEngine::new(http_client)
+        // h2ck.me v1 T-4 — StepEngine::new now requires a guards
+        // handle. Wrap the loader's guard tree in a fresh ArcSwap
+        // so the engine sees the same shape it would on a real boot.
+        let shared_guards: crate::dsl::loader::SharedGuards =
+            Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards.clone()));
+        let mut engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
             .with_ws_registry(ws_registry.clone())
             .with_dsls(shared_http_dsls.clone());
         if let Some(n) = config.max_step_recursions {

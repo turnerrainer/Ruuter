@@ -45,9 +45,13 @@ fn build_router(cfg: AppConfig, files: &[(&str, &str)]) -> DslRouter {
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
     let shared = Arc::new(loaded.http);
-    let engine = StepEngine::new(HttpClient::new(&cfg))
-        .with_ws_registry(ws.clone())
-        .with_dsls(shared.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls(shared.clone());
     DslRouter::from_arc(shared, loaded.guards, cfg, StateStore::new(), ws, engine)
 }
 
@@ -132,6 +136,9 @@ async fn method_not_in_allow_list_returns_405() {
     cfg.incoming_requests = IncomingRequestsConfig {
         allowed_method_types: vec!["GET".into()],
         headers: HashMap::new(),
+        // h2ck.me v1 T-7 — required field on IncomingRequestsConfig
+        // now; None preserves pre-T-7 no-inbound-timeout behaviour.
+        request_timeout_ms: None,
     };
     let router = build_router(
         cfg,

@@ -2,6 +2,16 @@
 # NO coalescing. Every wrk connection runs the body independently.
 # Compare rps between the two scenarios to see the single_flight win.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "042 A/B — same busy-work body as `bench-single-flight`, but with"
+  additive: true
+
 work:
   iterate:
     over: "${Array.from({length: 400}, (_, i) => i)}"

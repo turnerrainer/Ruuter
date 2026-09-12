@@ -1,6 +1,13 @@
 # Guard for GET /samples/protected/*
 # Checks authentication before allowing access
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. This guard still runs; the
+# `override_ancestors: false` matches pre-T-12 semantics.
+declaration:
+  description: "Guard for GET /samples/protected/*"
+  override_ancestors: false
+
 check_auth_header:
   switch:
     - condition: ${!incoming.headers.authorization}
