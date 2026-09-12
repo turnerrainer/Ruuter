@@ -1449,9 +1449,19 @@ async fn parse_multipart_body(
             bytes.extend_from_slice(&chunk);
         }
         let content = String::from_utf8_lossy(&bytes).into_owned();
-        // Prefer filename as key (Java behaviour for `file[]`
-        // uploads); fall back to field name.
-        let key = filename.or(name).unwrap_or_else(|| "part".to_string());
+        // h2ck.me v1 T-10 — prefer the FIELD NAME as the map key
+        // over the filename. Pre-fix, `filename.or(name)` meant an
+        // attacker-controlled filename (path-traversal shape,
+        // Unicode homoglyph, etc.) became the map key that
+        // downstream DSLs read via `${incoming.body.<key>}`. In-
+        // framework the key is just a JSON-map key — no fs code
+        // touches it — but a DSL that hands the key to a trusted
+        // system (path building, log line, cache key) inherits
+        // whatever nastiness the filename carried. Post-fix, the
+        // stable field name wins; the filename is used as a
+        // fallback only when the field has no name (`part` is the
+        // final fallback for truly-anonymous fields).
+        let key = name.or(filename).unwrap_or_else(|| "part".to_string());
         out.insert(key, Value::String(content));
     }
     Ok(out)

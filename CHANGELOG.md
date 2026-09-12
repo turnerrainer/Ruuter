@@ -341,6 +341,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Regression coverage: 18 test functions in
   `tests/issue_T9_owasp_baseline_headers.rs`.
 
+### Changed (behavior)
+
+- **h2ck.me v1 T-10 — multipart `Content-Disposition` filename no
+  longer wins over the field `name` as the `incoming.body` map
+  key.** Pre-fix, `filename.or(name)` in `parse_multipart_body`
+  meant an attacker-controlled filename (path-traversal shape,
+  Unicode homoglyph, empty string) became the key that DSLs read
+  via `${incoming.body.<key>}`. In-framework the key is just a
+  JSON-map key, but downstream DSLs that forward the key to a
+  trusted system (path building, log line, cache key) inherit
+  the nastiness.
+
+  Post-fix: `name.or(filename)`. The stable field name wins; the
+  filename is used as a fallback ONLY when the field has no
+  `name=`. Anonymous fields still fall back to `"part"`.
+
+  **DSL-author migration:** any DSL that previously read
+  `${incoming.body['<filename>']}` from a multipart upload must
+  switch to `${incoming.body.<field-name>}`. Standard form
+  contracts already do this (`name="file"` etc.); ad-hoc DSLs
+  that keyed on `filename=` need one-line updates.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T10_multipart_field_name_key.rs` — normal case,
+  path-traversal filename (`../etc/passwd`) with field name,
+  Unicode-homoglyph filename with field name, empty filename with
+  field name, no filename, no field name falls back to filename,
+  fully anonymous falls back to `"part"`, multiple same-name
+  fields last-wins. The pre-existing `audit_content_types.rs`
+  test (`inbound_multipart_form_data_parses_file_parts`) updated
+  in-place to the new field-name-as-key contract.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
