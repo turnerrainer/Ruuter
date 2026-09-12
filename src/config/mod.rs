@@ -101,6 +101,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub optimistic_concurrency: OptimisticConcurrencyConfig,
 
+    /// h2ck.me v1 T-5 — process-wide state store bounds. Prevents
+    /// a DSL that keys state on request data (`state.set(key =
+    /// ${incoming.body.foo})`) from OOMing the process by growing
+    /// the map without bound. `None` = unbounded (pre-T-5 behaviour;
+    /// safe only when every DSL keys on a bounded namespace).
+    #[serde(default)]
+    pub state: StateConfig,
+
     /// Task 043 — outbound Unix-domain-socket transport aliases.
     ///
     /// Maps `http://<host>/...` URLs whose host matches a key to a
@@ -177,6 +185,44 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// h2ck.me v1 T-5 — process-wide state store bounds. Config sub-tree
+/// under `state:` in ruuter.yaml. Absent block = defaults (100_000
+/// entries per project, WARN at 80% of cap). Set
+/// `max_entries_per_project: null` to opt out of the cap entirely
+/// (matches the pre-T-5 unbounded behaviour); the boot-time notes
+/// don't emit a WARN for that opt-out today (unlike T-1's cap null)
+/// because the state store is not a DoS-adjacent surface if the DSL
+/// author knows their keys are bounded.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateConfig {
+    /// Per-project cap on the number of entries in the state store.
+    /// `None` = unbounded (pre-T-5 behaviour). The DSL author can
+    /// exceed this by writing to a NEW project name; the cap is
+    /// per-project, not global.
+    #[serde(default = "default_state_max_entries_per_project")]
+    pub max_entries_per_project: Option<usize>,
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self {
+            max_entries_per_project: default_state_max_entries_per_project(),
+        }
+    }
+}
+
+/// h2ck.me v1 T-5 — 100_000 entries per project is the ratio the
+/// audit picked: high enough that legitimate DSLs (session tables,
+/// dedup markers with sensible TTLs enforced upstream, small
+/// counters) never hit it; low enough that a DSL that keys on
+/// request data trips the cap before the process is under real
+/// memory pressure. Operators with larger legitimate state (e.g.
+/// long-lived per-user sessions in projects with millions of users)
+/// should raise it explicitly.
+fn default_state_max_entries_per_project() -> Option<usize> {
+    Some(100_000)
 }
 
 /// Audit finding 14 — guard evaluation mode.
@@ -734,6 +780,7 @@ impl Default for AppConfig {
             proxy: ProxyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
+            state: StateConfig::default(),
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),

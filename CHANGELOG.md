@@ -173,6 +173,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and populated handles reach the engine correctly. ~50 pre-
   existing test fixtures updated in-place to the new signature.
 
+### Added
+
+- **h2ck.me v1 T-5 — process-wide state store now supports a
+  per-project entry cap.** Pre-fix, `StateStore` was an unbounded
+  `DashMap<StateKey, Value>` — a DSL that keyed state on request
+  data (`state.set(key = ${incoming.body.foo})`) could OOM the
+  process by growing the map without bound. Post-fix, new config
+  key `state.max_entries_per_project` (default `100_000`, `null`
+  = unbounded) bounds each project independently.
+
+  - `StateStore::set` now returns `Result<()>`; a new-key insert
+    past the cap fails with `RuuterError::InvalidStep("state.set
+    rejected for project 'X': entry count N reached the cap
+    max_entries_per_project=M (h2ck.me v1 T-5). ...")`.
+    Existing-key updates are always allowed (no count change).
+  - `StateStore::update` follows the same contract — signature
+    changed from `Value` to `Result<Value>`; new-key inserts
+    honour the cap, existing-key updates never trip it.
+  - `StateStore::delete` decrements the per-project count.
+  - At **80% of the cap**, the store emits ONE `tracing::warn!`
+    line naming the project + entries + cap. Subsequent inserts up
+    to the wall don't spam. Once the wall hits, each rejected
+    insert surfaces to the DSL author via the step-level error.
+  - New helpers: `StateStore::with_config(&StateConfig)`,
+    `with_max_entries_per_project(usize)`,
+    `project_entry_count(&str)`, `max_entries_per_project()`,
+    `project_stats()`.
+  - New public struct `ProjectStats { project, entries, cap }`
+    powers a new admin endpoint `GET /_/state-stats` (mounted
+    under `admin_router`, `RUUTER_ADMIN_ENABLED=true` required).
+    Response shape: `{ cap, totals: { projects, entries },
+    projects: [ { project, entries, cap, used_pct } ] }`.
+  - `main.rs`, `src/testkit/harness.rs`, and `src/bin/dsl_test.rs`
+    wire the store via `with_config` (or `.expect()` on set seeds).
+
+  Migration: DSL authors who keyed state on unbounded request data
+  and relied on the pre-T-5 grow-forever behaviour must either
+  move to a bounded key namespace, add explicit `state.delete` to
+  clean up, or raise the cap. The default of 100_000 is
+  comfortable for legitimate DSLs (session tables with sensible
+  TTL, dedup markers, counters); DSLs that hit it are almost
+  certainly the very footgun T-5 closes.
+
+  Regression coverage: 20 test functions in
+  `tests/issue_T5_statestore_bounded.rs`.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
