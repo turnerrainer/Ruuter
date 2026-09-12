@@ -286,6 +286,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout lets slow handler complete, generous timeout lets
   short handler complete without waiting for the cap.
 
+### Added
+
+- **h2ck.me v1 T-8 — early-reject on `Content-Length > cap` before
+  any body bytes are read.** `axum::body::to_bytes` already rejects
+  mid-stream at 16 MiB via `http_body_util::Limited` (the RUNTIME-
+  FINDINGS "100 → 117 MB RSS on a 100 MB POST" was hyper socket-
+  buffer overhead, not eager buffering). Real (smaller) improvement:
+  when the client explicitly declares a Content-Length above the
+  cap, we can 413 the request before ANY body reads, cutting out
+  hyper's socket-buffer accumulation entirely.
+
+  Post-fix, `handle_request` inspects the `Content-Length` header
+  and returns `413 Payload Too Large` with a structured JSON body:
+  ```json
+  { "error": "body_too_large", "declared": N, "cap": 16777216,
+    "message": "declared Content-Length N exceeds inbound body cap
+                16777216 (h2ck.me v1 T-8)" }
+  ```
+  The `>` comparison is strict — a declared CL exactly at the cap
+  is allowed. Missing / malformed CL falls through to the existing
+  mid-stream Limited behaviour. Preserves the `#92`-style
+  structured-error shape callers expect.
+
+  Regression coverage: 6 test functions in
+  `tests/issue_T8_content_length_preflight.rs` — oversized CL →
+  413 with structured JSON, CL == cap passes preflight, small CL
+  reaches DSL, missing CL reaches DSL, malformed CL doesn't
+  trigger preflight, DSL never runs on preflight reject.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed

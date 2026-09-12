@@ -777,8 +777,47 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         headers_map.insert(k.to_ascii_lowercase(), v.clone());
     }
 
-    // Read body bytes (up to 16 MiB) then parse as JSON object.
-    let body_bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await {
+    // h2ck.me v1 T-8 — Content-Length preflight. `axum::body::to_bytes`
+    // uses `http_body_util::Limited` internally and DOES reject
+    // mid-stream on the first over-limit frame — user-space
+    // accumulation is bounded at ~16 MiB. But when the client
+    // declares a Content-Length above the cap, we can reject the
+    // request BEFORE reading any body bytes off the socket, cutting
+    // out the hyper socket-buffer accumulation the RUNTIME audit
+    // observed as a 100 → 117 MB RSS spike on a 100 MB POST. The
+    // response body shape mirrors the mid-stream body_too_large the
+    // Limited path already produces so #92-style callers see the
+    // same structured error either way.
+    const MAX_INBOUND_BODY_BYTES: usize = 16 * 1024 * 1024;
+    if let Some(cl_str) = request
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Ok(declared) = cl_str.parse::<usize>() {
+            if declared > MAX_INBOUND_BODY_BYTES {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "body_too_large",
+                        "declared": declared,
+                        "cap": MAX_INBOUND_BODY_BYTES,
+                        "message": format!(
+                            "declared Content-Length {} exceeds inbound body cap {} (h2ck.me v1 T-8)",
+                            declared, MAX_INBOUND_BODY_BYTES
+                        ),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Read body bytes (up to 16 MiB) then parse as JSON object. The
+    // Limited body in `to_bytes` catches over-cap chunked / unknown-
+    // length payloads mid-stream; the preflight above handles the
+    // declared-CL case before any body reads.
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_INBOUND_BODY_BYTES).await {
         Ok(b) => b,
         Err(e) => {
             return (
