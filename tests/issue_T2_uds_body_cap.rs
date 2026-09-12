@@ -139,8 +139,7 @@ async fn spawn_chunked_server(path: &std::path::Path, size: usize) -> oneshot::S
                     Bytes::from(vec![b'x'; end - start])
                 })
                 .collect();
-            let stream =
-                futures::stream::iter(chunks.into_iter().map(Ok::<Bytes, std::io::Error>));
+            let stream = futures::stream::iter(chunks.into_iter().map(Ok::<Bytes, std::io::Error>));
             let body = Body::from_stream(stream);
             let mut resp = Response::builder()
                 .status(StatusCode::OK)

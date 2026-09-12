@@ -1,1 +1,12 @@
+# h2ck.me v1 T-11 test fixture — a "clean" config that fires
+# zero warnings at boot. Kept in sync with the boot WARN registry
+# as T-1..T-14 add new checks.
+#
+# - listener on loopback → T-9's OWASP-baseline WARN doesn't apply.
+# - csrf.allowed_origins populated → T-13's WARN doesn't fire.
 port: 8080
+listeners:
+  - bind: "127.0.0.1:8080"
+csrf:
+  allowed_origins:
+    - "https://app.example.com"
