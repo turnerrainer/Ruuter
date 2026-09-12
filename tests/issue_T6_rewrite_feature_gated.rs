@@ -96,12 +96,25 @@ fn active_in_release_is_false_for_empty_env() {
 // that pins `http_rewrite:`.
 // ────────────────────────────────────────────────────────────────
 
+// h2ck.me v1 T-6 (CI fix) — the end-to-end rewriter test needs
+// axum + HttpClient. In release builds without the
+// `dev-http-rewrite` feature the rewriter is compiled out per
+// T-6 itself, so the test would find no rewriting happening and
+// fail. Gate the imports + helpers + test with the same cfg the
+// production code uses, so `cargo test --release` (CI's mode)
+// passes without the feature.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 use axum::{routing::get, Router};
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 use ruuter_on_rust::config::AppConfig;
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 use ruuter_on_rust::http_client::HttpClient;
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 use std::time::Duration;
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 use tokio::net::TcpListener;
 
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 async fn spawn_id_server(tag: &'static str) -> u16 {
     let app = Router::new().route(
         "/tag",
@@ -116,13 +129,18 @@ async fn spawn_id_server(tag: &'static str) -> u16 {
     port
 }
 
-/// The env-var rewriter still redirects outbound URLs in a debug
-/// build. Sets RUUTER_HTTP_REWRITE so requests to
-/// `http://target.example/tag` land on our loopback server.
+/// The env-var rewriter still redirects outbound URLs when the
+/// rewriter code is compiled in (debug builds OR release with the
+/// `dev-http-rewrite` feature). Gated with the same cfg the
+/// production code uses so `cargo test --release` in CI — which
+/// runs without the feature — doesn't fail with an unroutable
+/// URL. The other three tests in this file (const, false-in-debug,
+/// empty env) still run in every configuration.
 ///
 /// NB: env-var is process-wide and other tests in this binary that
 /// hit outbound URLs will see it. To keep collateral damage minimal
 /// we scope the value tightly and restore on exit.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 #[tokio::test]
 async fn debug_build_still_rewrites() {
     let port = spawn_id_server("hit").await;
