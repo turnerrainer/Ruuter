@@ -125,6 +125,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved IP (proves the resolver ran), per-request check runs
   independently (no first-request-cache-poisoning).
 
+### Changed (breaking)
+
+- **h2ck.me v1 T-4 — `StepEngine::new` now requires a
+  `SharedGuards` handle as a positional argument.** Pre-fix,
+  `guards: Option<SharedGuards>` on `StepEngine` was populated
+  post-hoc via a `with_guards(SharedGuards, GuardMode)` builder;
+  any caller that forgot to call `.with_guards` silently disabled
+  `template:`-step guard enforcement — reopening the h2ck.me H1
+  bypass ("public DSL templates into a guarded admin route").
+  Nothing at compile time prevented the omission; the mistake had
+  to be caught by test coverage that specifically exercised the
+  guarded template path.
+
+  Post-fix: `pub fn new(http_client: HttpClient, guards:
+  SharedGuards, guards_mode: GuardMode) -> Self`. The `with_guards`
+  builder is deleted. Callers with legitimately no guards pass a
+  new module-level helper `empty_shared_guards()` — an explicit
+  call reviewers can spot. Any future call site that forgets to
+  wire guards FAILS TO COMPILE, which is the regression pin.
+
+  Migration for external callers (internal tests + main + testkit
+  + dsl-test all updated in this PR):
+  ```diff
+  - let engine = StepEngine::new(http_client)
+  -     .with_guards(shared_guards, cfg.guards.mode);
+  + let engine = StepEngine::new(http_client, shared_guards, cfg.guards.mode);
+  ```
+  For test fixtures that never had guards:
+  ```diff
+  - let engine = StepEngine::new(http_client);
+  + let engine = StepEngine::new(
+  +     http_client,
+  +     ruuter_on_rust::steps::engine::empty_shared_guards(),
+  +     cfg.guards.mode,
+  + );
+  ```
+
+  New public helper: `ruuter_on_rust::steps::engine::empty_shared_guards()
+  -> SharedGuards`. Also re-exported through the crate.
+
+  Regression coverage: 4 test functions in
+  `tests/issue_T4_stepengine_guards_required.rs` document the
+  compile-time contract (the pin IS the compile error a future
+  refactor would hit) and verify `empty_shared_guards()` returns
+  a valid handle, `applicable_guards_for` still runs against it,
+  and populated handles reach the engine correctly. ~50 pre-
+  existing test fixtures updated in-place to the new signature.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed

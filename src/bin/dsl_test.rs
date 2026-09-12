@@ -330,7 +330,12 @@ async fn run_ws_client(
     let ws_registry = WsRegistry::new();
     let http_client = HttpClient::new(&config);
     let shared_http_dsls = Arc::new(loaded.http);
-    let engine = StepEngine::new(http_client)
+    // h2ck.me v1 T-4 — StepEngine::new requires a guards handle.
+    // Wrap the loader's guard tree so template-step guard
+    // enforcement matches a real boot.
+    let shared_guards: ruuter_on_rust::dsl::loader::SharedGuards =
+        Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards.clone()));
+    let engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
         .with_ws_registry(ws_registry.clone())
         .with_dsls(shared_http_dsls.clone());
     let _trigger = Arc::new(TriggerDispatcher::new(

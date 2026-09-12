@@ -52,9 +52,13 @@ fn build_router(project: &str, method: &str, path: &str, body: &str) -> DslRoute
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let dsls = loader.load_all().expect("load dsls");
     let ws_registry = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg))
-        .with_logging(std::sync::Arc::new(cfg.logging.clone()))
-        .with_ws_registry(ws_registry.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_logging(std::sync::Arc::new(cfg.logging.clone()))
+    .with_ws_registry(ws_registry.clone());
     DslRouter::new(
         dsls,
         HashMap::new(),
