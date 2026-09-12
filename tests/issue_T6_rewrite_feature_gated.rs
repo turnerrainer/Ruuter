@@ -50,11 +50,15 @@ fn env_var_name_is_exposed() {
 /// binary always returns `false`, regardless of whether the env
 /// is set. Pin — a future refactor that drops the
 /// `cfg!(debug_assertions)` guard would surface here.
+///
+/// Gated on `debug_assertions` because CI runs `cargo test
+/// --release --features dev-http-rewrite` (release + feature),
+/// where the fn correctly returns TRUE when env is set. The
+/// "returns false in a debug binary" invariant only applies in
+/// debug mode.
+#[cfg(debug_assertions)]
 #[test]
 fn active_in_release_is_false_in_debug_binary() {
-    // Note: env-var scope: setting per-test env can leak across
-    // parallel tests. We snapshot + restore rather than assuming
-    // exclusive access.
     let prev = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok();
     std::env::set_var(
         RUUTER_HTTP_REWRITE_ENV,
@@ -66,15 +70,15 @@ fn active_in_release_is_false_in_debug_binary() {
         "test binary runs with debug_assertions ON — the release-only \
          WARN helper must return false to avoid noise in tests"
     );
-    // Restore
     match prev {
         Some(v) => std::env::set_var(RUUTER_HTTP_REWRITE_ENV, v),
         None => std::env::remove_var(RUUTER_HTTP_REWRITE_ENV),
     }
 }
 
-/// Empty env → also false. Sanity check for the empty-value path
-/// (the "unset" path is exercised by the check above via remove).
+/// Empty env → false in every build config. When the env is unset
+/// or empty, the fn short-circuits before touching the release/
+/// debug logic, so this test runs in both modes.
 #[test]
 fn active_in_release_is_false_for_empty_env() {
     let prev = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok();
