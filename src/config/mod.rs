@@ -977,6 +977,122 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
              processed_filetypes or accept that allowed_filetypes is inert."
         );
     }
+
+    // h2ck.me v1 T-9 — non-loopback bind + missing OWASP baseline
+    // response headers. Any listener bound to a non-loopback address
+    // (0.0.0.0, a public IP, or absence of `listeners` at all — the
+    // default fallback binds 0.0.0.0:port) is on the network; the
+    // OWASP baseline (X-Content-Type-Options, X-Frame-Options,
+    // Strict-Transport-Security, Referrer-Policy) SHOULD be set via
+    // `response_default_headers`. Silent absence is the leak T-9
+    // closes: `response_default_headers` machinery exists and
+    // `book/src/ops/security-checklist.md` documents the posture, but
+    // there was no boot-time signal telling operators they missed a
+    // header. Now WARN once at boot, naming each missing header, when
+    // any listener is non-loopback.
+    warn_on_missing_owasp_baseline_headers(config);
+}
+
+/// h2ck.me v1 T-9 — true when at least one configured listener
+/// binds to a non-loopback address. `0.0.0.0`, an explicit public
+/// IP, or the fallback default (empty `listeners` list → bind
+/// `0.0.0.0:port`) all count as "reachable from the network."
+/// Loopback (`127.0.0.1`, `::1`) and UDS listeners return false.
+///
+/// Public so tests can pin the classification independently of the
+/// WARN emission. Not called from the hot path.
+pub fn has_non_loopback_listener(config: &AppConfig) -> bool {
+    if config.listeners.is_empty() {
+        // Default fallback in `main.rs` binds `0.0.0.0:<port>` —
+        // definitely non-loopback.
+        return true;
+    }
+    for l in &config.listeners {
+        if let Some(bind) = &l.bind {
+            // Extract just the host portion of `host:port`. Simple
+            // parsing that handles IPv4, IPv6 in brackets, and
+            // hostnames.
+            let host_part: &str = if let Some(bracket_end) = bind.find(']') {
+                // IPv6 form: `[host]:port` → strip brackets, host.
+                bind.get(1..bracket_end).unwrap_or(bind)
+            } else if let Some(colon) = bind.rfind(':') {
+                bind.get(..colon).unwrap_or(bind)
+            } else {
+                bind.as_str()
+            };
+            if !host_is_loopback(host_part) {
+                return true;
+            }
+        }
+        // UDS listeners (`l.unix.is_some()`) skip — they can't be
+        // reached from the network at all.
+    }
+    false
+}
+
+/// h2ck.me v1 T-9 — classify a bind host as loopback (safe) or
+/// non-loopback (needs the OWASP baseline). `127.0.0.1`, `::1`,
+/// and `localhost` count as loopback. Everything else (including
+/// `0.0.0.0` — which binds ALL interfaces, including public) is
+/// non-loopback.
+fn host_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    false
+}
+
+/// h2ck.me v1 T-9 — the four response headers OWASP recommends as
+/// baseline for a network-reachable HTTP service. Missing entries
+/// aren't fatal; the WARN just names each one so operators know
+/// what to add to `response_default_headers`.
+pub const OWASP_BASELINE_HEADERS: &[&str] = &[
+    "X-Content-Type-Options",
+    "X-Frame-Options",
+    "Strict-Transport-Security",
+    "Referrer-Policy",
+];
+
+/// h2ck.me v1 T-9 — subset of `OWASP_BASELINE_HEADERS` that is NOT
+/// present in `response_default_headers`. Case-insensitive on the
+/// header name because operators variously spell them
+/// `X-Frame-Options` / `x-frame-options` / `X-FRAME-OPTIONS`.
+/// Returns names in the canonical (baseline-list) casing.
+pub fn missing_owasp_baseline_headers(config: &AppConfig) -> Vec<&'static str> {
+    let present: std::collections::HashSet<String> = config
+        .response_default_headers
+        .keys()
+        .map(|k| k.to_ascii_lowercase())
+        .collect();
+    OWASP_BASELINE_HEADERS
+        .iter()
+        .copied()
+        .filter(|expected| !present.contains(&expected.to_ascii_lowercase()))
+        .collect()
+}
+
+/// h2ck.me v1 T-9 — the actual WARN emitter. Fires when there IS a
+/// non-loopback listener AND there IS at least one missing baseline
+/// header. Loopback-only deployments (dev laptops, test harnesses,
+/// sidecar-only listeners on UDS) never see the WARN.
+fn warn_on_missing_owasp_baseline_headers(config: &AppConfig) {
+    if !has_non_loopback_listener(config) {
+        return;
+    }
+    let missing = missing_owasp_baseline_headers(config);
+    if missing.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        missing = ?missing,
+        "config: response_default_headers is missing OWASP baseline entries on a \
+         network-reachable listener (h2ck.me v1 T-9). Add these keys to \
+         response_default_headers or set the listener bind to loopback. See \
+         book/src/ops/security-checklist.md for recommended values."
+    );
 }
 
 /// T-1 — emit WARNs for observations that need the raw YAML body

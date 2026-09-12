@@ -315,6 +315,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches DSL, missing CL reaches DSL, malformed CL doesn't
   trigger preflight, DSL never runs on preflight reject.
 
+### Added
+
+- **h2ck.me v1 T-9 — boot WARN when a non-loopback listener is
+  configured but `response_default_headers` doesn't include the
+  OWASP baseline (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Strict-Transport-Security`, `Referrer-Policy`).** The header
+  machinery existed and `book/src/ops/security-checklist.md`
+  documented the posture, but there was no boot-time signal — an
+  operator who exposed Ruuter on `0.0.0.0:8080` and forgot to add
+  the baseline never saw a warning.
+
+  Post-fix, `warn_on_stale_config_fields` now fires a WARN naming
+  each missing header and pointing at
+  `book/src/ops/security-checklist.md`. Scoped to
+  network-reachable listeners — loopback (`127.0.0.1`, `::1`,
+  `localhost`), UDS, and mixes thereof never trigger it.
+  Case-insensitive matching on header names.
+
+  Public helpers exposed for tooling / testing:
+  `has_non_loopback_listener(&AppConfig) -> bool`,
+  `missing_owasp_baseline_headers(&AppConfig) -> Vec<&'static str>`,
+  and the const `OWASP_BASELINE_HEADERS`.
+
+  Regression coverage: 18 test functions in
+  `tests/issue_T9_owasp_baseline_headers.rs`.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
