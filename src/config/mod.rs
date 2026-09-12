@@ -1017,6 +1017,23 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // header. Now WARN once at boot, naming each missing header, when
     // any listener is non-loopback.
     warn_on_missing_owasp_baseline_headers(config);
+
+    // h2ck.me v1 T-13 — CSRF `allowed_origins` empty means the
+    // Origin/Referer check is silently OFF for state-changing
+    // methods. Documented at `book/src/framework/csrf.md` but no
+    // boot-time signal, matching the same-shape pre-T-1 /
+    // stop_in_case_of_exception drift. Fire ONE WARN naming the
+    // field + doc so an operator that skipped the setup step
+    // sees it in the same log stream as "Loaded config from …".
+    if config.csrf.allowed_origins.is_empty() {
+        tracing::warn!(
+            "config: csrf.allowed_origins is empty — Origin/Referer CSRF check is \
+             BYPASSED for state-changing methods (h2ck.me v1 T-13). Add the origins \
+             your web app posts from, or intentionally accept the bypass (single- \
+             tenant admin surface behind a same-origin reverse proxy). See \
+             book/src/framework/csrf.md for the mechanism."
+        );
+    }
 }
 
 /// h2ck.me v1 T-9 — true when at least one configured listener
