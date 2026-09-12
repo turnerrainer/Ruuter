@@ -72,7 +72,11 @@ fn build_dispatcher(triggers: &[(&str, &str, &str, &str)]) -> (Arc<TriggerDispat
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
     let state = StateStore::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg));
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    );
     let d = Arc::new(TriggerDispatcher::new(
         loaded.triggers,
         state.clone(),
