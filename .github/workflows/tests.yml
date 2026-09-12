@@ -37,12 +37,22 @@ jobs:
           key: cargo-boa-${{ matrix.runner }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-boa-${{ matrix.runner }}-
+      # h2ck.me v1 T-6 — the CI dsl-test binary must include the
+      # RUUTER_HTTP_REWRITE rewriter (test-harness code path)
+      # because `dsl-test` scenarios use `http_rewrite:` to redirect
+      # outbound URLs to mockito. T-6 gated the rewriter behind
+      # `debug_assertions` OR `feature = "dev-http-rewrite"`; the
+      # release-mode `cargo test --release` build compiles it out
+      # unless the feature is enabled. Enabling `dev-http-rewrite`
+      # for CI keeps the production Docker image unaffected — that
+      # workflow lives in `publish.yml` and builds without the
+      # feature by default.
       - name: Build (Boa default)
-        run: cargo build --release --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
+        run: cargo build --release --features dev-http-rewrite --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint (errors fail the build)
         run: ./target/release/dsl-lint --dsl DSL --constants constants.ini
       - name: cargo test (Boa backend)
-        run: cargo test --release --no-fail-fast
+        run: cargo test --release --features dev-http-rewrite --no-fail-fast
       - name: dsl-test — every .test.yml scenario on Boa
         run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
       # Java Ruuter source-of-truth DSL corpus. Any parse error here
@@ -75,12 +85,16 @@ jobs:
           key: cargo-quickjs-${{ matrix.runner }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-quickjs-${{ matrix.runner }}-
+      # h2ck.me v1 T-6 — see the Boa job comment: enable
+      # dev-http-rewrite so the release-mode dsl-test binary keeps
+      # its `http_rewrite:` support. Production image in
+      # publish.yml still builds without the feature.
       - name: Build (QuickJS backend)
-        run: cargo build --release --no-default-features --features scripting-quickjs --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
+        run: cargo build --release --no-default-features --features scripting-quickjs,dev-http-rewrite --bin ruuter-on-rust --bin dsl-lint --bin dsl-test
       - name: dsl-lint
         run: ./target/release/dsl-lint --dsl DSL --constants constants.ini
       - name: cargo test (QuickJS backend)
-        run: cargo test --release --no-default-features --features scripting-quickjs --no-fail-fast
+        run: cargo test --release --no-default-features --features scripting-quickjs,dev-http-rewrite --no-fail-fast
       - name: dsl-test — every .test.yml scenario on QuickJS
         run: ./target/release/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
       - name: compat parse gate — Java Ruuter DSL corpus
