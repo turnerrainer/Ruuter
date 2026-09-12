@@ -1381,26 +1381,25 @@ impl HttpClient {
 ///
 /// Example: `RUUTER_HTTP_REWRITE=https://jsonplaceholder.typicode.com=http://127.0.0.1:9999`
 ///
-/// Off by default (env var absent → no rewriting). Kept out of the
-/// `HttpClient` struct so no test-mode flag propagates into production
-/// config surfaces.
-/// Env-var name for [`rewrite_url_for_tests`] and [`rewrite_env_is_active_in_release`].
+/// **h2ck.me v1 T-6 — Cargo-feature gated.** The rewriter is
+/// compiled ONLY when `debug_assertions` is on (i.e. debug / test
+/// builds) OR the `dev-http-rewrite` Cargo feature is explicitly
+/// enabled. Release binaries built without the feature contain no
+/// rewriter code at all — an operator who accidentally sets
+/// `RUUTER_HTTP_REWRITE` in prod gets no behaviour change (pre-T-6
+/// the same setting silently disabled SSRF for the rewritten
+/// origin, closed only by a boot WARN as a M2 mitigation).
+///
+/// Env-var name for [`rewrite_url_for_tests`] and
+/// [`rewrite_env_is_active_in_release`].
 pub const RUUTER_HTTP_REWRITE_ENV: &str = "RUUTER_HTTP_REWRITE";
 
-/// h2ck.me M2 — surface whether `RUUTER_HTTP_REWRITE` is set in a
-/// posture where it could silently disable SSRF checks. The rewrite
-/// runs BEFORE `check_ssrf`; in a debug build that's fine (tests
-/// legitimately need to redirect outbound URLs to a local mockito
-/// instance without punching a hole in the allowlist), but in a
-/// release build the same env var lets an operator misconfigure
-/// their way past every SSRF guard for the rewritten origin. Boot
-/// code calls this and emits a WARN so the misconfiguration shows
-/// up in the same log stream as "Loaded config from …".
-///
-/// Returns `true` only when the env var is set to a non-empty value
-/// AND the current build has `debug_assertions` disabled. Test
-/// binaries always run with `debug_assertions` on, so this returns
-/// `false` in the framework's own test suite regardless of value.
+/// h2ck.me M2 / v1 T-6 — surface whether `RUUTER_HTTP_REWRITE` is
+/// set in a posture where it could silently disable SSRF checks.
+/// Feature-gated behind `dev-http-rewrite` in release builds; the
+/// non-feature branch always returns `false`, so the release WARN
+/// site short-circuits to a no-op.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 pub fn rewrite_env_is_active_in_release() -> bool {
     if cfg!(debug_assertions) {
         return false;
@@ -1411,6 +1410,19 @@ pub fn rewrite_env_is_active_in_release() -> bool {
         .unwrap_or(false)
 }
 
+/// h2ck.me v1 T-6 — release build without the `dev-http-rewrite`
+/// feature: the rewriter code path is not compiled in, so the WARN
+/// helper always returns `false`. Keeping the public signature
+/// stable lets `main.rs` call it unconditionally.
+#[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
+pub fn rewrite_env_is_active_in_release() -> bool {
+    false
+}
+
+/// h2ck.me v1 T-6 — real rewrite implementation. Only compiled in
+/// debug builds or when the `dev-http-rewrite` feature is on. See
+/// `RUUTER_HTTP_REWRITE_ENV` for the env-var syntax.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 fn rewrite_url_for_tests(url: &str) -> Option<String> {
     let raw = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok()?;
     if raw.is_empty() {
@@ -1427,6 +1439,16 @@ fn rewrite_url_for_tests(url: &str) -> Option<String> {
             return Some(format!("{}{}", to, rest));
         }
     }
+    None
+}
+
+/// h2ck.me v1 T-6 — stub for release builds without the
+/// `dev-http-rewrite` feature. `_url` is intentionally ignored;
+/// returning `None` unconditionally means the request path uses
+/// the URL as-provided, and no env-var-driven bypass can affect
+/// SSRF checks.
+#[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
+fn rewrite_url_for_tests(_url: &str) -> Option<String> {
     None
 }
 
