@@ -31,7 +31,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub max_step_recursions: Option<u32>,
 
-    #[serde(default)]
+    /// T-1 — outbound response-body cap, in bytes, per `http.*` step.
+    /// Absent-in-YAML defaults to `Some(16 * 1024 * 1024)` (matches
+    /// `AppConfig::default()`); explicit `null` opts into uncapped
+    /// reads and fires a boot WARN naming the field. Before the fix,
+    /// `#[serde(default)]` on `Option<usize>` yielded `None` — every
+    /// operator whose ruuter.yaml omitted the field silently ran
+    /// uncapped, so a misbehaving upstream could OOM the process by
+    /// returning a very large body.
+    #[serde(default = "default_http_response_size_limit")]
     pub http_response_size_limit: Option<usize>,
 
     #[serde(default = "default_http_request_timeout")]
@@ -270,6 +278,17 @@ fn default_response_wrapper() -> bool {
 /// on every boot for operators who never touched the field.
 fn default_stop_in_case_of_exception() -> bool {
     true
+}
+
+/// T-1 — 16 MiB cap for outbound `http.*` response bodies. Matches
+/// `AppConfig::default()` so `serde(default = ...)` deserialisation
+/// (used when an operator's ruuter.yaml exists but omits the key)
+/// produces the same value as the no-config-file fallback path.
+/// Explicit `null` in YAML still deserialises to `None` — that's the
+/// operator opt-in for uncapped, and `warn_on_raw_config_notes`
+/// surfaces it as a WARN at boot.
+fn default_http_response_size_limit() -> Option<usize> {
+    Some(16 * 1024 * 1024)
 }
 
 impl Default for ResponseConfig {
@@ -756,6 +775,42 @@ fn config_search_paths() -> Vec<PathBuf> {
     out
 }
 
+/// T-1 — observations that can only be made against the raw YAML,
+/// not the parsed `AppConfig` (which cannot distinguish
+/// "field-absent" from "field-explicitly-null"). Populated by
+/// `AppConfig::load_or_default_with_notes` and consumed by
+/// `warn_on_raw_config_notes` after the tracing subscriber is up.
+#[derive(Debug, Default, Clone)]
+pub struct RawConfigNotes {
+    /// True when the loaded ruuter.yaml contains an explicit
+    /// `http_response_size_limit: null` — an operator opt-in to
+    /// uncapped outbound response body reads. WARNed at boot so a
+    /// mistake (typo, copy-paste of a Java template that used null
+    /// as a sentinel) doesn't silently disable the cap.
+    pub http_response_size_limit_explicit_null: bool,
+}
+
+/// T-1 — scan a raw ruuter.yaml body for observations that the typed
+/// `AppConfig` can't preserve after serde deserialisation. Public so
+/// tests can exercise the detection independently of file I/O.
+pub fn raw_config_notes(body: &str) -> RawConfigNotes {
+    let mut notes = RawConfigNotes::default();
+    let Ok(root) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(body) else {
+        return notes;
+    };
+    let Some(map) = root.as_mapping() else {
+        return notes;
+    };
+    if let Some(v) = map.get(serde_yaml_ng::Value::String(
+        "http_response_size_limit".to_string(),
+    )) {
+        if v.is_null() {
+            notes.http_response_size_limit_explicit_null = true;
+        }
+    }
+    notes
+}
+
 impl AppConfig {
     /// Resolve, load, and return the operator's AppConfig. Falls back to
     /// `AppConfig::default()` when no config file is found on any of the
@@ -764,7 +819,18 @@ impl AppConfig {
     /// Returns a tuple `(config, source)` — `source` is `Some(path)` when
     /// a file was loaded, `None` when defaults were used. Caller logs the
     /// choice at INFO so ops can see which config took effect.
+    ///
+    /// Prefer `load_or_default_with_notes` in `main.rs` so raw-YAML
+    /// observations (T-1: explicit-null cap) reach
+    /// `warn_on_raw_config_notes`.
     pub fn load_or_default() -> crate::Result<(Self, Option<PathBuf>)> {
+        Self::load_or_default_with_notes().map(|(c, p, _)| (c, p))
+    }
+
+    /// T-1 — same as `load_or_default` but also returns the raw-YAML
+    /// observation struct so the boot path can emit
+    /// `warn_on_raw_config_notes` after the tracing subscriber is up.
+    pub fn load_or_default_with_notes() -> crate::Result<(Self, Option<PathBuf>, RawConfigNotes)> {
         for path in config_search_paths() {
             if path.exists() {
                 let body = std::fs::read_to_string(&path).map_err(|e| {
@@ -781,10 +847,11 @@ impl AppConfig {
                         e
                     ))
                 })?;
-                return Ok((cfg, Some(path)));
+                let notes = raw_config_notes(&body);
+                return Ok((cfg, Some(path), notes));
             }
         }
-        Ok((Self::default(), None))
+        Ok((Self::default(), None, RawConfigNotes::default()))
     }
 }
 
@@ -812,6 +879,12 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // book/src/logging/) all four are wired end-to-end.
     // No WARN emitted regardless of value.
 
+    // T-1 — the numeric-vs-none WARN lives in
+    // `warn_on_raw_config_notes` because "operator wrote null" is
+    // observable only against the raw YAML body, not the parsed
+    // `AppConfig` (which cannot distinguish an absent field from a
+    // field explicitly set to null).
+
     // allowed_filetypes vs processed_filetypes — pre-fix Rust only
     // reads processed_filetypes. Warn when they differ so operators
     // know allowed_filetypes was silently the same list.
@@ -823,6 +896,23 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
              the loader only consults processed_filetypes. allowed_filetypes is a \
              Java-parity noun that has no gating effect. Fold the two into \
              processed_filetypes or accept that allowed_filetypes is inert."
+        );
+    }
+}
+
+/// T-1 — emit WARNs for observations that need the raw YAML body
+/// (see `RawConfigNotes`). Called from `main.rs` right after
+/// `warn_on_stale_config_fields`, in the same "post-tracing-init,
+/// pre-listener-startup" window.
+pub fn warn_on_raw_config_notes(notes: &RawConfigNotes) {
+    if notes.http_response_size_limit_explicit_null {
+        tracing::warn!(
+            "config: http_response_size_limit=null explicitly disables the outbound \
+             response body cap. Every http.* step will read the full upstream body \
+             into memory, so a misbehaving upstream can OOM the process. Intended \
+             for internal-only deployments where the trade-off is understood. \
+             Set a numeric cap in bytes (default 16777216 = 16 MiB) unless this \
+             opt-in is deliberate."
         );
     }
 }

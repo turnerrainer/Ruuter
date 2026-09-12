@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **h2ck.me v1 T-1 — `http_response_size_limit` default resolves
+  to `None` on operator YAML.** Pre-fix,
+  `#[serde(default)]` on `pub http_response_size_limit:
+  Option<usize>` fell back to `Default::default()` → `None`, so any
+  operator whose `ruuter.yaml` omitted the field silently ran with
+  the outbound response-body cap disabled. `HttpClient::request`
+  then read via `response.bytes().await`, which allocates the whole
+  upstream body — a misbehaving Resql/TIM sidecar (or attacker-
+  controlled upstream, when the deployment allowed one) could OOM
+  the process by returning a very large body. `AppConfig::default()`
+  did carry `Some(16 * 1024 * 1024)`, but only the "no ruuter.yaml
+  found" boot path used it; the operator-YAML path did not.
+
+  Post-fix, `#[serde(default = "default_http_response_size_limit")]`
+  binds an absent field to `Some(16 * 1024 * 1024)`. Explicit
+  `http_response_size_limit: null` still deserialises to `None` so
+  the uncapped opt-in survives for internal-only deployments; a
+  new `warn_on_raw_config_notes` boot WARN names the field when
+  that opt-in is exercised, so a stray null (typo, copy-paste of a
+  Java template that used null as a sentinel) surfaces at boot in
+  the same log stream as "Loaded config from …". Detection uses a
+  raw-YAML scan (`raw_config_notes`) because the parsed
+  `AppConfig` cannot distinguish "field absent" from "field
+  explicitly null" — both deserialise identically once the default
+  fn runs. `AppConfig::load_or_default_with_notes` returns the
+  observation struct alongside the parsed config; the pre-existing
+  `AppConfig::load_or_default` delegates so no external caller
+  broke.
+
+  Regression coverage: 20 test functions in
+  `tests/issue_T1_http_response_size_limit_default.rs` pin the
+  full matrix — absent, empty document, numeric, large numeric,
+  zero, explicit null, YAML `~` shorthand, malformed YAML, and
+  subscriber-driven tests that capture the actual `tracing::warn!`
+  output on each of those inputs.
+
 - **h2ck.me v1 T-2 — UDS outbound reads response body unbounded
   regardless of `http_response_size_limit`.** Pre-fix, both UDS
   transports (`http_client/uds.rs::request_over_unix` and
