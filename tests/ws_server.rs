@@ -46,7 +46,12 @@ fn build_router(files: &[(&str, &str)]) -> DslRouter {
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
     let ws_registry = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws_registry.clone());
     DslRouter::new(
         loaded.http,
         loaded.guards,

@@ -36,9 +36,13 @@ fn build_router(dsl_root: &Path) -> Arc<DslRouter> {
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let state = StateStore::new();
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     Arc::new(DslRouter::from_shared(
         http, guards, config, state, ws, engine,
     ))

@@ -76,13 +76,17 @@ fn build_with_cfg(files: &[(&str, &str)], mut cfg: AppConfig) -> DslRouter {
     let ws = WsRegistry::new();
     let shared_http = Arc::new(ArcSwap::from_pointee(loaded.http));
     let shared_guards = Arc::new(ArcSwap::from_pointee(loaded.guards));
-    let engine = StepEngine::new(HttpClient::new(&cfg))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(shared_http.clone())
-        // h2ck.me H1 — mirror main.rs's wiring so the template step
-        // enforces the guards attached to the target DSL. Without this
-        // the test would silently reproduce the pre-fix bypass.
-        .with_guards(shared_guards.clone(), cfg.guards.mode);
+    // h2ck.me H1 + v1 T-4 — guards are a required constructor arg
+    // (was `.with_guards` builder pre-T-4). Passing the real shared
+    // guards handle mirrors main.rs wiring so the template step
+    // enforces the guards attached to the target DSL.
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        shared_guards.clone(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(shared_http.clone());
     DslRouter::from_shared(
         shared_http,
         shared_guards,

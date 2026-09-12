@@ -56,7 +56,11 @@ impl StepExecutor for StateStepExecutor {
                 let key = self.evaluate_string(key, context)?;
                 let evaluated = self.script_engine.evaluate(value, context)?;
                 let preview = preview_body_for_log(Some(&evaluated), &self.logging);
-                store.set(project, &key, evaluated);
+                // h2ck.me v1 T-5 — the cap check runs here. A
+                // project that has already reached
+                // `state.max_entries_per_project` fails the whole
+                // step cleanly instead of silently growing the map.
+                store.set(project, &key, evaluated)?;
                 ("set", key, None, preview)
             }
             StateOp::Delete { key } => {

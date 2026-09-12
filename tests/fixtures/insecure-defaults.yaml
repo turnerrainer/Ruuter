@@ -1,0 +1,4 @@
+port: 8080
+# This tickles the WARN in warn_on_stale_config_fields:
+# stop_in_case_of_exception=false is un-honoured.
+stop_in_case_of_exception: false
