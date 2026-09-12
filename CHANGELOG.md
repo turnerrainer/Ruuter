@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **h2ck.me v1 T-11 — new `ruuter-doctor` binary for pre-boot
+  config sanity checking.** Loads ruuter.yaml + env vars, runs
+  the boot-path WARN registry, reports a CI-actionable exit code:
+  0 clean, 1 warning(s) would fire, 2 unparseable, 3 bad args.
+  Captured WARNs echo to stdout for grep-friendly CI. Ships in
+  the container alongside `dsl-lint` / `dsl-test`.
+
+  New public helper `load_or_default_via_env_or_path(Option<&Path>)`
+  in `ruuter_on_rust::config`.
+
+  Regression coverage: 6 test functions in
+  `tests/issue_T11_ruuter_doctor.rs` (subprocess-driven), plus
+  test fixtures at `tests/fixtures/{clean-defaults,
+  insecure-defaults, unparseable}.yaml`.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
