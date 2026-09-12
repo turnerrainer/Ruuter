@@ -491,11 +491,32 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Reque
     let start = std::time::Instant::now();
     let method_str = request.method().as_str().to_string();
     let uri_path = request.uri().path().to_string();
-    let project_for_span = uri_path
+    // h2ck.me v1 T-16 — if the URL's first path segment doesn't
+    // match a known project, don't echo it as `dsl.project` in
+    // the trace span or access log. Pre-fix, an attacker probing
+    // `POST /candidate-name/foo` for every candidate name saw
+    // their guess reflected back in the logs — a mild
+    // enumeration channel for operators who consumed the
+    // structured logs.
+    //
+    // Post-fix, unknown projects surface as `<unknown>` in the
+    // span/log field. The full URL path is still available (as
+    // `http.route`) so debugging isn't impaired; what changes is
+    // the SEMANTIC `project` field no longer carries
+    // attacker-controlled bytes.
+    let raw_first_segment = uri_path
         .split('/')
         .find(|s| !s.is_empty())
         .unwrap_or("")
         .to_string();
+    let project_for_span = {
+        let snapshot = router.dsls.load();
+        if snapshot.contains_key(&raw_first_segment) {
+            raw_first_segment.clone()
+        } else {
+            "<unknown>".to_string()
+        }
+    };
     // Adopt the inbound traceparent verbatim if present, else
     // generate one now so every request-scoped log line carries a
     // stable `trace_id` (and matches the `X-Trace-Id` returned to
