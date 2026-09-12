@@ -5,6 +5,12 @@ on this repository. Human contributors: start with `README.md`, then
 skim this file for the release gate and the v0.9.11-rc breaking-change
 surface.
 
+Agents shipping a breaking change: read the [Handling a breaking
+change](#handling-a-breaking-change-mandatory-for-coding-agents)
+section BEFORE opening a PR. Version bumps and releases are
+NOT yours to approve — a user confirmation of what version WOULD
+be correct is not the same as "cut it."
+
 ## What this repo is
 
 Rust re-implementation of [buerokratt/Ruuter](https://github.com/buerokratt/Ruuter)
@@ -50,6 +56,179 @@ push, PR, and a daily 06:00 UTC cron. Exceptions live in
 `.cargo/audit.toml` — currently RUSTSEC-2024-0384 (`instant`) and
 RUSTSEC-2024-0436 (`paste`), both transitive-only, review date
 2026-10-01.
+
+## Handling a breaking change (mandatory for coding agents)
+
+Something is a **breaking change** if a downstream caller must
+adapt to it. On this repo that means one or more of:
+
+- **Rust public-API surface.** Signature change (added positional
+  arg, changed return type), removed / renamed pub item, moved
+  pub item between modules, changed trait bounds. See T-4
+  (`StepEngine::new` gained positional args) and T-5
+  (`StateStore::set` → `Result<()>`) in `[CHANGELOG.md]` for the
+  reference shape.
+- **DSL runtime semantics.** Default value flip that alters
+  behaviour, error surface widened (was OK, now Err), value shape
+  change, YAML-key rename, response body / header shape. See T-10
+  (multipart map-key: filename → field name) and issue #98
+  (Content-Type-driven body decode).
+- **HTTP wire behaviour.** Status code, response body shape,
+  response header semantics. Adding a header is non-breaking;
+  removing / renaming / changing meaning is breaking. See T-15
+  (wrong-method-on-known-path: 404 → 405 + `Allow:`).
+- **Config surface.** Renamed field, removed field, or changed
+  default that flips runtime behaviour. See T-1
+  (`http_response_size_limit` absent-YAML default flip).
+- **Env-var behaviour.** A variable that was no-op is now
+  behaviourally meaningful, or vice versa. See T-6
+  (`RUUTER_HTTP_REWRITE` compiled out of release without
+  `dev-http-rewrite` feature).
+
+Non-breaking (still document, but no version-bump urgency): new
+optional config field with a safe default, new boot WARN, new
+pub fn/struct, bug fix restoring behaviour that was documented
+as intended.
+
+### What to do (in order)
+
+1. **Classify against semver.**
+   - **Patch RC** (`0.9.16-rc` → `0.9.17-rc`) — bug fix that
+     restores documented-as-intended behaviour with no API /
+     config / wire change.
+   - **Minor RC** (`0.9.16-rc` → `0.10.0-rc`) — any Rust API
+     signature change, any documented-behaviour change, any new
+     feature. This is the common case for anything caller-visible.
+   - **Major** — reserved for after v1.0.0. Do not propose.
+   State the classification in the PR body.
+
+2. **Write the CHANGELOG entry** under the top-of-file
+   `[Unreleased]` heading. Use the appropriate `###` section:
+   - `### Fixed` — bug fix restoring documented behaviour.
+   - `### Changed (breaking)` — Rust public-API breaking change.
+   - `### Changed (behavior)` — client-facing behaviour change
+     (DSL, HTTP wire, env-var).
+   - `### Added` — new feature (usually the trigger for a
+     minor bump).
+
+   Body MUST include: pre-fix behaviour, post-fix behaviour, a
+   migration snippet with a before/after diff block, and a
+   pointer to the regression-test file. The v0.9.15-rc /
+   v0.9.16-rc entries are the tone reference — verbose,
+   name every seam, cite issue and PR numbers.
+
+3. **Add a regression-test file.** One dedicated
+   `tests/issue_XXX_short_name.rs` (or `tests/issue_TN_...`)
+   per fix. Cover the happy path AND every input that would have
+   caught the pre-fix bug ("write tests that try to BREAK the
+   fix"). See the `[Unreleased]` batch (T-1..T-16) for shapes:
+   subscriber-captured WARNs, subprocess-spawned binaries, in-
+   process axum + mockito, hand-rolled UDS listeners.
+
+4. **Update every internal caller in the SAME PR.** For a Rust
+   API change, that means every internal test fixture too. T-4
+   updated ~50 test files in one PR — don't leave "will fix in
+   follow-up." Post-merge cleanup PRs are a smell.
+
+5. **PR title + body**
+   - `fix(#N): ...` for bug fixes, `feat(#N): ...` for features,
+     `chore(...)` for internal / infrastructure.
+   - Add ` (BREAKING)` suffix on titles when the change is
+     Rust-API-breaking.
+   - PR body includes: the migration snippet, the semver
+     classification, and the release-gate checklist.
+
+6. **Merge conflicts on sequential PRs.** `CHANGELOG.md` and
+   often `src/config/mod.rs`, `src/router/mod.rs`,
+   `src/http_client/mod.rs`, `src/main.rs` will conflict when
+   several PRs stack on `dev`. Force-push is blocked, so use
+   `git merge origin/dev` on the feature branch (not rebase):
+   ```bash
+   git checkout fix/N && git merge origin/dev --no-edit
+   # CHANGELOG.md: keep both entries side-by-side, origin/dev
+   # first (older merges), HEAD second (newest). If both add
+   # unrelated blocks inside the same function, keep both.
+   # A `resolve_changelog.py` helper lives in prior release
+   # branches — one-liner regex replacement of the conflict
+   # markers.
+   cargo build   # smoke check
+   git commit --no-edit && git push
+   ```
+
+### Version bumps and releases: NEVER approve these yourself
+
+The user reserves release authority. A confirmation of what
+version WOULD be correct ("So v0.10.0-rc would be correct?") is
+validation of the semver reasoning — it is NOT authorization to
+execute the bump. Wait for an explicit imperative: "bump it",
+"cut the release", "tag v0.X.Y", "publish now".
+
+**Do not touch, until the user says "cut it":**
+
+- `Cargo.toml` version field.
+- `Cargo.lock` package pin for `ruuter-on-rust`.
+- `README.md` version badge + `> Upgrading from vX-rc?` callout
+  + docker pull recipes (there are 4 recipes in the README).
+- `book/src/introduction.md` version badge.
+- `CHANGELOG.md` release header (do NOT rename `[Unreleased]`
+  → `[X.Y.Z-rc] - YYYY-MM-DD`).
+- `CLAUDE.md` "verified YYYY-MM-DD on `<sha>`" line and the
+  test-count baseline row — those are release-carrying doc.
+- `CLAUDE.md` "Behaviour-change surface as of vX-rc" section —
+  add a new one only at release cut.
+- Git tags.
+- `.github/workflows/publish.yml` (dispatch via `gh workflow
+  run publish.yml` is release authority).
+
+**When the user says "cut it":** bump every file above in
+lockstep. Miss one and the container tag / docs / crate
+metadata will lie about the version. RC tags on this repo use
+bare `-rc` (not `-rc.N`); see
+`memory/project_rc_version_convention.md` if that memory is
+loaded.
+
+### Verifying the fix before opening the PR
+
+Run the full release gate at the top of this file. Every check
+must pass on your branch:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --no-default-features --features scripting-quickjs -- -D warnings
+cargo test --no-fail-fast
+cargo audit --deny warnings -n     # -n skips the flaky remote fetch
+$CARGO_TARGET_DIR/debug/dsl-lint --dsl DSL/samples --constants constants.ini
+$CARGO_TARGET_DIR/debug/dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
+( cd book && mdbook build )
+```
+
+If `dsl-test` fails on `http_rewrite:` scenarios in release
+mode, you're missing `--features dev-http-rewrite` — see T-6.
+
+If a Rust API change breaks other feature branches on merge,
+the fix belongs in the LAST PR before that batch merges, not
+in a follow-up. See `chore/post-merge-t4-signature-updates` for
+the recovery shape if it slips.
+
+### Worked examples in the release history
+
+| Change | Kind | Where to read |
+|---|---|---|
+| `StepEngine::new` gained `guards` + `guards_mode` args | Rust API | `[Unreleased]` T-4; PR #104 |
+| `StateStore::set`/`update` → `Result` | Rust API | `[Unreleased]` T-5; PR #105 |
+| Multipart map-key: filename → field name | DSL semantic | `[Unreleased]` T-10; PR #110 |
+| Wrong method on known path: 404 → 405 + `Allow:` | HTTP wire | `[Unreleased]` T-15; PR #115 |
+| `RUUTER_HTTP_REWRITE` behind `dev-http-rewrite` feature | Env-var + build | `[Unreleased]` T-6; PR #106 |
+| `http_response_size_limit` absent-YAML default | Config surface | `[Unreleased]` T-1; PR #101 |
+| `stop_in_case_of_exception` absent-YAML default | Config surface | § 0.9.15-rc; PR #95 |
+| `http.*` transport failures now DSL-catchable | DSL semantic | § 0.9.15-rc; PR #94 |
+| `template:` step runs target-DSL guards | HTTP + DSL wire | § 0.9.11-rc; commit `ecbfe1b` |
+| `#98` Content-Type-driven body decode | DSL semantic | § 0.9.16-rc; PR #99 |
+
+For a new breaking change, copy the shape of the closest analog
+above — same CHANGELOG structure, same test-file naming, same
+PR-body template.
 
 ## Behaviour-change surface as of v0.9.15-rc (issues #89 / #90 / #91 / #92)
 
