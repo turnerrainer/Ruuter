@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (behavior)
+
+- **h2ck.me v1 T-15 — wrong method on a KNOWN path now returns
+  `405 Method Not Allowed` with an `Allow:` header (RFC 7231
+  §7.4.1).** Pre-fix, `PUT /svc/things` when only `GET /svc/things`
+  was routed returned `404`. Post-fix: `405` with
+  `Allow: GET, POST, PUT` (sorted alphabetically) + body
+  `{"error":"Method Not Allowed","allow":["GET","POST","PUT"]}`.
+
+  Paths that don't resolve for ANY method continue to return
+  `404`. Unknown projects still `404`. Path-param resolvers
+  work: `PATCH /svc/things/42` when only `GET /svc/things.yml`
+  matches via suffix-stripping → `405 + Allow: GET`.
+
+  Also fixed a pre-existing bug: the Err-branch of the response
+  builder dropped `extra_headers` on the floor. Now applied on
+  every branch.
+
+  Public: new `DslRouter::methods_allowed_for_path(project, path)
+  -> Vec<String>` for tooling.
+
+  Regression coverage: 6 test functions in
+  `tests/issue_T15_405_allow_header.rs`. Two pre-existing
+  `DSL-tests/framework/{fallback-404, method-allowlist}.test.yml`
+  scenarios updated to the new 405 contract.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed

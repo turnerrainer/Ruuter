@@ -169,6 +169,43 @@ impl DslRouter {
         }
     }
 
+    /// h2ck.me v1 T-15 — return the sorted list of HTTP methods
+    /// that DO resolve for `(project, path)`. Used to produce the
+    /// `Allow:` header on a 405 Method Not Allowed response when
+    /// the requested method doesn't match but the path exists for
+    /// some other method. RFC 7231 §7.4.1: 405 must include Allow.
+    ///
+    /// Empty return = the path is not routed at all → 404, not 405.
+    pub fn methods_allowed_for_path(&self, project: &str, path: &str) -> Vec<String> {
+        let snapshot = self.dsls.load();
+        let Some(by_method) = snapshot.get(project) else {
+            return Vec::new();
+        };
+        let mut allowed: Vec<String> = by_method
+            .keys()
+            .filter(|method| {
+                // Try each method's resolver against the path. Same
+                // stripping-suffix loop as `resolve_dsl_with_path_params`
+                // but only checks existence — no Dsl clone.
+                let m: &str = method.as_str();
+                let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+                while !segments.is_empty() {
+                    let candidate = format!("{}/{}", m, segments.join("/"));
+                    if let Some(map) = by_method.get(m) {
+                        if map.contains_key(&candidate) {
+                            return true;
+                        }
+                    }
+                    segments.pop();
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        allowed.sort();
+        allowed
+    }
+
     /// Return the list of guard DSLs that protect `dsl_key`, ordered
     /// outermost-first. A guard at key `<METHOD>/path/<stem>` applies
     /// to every DSL whose key starts with `<METHOD>/path/<stem>/`.
@@ -920,12 +957,34 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                 raw_string,
             )
         }
-        Err(RuuterError::FileNotFound(_)) => (
-            StatusCode::NOT_FOUND,
-            json!({"error": "Not Found"}),
-            HashMap::new(),
-            None,
-        ),
+        Err(RuuterError::FileNotFound(_)) => {
+            // h2ck.me v1 T-15 — if the path exists for at least one
+            // OTHER method, return 405 with an `Allow:` header
+            // listing the registered methods (RFC 7231 §7.4.1).
+            // 404 stays reserved for "no such path at all".
+            let allowed = router.methods_allowed_for_path(&project, &endpoint_path);
+            if allowed.is_empty() {
+                (
+                    StatusCode::NOT_FOUND,
+                    json!({"error": "Not Found"}),
+                    HashMap::new(),
+                    None,
+                )
+            } else {
+                let allow_header = allowed.join(", ");
+                let mut hdrs = HashMap::new();
+                hdrs.insert("Allow".to_string(), allow_header.clone());
+                (
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    json!({
+                        "error": "Method Not Allowed",
+                        "allow": allowed,
+                    }),
+                    hdrs,
+                    None,
+                )
+            }
+        }
         Err(RuuterError::BadRequest(msg)) => (
             StatusCode::BAD_REQUEST,
             json!({ "error": msg }),
@@ -1008,7 +1067,25 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
             }
             resp
         }
-        (Err(_), _) => (status_code, Json(body_value)).into_response(),
+        (Err(_), _) => {
+            // h2ck.me v1 T-15 — error branches produce `extra_headers`
+            // too (405 carries `Allow: <methods>`). Apply them here
+            // so the response goes out with the same header shape
+            // as the Ok branches. Pre-T-15 this branch dropped
+            // extra_headers on the floor, so the 405 status code
+            // shipped without the Allow header even after the
+            // FileNotFound handler had built one.
+            let mut resp = (status_code, Json(body_value)).into_response();
+            for (k, v) in extra_headers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::try_from(k.as_str()),
+                    HeaderValue::try_from(v.as_str()),
+                ) {
+                    resp.headers_mut().insert(name, value);
+                }
+            }
+            resp
+        }
     };
 
     // Echo traceparent + X-Trace-Id so ops can correlate a client-side
