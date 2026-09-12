@@ -1,4 +1,15 @@
 # Demonstration of guard functionality
+
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Demonstration of guard functionality"
+  additive: true
+
 respond:
   return:
     message: "Guards are DSL files with .guard.yml extension"

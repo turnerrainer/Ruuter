@@ -3,6 +3,16 @@
 # are gathered under `into:` in the parent context. `max_items:` caps
 # the loop; a `return:` inside the body short-circuits the outer DSL.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Iterate step. Runs `do:` once per element of `over:`, binding the"
+  additive: true
+
 setup:
   assign:
     orders: "${incoming.body.orders || []}"

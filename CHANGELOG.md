@@ -7,6 +7,425 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **h2ck.me v1 T-1 — `http_response_size_limit` default resolves
+  to `None` on operator YAML.** Pre-fix,
+  `#[serde(default)]` on `pub http_response_size_limit:
+  Option<usize>` fell back to `Default::default()` → `None`, so any
+  operator whose `ruuter.yaml` omitted the field silently ran with
+  the outbound response-body cap disabled. `HttpClient::request`
+  then read via `response.bytes().await`, which allocates the whole
+  upstream body — a misbehaving Resql/TIM sidecar (or attacker-
+  controlled upstream, when the deployment allowed one) could OOM
+  the process by returning a very large body. `AppConfig::default()`
+  did carry `Some(16 * 1024 * 1024)`, but only the "no ruuter.yaml
+  found" boot path used it; the operator-YAML path did not.
+
+  Post-fix, `#[serde(default = "default_http_response_size_limit")]`
+  binds an absent field to `Some(16 * 1024 * 1024)`. Explicit
+  `http_response_size_limit: null` still deserialises to `None` so
+  the uncapped opt-in survives for internal-only deployments; a
+  new `warn_on_raw_config_notes` boot WARN names the field when
+  that opt-in is exercised, so a stray null (typo, copy-paste of a
+  Java template that used null as a sentinel) surfaces at boot in
+  the same log stream as "Loaded config from …". Detection uses a
+  raw-YAML scan (`raw_config_notes`) because the parsed
+  `AppConfig` cannot distinguish "field absent" from "field
+  explicitly null" — both deserialise identically once the default
+  fn runs. `AppConfig::load_or_default_with_notes` returns the
+  observation struct alongside the parsed config; the pre-existing
+  `AppConfig::load_or_default` delegates so no external caller
+  broke.
+
+  Regression coverage: 20 test functions in
+  `tests/issue_T1_http_response_size_limit_default.rs` pin the
+  full matrix — absent, empty document, numeric, large numeric,
+  zero, explicit null, YAML `~` shorthand, malformed YAML, and
+  subscriber-driven tests that capture the actual `tracing::warn!`
+  output on each of those inputs.
+
+- **h2ck.me v1 T-2 — UDS outbound reads response body unbounded
+  regardless of `http_response_size_limit`.** Pre-fix, both UDS
+  transports (`http_client/uds.rs::request_over_unix` and
+  `http_client/uds_pool.rs::request_over_unix_pooled`) called
+  `.into_body().collect().await.to_bytes()` with no cap; a POST-HOC
+  size check in `HttpClient::enforce_status_and_size` then rejected
+  based on the already-buffered `HttpResponse`. Result: a
+  misbehaving trusted sidecar (Resql/TIM bug — not compromise) could
+  OOM Ruuter by returning a very large body, and T-1's config-default
+  fix did not close the seam because the check ran after the read.
+
+  Post-fix, both UDS paths now:
+    1. Preflight `Content-Length` against `response_size_limit` and
+       reject with `RuuterError::HttpRequest("uds upstream declared
+       body N bytes exceeds http_response_size_limit M")` before
+       reading the body. Skips the buffering entirely for
+       oversized-declared responses. Mirrors the TCP path at
+       `http_client/mod.rs`.
+    2. Wrap `res.into_body()` in `http_body_util::Limited::new(body,
+       cap)` before `.collect()`. Chunked / unknown-length responses
+       that would previously buffer past the cap now abort
+       mid-stream at the cap boundary and return
+       `RuuterError::HttpRequest("uds upstream response body
+       exceeded http_response_size_limit M")`.
+    3. The post-hoc `enforce_status_and_size` in `HttpClient` is
+       deleted — dead code once the cap is enforced upstream.
+
+  Public-API surface: `request_over_unix` and
+  `request_over_unix_pooled` gain a trailing `response_size_limit:
+  Option<usize>` argument (matches how the TCP path threads the cap
+  through `HttpClient::response_size_limit`). New test-only builder
+  `HttpClient::with_response_size_limit(Option<usize>)`. Neither is
+  a breaking change for internal callers; external callers of the
+  pub UDS transports (none known) need to pass a cap or `None`.
+
+  Regression coverage: 12 test functions in
+  `tests/issue_T2_uds_body_cap.rs` — Content-Length preflight,
+  mid-stream Limited abort on chunked bodies (no Content-Length),
+  `None` cap opt-out reads full body, cap-equal-to-body edge (off-
+  by-one), cap = 0 rejects any non-empty body, JSON-decode path
+  survives Limited wrap (#98 interaction), pooled + non-pooled
+  parity, alias-map + `unix://` routing parity.
+
+- **h2ck.me v1 T-3 — DNS-rebinding TOCTOU in
+  `HttpClient::check_ssrf`.** Pre-fix, `check_ssrf` resolved the URL
+  host via `tokio::net::lookup_host` and rejected the request if any
+  candidate address was private / link-local, then handed the URL
+  back to reqwest. Reqwest performed a FRESH resolve at connect
+  time; an attacker controlling the DNS record could flip the answer
+  between check and connect (`public → check pass → connect fires
+  → private`), completing a metadata-SSRF that the F2 fix was
+  designed to block.
+
+  Post-fix, `check_ssrf` returns a new internal `SsrfResolution`
+  enum: `NoPinning` for IP-literal URLs / allowlist-approved hosts /
+  `block_private_networks=false`, and `Pinned { host, addrs }` for
+  the hostname-with-block-active path. The caller
+  (`build_pinned_client`) constructs a per-request `reqwest::Client`
+  via `ClientBuilder::resolve(host, addr)` for every addr that
+  passed the check, so the connect is bound to those exact
+  addresses. A fresh DNS answer at connect time cannot flip the
+  target. Multi-A-record failover still works because all resolved
+  addrs get pinned. The shared `HttpClient::client` pool is
+  preserved for the no-pinning path — pinning applies only when
+  DNS actually ran.
+
+  No breaking changes for DSL authors. Config surface unchanged —
+  the pinning is driven off the pre-existing
+  `internal_requests.block_private_networks` flag.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T3_dns_rebinding_pinning.rs` — the `.resolve()`
+  primitive really pins the connect (proves the reqwest mechanism),
+  multi-addr disambiguation by port, IP-literal URL skips pinning,
+  `block_private_networks=false` skips pinning, allowlist-approved
+  host skips pinning, hostname resolving to a private IP still gets
+  rejected (F2 regression pin), rejection message names the
+  resolved IP (proves the resolver ran), per-request check runs
+  independently (no first-request-cache-poisoning).
+
+### Changed (breaking)
+
+- **h2ck.me v1 T-4 — `StepEngine::new` now requires a
+  `SharedGuards` handle as a positional argument.** Pre-fix,
+  `guards: Option<SharedGuards>` on `StepEngine` was populated
+  post-hoc via a `with_guards(SharedGuards, GuardMode)` builder;
+  any caller that forgot to call `.with_guards` silently disabled
+  `template:`-step guard enforcement — reopening the h2ck.me H1
+  bypass ("public DSL templates into a guarded admin route").
+  Nothing at compile time prevented the omission; the mistake had
+  to be caught by test coverage that specifically exercised the
+  guarded template path.
+
+  Post-fix: `pub fn new(http_client: HttpClient, guards:
+  SharedGuards, guards_mode: GuardMode) -> Self`. The `with_guards`
+  builder is deleted. Callers with legitimately no guards pass a
+  new module-level helper `empty_shared_guards()` — an explicit
+  call reviewers can spot. Any future call site that forgets to
+  wire guards FAILS TO COMPILE, which is the regression pin.
+
+  Migration for external callers (internal tests + main + testkit
+  + dsl-test all updated in this PR):
+  ```diff
+  - let engine = StepEngine::new(http_client)
+  -     .with_guards(shared_guards, cfg.guards.mode);
+  + let engine = StepEngine::new(http_client, shared_guards, cfg.guards.mode);
+  ```
+  For test fixtures that never had guards:
+  ```diff
+  - let engine = StepEngine::new(http_client);
+  + let engine = StepEngine::new(
+  +     http_client,
+  +     ruuter_on_rust::steps::engine::empty_shared_guards(),
+  +     cfg.guards.mode,
+  + );
+  ```
+
+  New public helper: `ruuter_on_rust::steps::engine::empty_shared_guards()
+  -> SharedGuards`. Also re-exported through the crate.
+
+  Regression coverage: 4 test functions in
+  `tests/issue_T4_stepengine_guards_required.rs` document the
+  compile-time contract (the pin IS the compile error a future
+  refactor would hit) and verify `empty_shared_guards()` returns
+  a valid handle, `applicable_guards_for` still runs against it,
+  and populated handles reach the engine correctly. ~50 pre-
+  existing test fixtures updated in-place to the new signature.
+
+### Added
+
+- **h2ck.me v1 T-5 — process-wide state store now supports a
+  per-project entry cap.** Pre-fix, `StateStore` was an unbounded
+  `DashMap<StateKey, Value>` — a DSL that keyed state on request
+  data (`state.set(key = ${incoming.body.foo})`) could OOM the
+  process by growing the map without bound. Post-fix, new config
+  key `state.max_entries_per_project` (default `100_000`, `null`
+  = unbounded) bounds each project independently.
+
+  - `StateStore::set` now returns `Result<()>`; a new-key insert
+    past the cap fails with `RuuterError::InvalidStep("state.set
+    rejected for project 'X': entry count N reached the cap
+    max_entries_per_project=M (h2ck.me v1 T-5). ...")`.
+    Existing-key updates are always allowed (no count change).
+  - `StateStore::update` follows the same contract — signature
+    changed from `Value` to `Result<Value>`; new-key inserts
+    honour the cap, existing-key updates never trip it.
+  - `StateStore::delete` decrements the per-project count.
+  - At **80% of the cap**, the store emits ONE `tracing::warn!`
+    line naming the project + entries + cap. Subsequent inserts up
+    to the wall don't spam. Once the wall hits, each rejected
+    insert surfaces to the DSL author via the step-level error.
+  - New helpers: `StateStore::with_config(&StateConfig)`,
+    `with_max_entries_per_project(usize)`,
+    `project_entry_count(&str)`, `max_entries_per_project()`,
+    `project_stats()`.
+  - New public struct `ProjectStats { project, entries, cap }`
+    powers a new admin endpoint `GET /_/state-stats` (mounted
+    under `admin_router`, `RUUTER_ADMIN_ENABLED=true` required).
+    Response shape: `{ cap, totals: { projects, entries },
+    projects: [ { project, entries, cap, used_pct } ] }`.
+  - `main.rs`, `src/testkit/harness.rs`, and `src/bin/dsl_test.rs`
+    wire the store via `with_config` (or `.expect()` on set seeds).
+
+  Migration: DSL authors who keyed state on unbounded request data
+  and relied on the pre-T-5 grow-forever behaviour must either
+  move to a bounded key namespace, add explicit `state.delete` to
+  clean up, or raise the cap. The default of 100_000 is
+  comfortable for legitimate DSLs (session tables with sensible
+  TTL, dedup markers, counters); DSLs that hit it are almost
+  certainly the very footgun T-5 closes.
+
+  Regression coverage: 20 test functions in
+  `tests/issue_T5_statestore_bounded.rs`.
+
+### Changed
+
+- **h2ck.me v1 T-6 — `RUUTER_HTTP_REWRITE` is now gated behind a
+  new `dev-http-rewrite` Cargo feature in release builds.** Pre-
+  fix, the env-var-driven URL rewriter shipped in every release
+  binary. An operator who accidentally set the env var in prod
+  silently disabled `check_ssrf` for the rewritten origin — the
+  h2ck.me M2 boot WARN was a mitigation, not a fix.
+
+  Post-fix, `rewrite_url_for_tests` and
+  `rewrite_env_is_active_in_release` are conditionally compiled
+  behind `#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]`.
+  The non-feature branch replaces both with no-op stubs (const
+  `RUUTER_HTTP_REWRITE_ENV` still exported — it's just a string).
+  A stock `cargo build --release` produces a binary in which the
+  rewriter code is not present; setting the env var in prod has
+  literally no effect on outbound URL routing.
+
+  Debug builds (`cfg!(debug_assertions)`) and release builds with
+  `--features dev-http-rewrite` retain the pre-fix behaviour so
+  `dsl-test`, mock-http harnesses, and staging binaries that
+  legitimately need URL redirection keep working. The M2 WARN
+  logic in `main.rs` still calls
+  `rewrite_env_is_active_in_release()`, but in a stock release
+  binary that always returns `false`, so the WARN is a no-op —
+  matching the reality that the rewriter isn't there to fire.
+
+  Regression coverage: 4 test functions in
+  `tests/issue_T6_rewrite_feature_gated.rs` — env-var name const
+  is stable in both builds, `rewrite_env_is_active_in_release` in
+  a debug-assertions-on binary always returns `false` (empty +
+  set env), and the debug-mode rewriter still redirects outbound
+  URLs to a local server. Release-build no-op verified by
+  `cargo build --release` and `cargo build --release --features
+  dev-http-rewrite` in CI.
+
+### Added
+
+- **h2ck.me v1 T-7 — inbound request wall-clock timeout via
+  `tower_http::timeout::TimeoutLayer`.** Pre-fix, every inbound
+  request rode a tokio task with no wall-clock ceiling. The
+  engine's `max_step_recursions` / `max_iterations` / per-outbound
+  timeouts covered the DSL-execution phase; they didn't cover a
+  slow-body / slow-header probe (Slowloris-style attack, or a
+  client that never finished sending) that tied up a worker
+  before any DSL ran.
+
+  Post-fix: new config field
+  `incoming_requests.request_timeout_ms`, default `Some(30_000)`
+  (30 seconds). Applied via `TimeoutLayer` around the DSL
+  fallback, layered after CORS so pre-flight OPTIONS still
+  respond fast. Breaches surface as `408 Request Timeout`
+  (tower_http's default in axum 0.7). Explicit `null` in
+  ruuter.yaml opts back into the pre-T-7 no-timeout behaviour.
+
+  Public-API surface: `IncomingRequestsConfig` gains a required
+  field `request_timeout_ms: Option<u64>`. Test fixtures that
+  built the struct directly (`security_hardening.rs`,
+  `security.rs`) updated to pass `None`.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T7_inbound_request_timeout.rs` — config default,
+  absent-field, explicit-numeric, explicit-null, slow-handler
+  gets 408/504 within timeout, fast-handler still 200, null
+  timeout lets slow handler complete, generous timeout lets
+  short handler complete without waiting for the cap.
+
+### Added
+
+- **h2ck.me v1 T-8 — early-reject on `Content-Length > cap` before
+  any body bytes are read.** `axum::body::to_bytes` already rejects
+  mid-stream at 16 MiB via `http_body_util::Limited` (the RUNTIME-
+  FINDINGS "100 → 117 MB RSS on a 100 MB POST" was hyper socket-
+  buffer overhead, not eager buffering). Real (smaller) improvement:
+  when the client explicitly declares a Content-Length above the
+  cap, we can 413 the request before ANY body reads, cutting out
+  hyper's socket-buffer accumulation entirely.
+
+  Post-fix, `handle_request` inspects the `Content-Length` header
+  and returns `413 Payload Too Large` with a structured JSON body:
+  ```json
+  { "error": "body_too_large", "declared": N, "cap": 16777216,
+    "message": "declared Content-Length N exceeds inbound body cap
+                16777216 (h2ck.me v1 T-8)" }
+  ```
+  The `>` comparison is strict — a declared CL exactly at the cap
+  is allowed. Missing / malformed CL falls through to the existing
+  mid-stream Limited behaviour. Preserves the `#92`-style
+  structured-error shape callers expect.
+
+  Regression coverage: 6 test functions in
+  `tests/issue_T8_content_length_preflight.rs` — oversized CL →
+  413 with structured JSON, CL == cap passes preflight, small CL
+  reaches DSL, missing CL reaches DSL, malformed CL doesn't
+  trigger preflight, DSL never runs on preflight reject.
+
+### Added
+
+- **h2ck.me v1 T-9 — boot WARN when a non-loopback listener is
+  configured but `response_default_headers` doesn't include the
+  OWASP baseline (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Strict-Transport-Security`, `Referrer-Policy`).** The header
+  machinery existed and `book/src/ops/security-checklist.md`
+  documented the posture, but there was no boot-time signal — an
+  operator who exposed Ruuter on `0.0.0.0:8080` and forgot to add
+  the baseline never saw a warning.
+
+  Post-fix, `warn_on_stale_config_fields` now fires a WARN naming
+  each missing header and pointing at
+  `book/src/ops/security-checklist.md`. Scoped to
+  network-reachable listeners — loopback (`127.0.0.1`, `::1`,
+  `localhost`), UDS, and mixes thereof never trigger it.
+  Case-insensitive matching on header names.
+
+  Public helpers exposed for tooling / testing:
+  `has_non_loopback_listener(&AppConfig) -> bool`,
+  `missing_owasp_baseline_headers(&AppConfig) -> Vec<&'static str>`,
+  and the const `OWASP_BASELINE_HEADERS`.
+
+  Regression coverage: 18 test functions in
+  `tests/issue_T9_owasp_baseline_headers.rs`.
+
+### Changed (behavior)
+
+- **h2ck.me v1 T-10 — multipart `Content-Disposition` filename no
+  longer wins over the field `name` as the `incoming.body` map
+  key.** Pre-fix, `filename.or(name)` in `parse_multipart_body`
+  meant an attacker-controlled filename (path-traversal shape,
+  Unicode homoglyph, empty string) became the key that DSLs read
+  via `${incoming.body.<key>}`. In-framework the key is just a
+  JSON-map key, but downstream DSLs that forward the key to a
+  trusted system (path building, log line, cache key) inherit
+  the nastiness.
+
+  Post-fix: `name.or(filename)`. The stable field name wins; the
+  filename is used as a fallback ONLY when the field has no
+  `name=`. Anonymous fields still fall back to `"part"`.
+
+  **DSL-author migration:** any DSL that previously read
+  `${incoming.body['<filename>']}` from a multipart upload must
+  switch to `${incoming.body.<field-name>}`. Standard form
+  contracts already do this (`name="file"` etc.); ad-hoc DSLs
+  that keyed on `filename=` need one-line updates.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T10_multipart_field_name_key.rs` — normal case,
+  path-traversal filename (`../etc/passwd`) with field name,
+  Unicode-homoglyph filename with field name, empty filename with
+  field name, no filename, no field name falls back to filename,
+  fully anonymous falls back to `"part"`, multiple same-name
+  fields last-wins. The pre-existing `audit_content_types.rs`
+  test (`inbound_multipart_form_data_parses_file_parts`) updated
+  in-place to the new field-name-as-key contract.
+
+### Added
+
+- **h2ck.me v1 T-11 — new `ruuter-doctor` binary for pre-boot
+  config sanity checking.** Loads ruuter.yaml + env vars, runs
+  the boot-path WARN registry, reports a CI-actionable exit code:
+  0 clean, 1 warning(s) would fire, 2 unparseable, 3 bad args.
+  Captured WARNs echo to stdout for grep-friendly CI. Ships in
+  the container alongside `dsl-lint` / `dsl-test`.
+
+  New public helper `load_or_default_via_env_or_path(Option<&Path>)`
+  in `ruuter_on_rust::config`.
+
+  Regression coverage: 6 test functions in
+  `tests/issue_T11_ruuter_doctor.rs` (subprocess-driven), plus
+  test fixtures at `tests/fixtures/{clean-defaults,
+  insecure-defaults, unparseable}.yaml`.
+
+### Changed
+
+- **h2ck.me v1 T-12 — every HTTP DSL sample under `DSL/samples/`
+  now carries a `declaration:` block.** Pre-fix, `grep -rln
+  '^declaration:' DSL/samples/` returned 2 of 58 samples;
+  Ruuter's own samples didn't demonstrate the feature Ruuter
+  advertises. Post-fix, 54 additional samples got a minimal
+  declaration (description + `additive: true` allowlist for HTTP
+  DSLs, `override_ancestors: false` for guards) so DSL authors
+  reading the tree have a working reference.
+
+  The `additive: true` posture means the declaration is
+  documentation-only — undeclared fields still pass through and
+  the sample keeps its existing runtime behaviour. Authors who
+  want strict rejection flip `additive` to `strict: true`.
+
+  WS, trigger, and cron samples are intentionally unchanged —
+  they're not OpenAPI-routable and `warn_on_missing_declarations`
+  already skips them.
+
+  Regression coverage: 2 test functions in
+  `tests/issue_T12_samples_have_declarations.rs` — load
+  `DSL/samples/` and assert `warn_on_missing_declarations` returns
+  0, plus a per-DSL walk that asserts `dsl.declaration.is_some()`
+  for every HTTP-method-bucketed DSL.
+
+### Added
+
+- **h2ck.me v1 T-13 — boot WARN when `csrf.allowed_origins` is
+  empty.** Pre-fix, empty `allowed_origins` silently disabled the
+  Origin/Referer CSRF check for state-changing methods; documented
+  at `book/src/framework/csrf.md` but no boot-time signal.
+  Post-fix, `warn_on_stale_config_fields` names the field and
+  points at the doc, matching the fleet's default-off-warn pattern.
+  5 tests in `tests/issue_T13_csrf_empty_origins_warn.rs`.
+
 ### Added
 
 - **h2ck.me v1 T-14 — `RUUTER_OFFLINE=true` env for hard-stubbed

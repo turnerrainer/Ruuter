@@ -3,6 +3,16 @@
 # single_flight key is constant and every follower coalesces onto
 # whichever leader currently holds the slot.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "042 A/B — busy work wrapped in single_flight"
+  additive: true
+
 coalesce:
   single_flight:
     key: "bench-fixed"

@@ -5,6 +5,16 @@
 # would fall through to TCP anyway; env-var toggle is only needed
 # if the target port were 8081).
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "043 A/B (TCP side): calls bench-target on a separate ruuter"
+  additive: true
+
 fetch:
   call: http.get
   args:

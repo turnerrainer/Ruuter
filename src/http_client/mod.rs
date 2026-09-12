@@ -6,7 +6,7 @@ use once_cell::sync::OnceCell;
 use reqwest::{Client, Method};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,33 @@ pub mod uds;
 pub mod uds_pool;
 
 use uds_pool::UdsPool;
+
+/// h2ck.me v1 T-3 — outcome of `HttpClient::check_ssrf`. When the URL
+/// passed validation but required a DNS lookup, the picked
+/// address(es) come back so the caller can pin the outbound reqwest
+/// client to those exact IPs via `reqwest::ClientBuilder::resolve`.
+/// This closes the DNS-rebinding TOCTOU: an attacker-controlled
+/// resolver that returns a public IP for the SSRF check and a
+/// private IP for the subsequent reqwest connect cannot flip the
+/// answer because reqwest is bound to the pre-approved addr.
+/// When no lookup was needed (IP-literal URL, allowlist opt-in, or
+/// `block_private_networks=false`), the caller uses the shared
+/// `HttpClient::client` unchanged.
+#[derive(Debug, Clone)]
+pub(crate) enum SsrfResolution {
+    /// No DNS pinning needed — either the URL host is an IP literal,
+    /// the SSRF block wasn't active, or an allowlist approved the
+    /// request explicitly.
+    NoPinning,
+    /// URL host resolved and every candidate address passed the
+    /// private-network check. The caller must build a fresh reqwest
+    /// client with `.resolve(host, addr)` per addr so the connect
+    /// uses these pinned addresses.
+    Pinned {
+        host: String,
+        addrs: Vec<SocketAddr>,
+    },
+}
 
 /// Task 044 — implemented by the framework's DSL router so
 /// `HttpClient` can dispatch `http.<verb>` self-calls back through
@@ -202,6 +229,14 @@ impl HttpClient {
         self
     }
 
+    /// Test-only builder: set the outbound response-body cap. Every
+    /// transport (TCP, UDS, pooled UDS) honours this cap; see
+    /// h2ck.me v1 T-1 (default) and T-2 (UDS mid-stream enforcement).
+    pub fn with_response_size_limit(mut self, limit: Option<usize>) -> Self {
+        self.response_size_limit = limit;
+        self
+    }
+
     /// Task 044 — one-shot wiring: register the router as the
     /// SelfCallHandler this client will dispatch to when an outbound
     /// URL matches a self-origin. Called from `main.rs` after the
@@ -258,7 +293,7 @@ impl HttpClient {
         &self.uds_pool
     }
 
-    async fn check_ssrf(&self, url: &str) -> Result<()> {
+    async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
         if self.outbound_disabled {
             return Err(RuuterError::HttpRequest(
                 "outbound HTTP is disabled by internal_requests.disabled".into(),
@@ -301,35 +336,34 @@ impl HttpClient {
                 )));
             }
         }
-        // h2ck.me N4 / F2 — reject targets in loopback / link-local /
-        // private ranges when no explicit allowlist has already
-        // approved them. An operator who intentionally allows a
-        // private target via `allowed_ips` or `allowed_urls` opts out
-        // of this check for that host — the allowlist branches above
-        // return early on hit, so we only reach here for a permissive
-        // config (both allowlists empty), which is exactly the
-        // cloud-metadata SSRF exposure documented in N4/F2.
+        // h2ck.me N4 / F2 / v1 T-3 — reject targets in loopback /
+        // link-local / private ranges when no explicit allowlist has
+        // already approved them. An operator who intentionally allows
+        // a private target via `allowed_ips` or `allowed_urls` opts
+        // out of this check for that host — the allowlist branches
+        // above return early on hit, so we only reach here for a
+        // permissive config (both allowlists empty), which is
+        // exactly the cloud-metadata SSRF exposure documented in
+        // N4/F2.
         //
         // F2 extension over N4: hostnames MUST also be checked. The
         // original N4 fix only parsed the URL host as an `IpAddr`,
         // so `http://localhost/`, `http://metadata.google.internal/`,
-        // and any attacker-controlled DNS name slipped past. We now
+        // and any attacker-controlled DNS name slipped past. We
         // resolve the host via `tokio::net::lookup_host` and check
         // every returned address against `is_private_or_local`. A
         // single private hit rejects the request.
         //
-        // DNS-rebinding note: reqwest resolves per connection, not
-        // per request; within a pooled connection the resolved
-        // address is stable, so a rebinding between check and
-        // connect requires the resolver to return a DIFFERENT
-        // address on the second call. The reqwest client below
-        // performs a fresh resolve for the actual connect, but that
-        // resolve happens seconds later (in the worst case) — an
-        // attacker who controls the DNS record can flip the answer.
-        // Full rebinding defence requires pinning the reqwest
-        // connection to the resolved IP; documented as a future
-        // hardening pass. The current check closes the practical
-        // hostname-encoded metadata-SSRF path from the F2 report.
+        // v1 T-3 (DNS-rebinding close): the resolved addresses are
+        // now returned as `SsrfResolution::Pinned` so the caller
+        // can build a per-request reqwest client with
+        // `.resolve(host, addr)` for each addr. Pre-fix, reqwest
+        // performed a FRESH resolve at connect time — an attacker
+        // controlling the DNS record could flip the answer between
+        // check and connect (`public → check pass → connect fires
+        // → private`). Post-fix, reqwest is bound to the exact IP
+        // that passed the check; a fresh DNS answer at connect time
+        // cannot flip it.
         if self.block_private_networks
             && self.allowed_url_prefixes.is_empty()
             && self.allowed_ip_hosts.is_empty()
@@ -349,31 +383,81 @@ impl HttpClient {
                         host
                     )));
                 }
-            } else {
-                // Hostname — resolve and check every candidate address.
-                // A single private hit rejects the whole request; that
-                // matches the operator's mental model of the flag
-                // ("nothing that resolves to a private range").
-                let lookup_target = format!("{}:{}", host, port);
-                let addrs = tokio::net::lookup_host(lookup_target.as_str())
-                    .await
-                    .map_err(|e| {
-                        RuuterError::HttpRequest(format!("dns lookup for '{}' failed: {}", host, e))
-                    })?;
-                for a in addrs {
-                    if is_private_or_local(a.ip()) {
-                        return Err(RuuterError::HttpRequest(format!(
-                            "outbound to '{}' blocked: DNS resolved to private / link-local {} \
-                             (set internal_requests.block_private_networks=false or \
-                             add the host to internal_requests.allowed_ips to opt in)",
-                            host,
-                            a.ip()
-                        )));
-                    }
+                // IP-literal URL — no DNS to pin.
+                return Ok(SsrfResolution::NoPinning);
+            }
+            // Hostname — resolve and check every candidate address.
+            // A single private hit rejects the whole request; that
+            // matches the operator's mental model of the flag
+            // ("nothing that resolves to a private range"). ALL
+            // returned addrs are pinned so multi-A-record hosts
+            // still function under failover.
+            let lookup_target = format!("{}:{}", host, port);
+            let mut collected: Vec<SocketAddr> = Vec::new();
+            let addrs = tokio::net::lookup_host(lookup_target.as_str())
+                .await
+                .map_err(|e| {
+                    RuuterError::HttpRequest(format!("dns lookup for '{}' failed: {}", host, e))
+                })?;
+            for a in addrs {
+                if is_private_or_local(a.ip()) {
+                    return Err(RuuterError::HttpRequest(format!(
+                        "outbound to '{}' blocked: DNS resolved to private / link-local {} \
+                         (set internal_requests.block_private_networks=false or \
+                         add the host to internal_requests.allowed_ips to opt in)",
+                        host,
+                        a.ip()
+                    )));
                 }
+                collected.push(a);
+            }
+            if collected.is_empty() {
+                // Shouldn't happen — lookup_host returning zero addrs
+                // is unusual, but if it does, reject rather than fall
+                // through to an unpinned connect.
+                return Err(RuuterError::HttpRequest(format!(
+                    "outbound to '{}' blocked: DNS returned no addresses",
+                    host
+                )));
+            }
+            return Ok(SsrfResolution::Pinned {
+                host: host.to_string(),
+                addrs: collected,
+            });
+        }
+        Ok(SsrfResolution::NoPinning)
+    }
+
+    /// h2ck.me v1 T-3 — pick the reqwest client to use for this
+    /// request. When `check_ssrf` returned `Pinned`, build a fresh
+    /// per-request client with every resolved address wired via
+    /// `.resolve()`, so reqwest connects only to those addresses and
+    /// cannot flip to a fresh (attacker-controlled) DNS answer at
+    /// connect time. Falls back to the shared pooled client in the
+    /// no-pinning case (IP-literal URL, allowlist opt-in, or
+    /// block_private_networks disabled).
+    fn build_pinned_client(
+        &self,
+        resolution: &SsrfResolution,
+        per_request_timeout: Duration,
+    ) -> Result<Client> {
+        match resolution {
+            SsrfResolution::NoPinning => Ok(self.client.clone()),
+            SsrfResolution::Pinned { host, addrs } => {
+                let mut builder = Client::builder()
+                    .timeout(per_request_timeout)
+                    .redirect(reqwest::redirect::Policy::none());
+                for addr in addrs {
+                    builder = builder.resolve(host, *addr);
+                }
+                builder.build().map_err(|e| {
+                    RuuterError::HttpRequest(format!(
+                        "failed to build DNS-pinned client for '{}': {}",
+                        host, e
+                    ))
+                })
             }
         }
-        Ok(())
     }
 
     pub async fn request(
@@ -481,12 +565,18 @@ impl HttpClient {
                 .await;
         }
 
-        self.check_ssrf(url).await?;
+        // h2ck.me v1 T-3 — perform the SSRF check first and pick the
+        // reqwest client accordingly. `SsrfResolution::Pinned` builds
+        // a fresh per-request client with `.resolve()` wired to the
+        // exact IP(s) that passed the check; the actual connect can
+        // no longer flip to a fresh (attacker-controlled) DNS answer.
+        let ssrf = self.check_ssrf(url).await?;
+        let per_request_timeout = timeout.unwrap_or(self.default_timeout);
+        let effective_client = self.build_pinned_client(&ssrf, per_request_timeout)?;
 
-        let mut request = self
-            .client
+        let mut request = effective_client
             .request(method, url)
-            .timeout(timeout.unwrap_or(self.default_timeout));
+            .timeout(per_request_timeout);
 
         if let Some(q) = query {
             for (k, v) in q {
@@ -833,9 +923,9 @@ impl HttpClient {
             body,
             headers,
             timeout.unwrap_or(self.default_timeout),
+            self.response_size_limit,
         )
         .await?;
-        self.enforce_status_and_size(&resp)?;
         Ok(resp)
     }
 
@@ -873,34 +963,10 @@ impl HttpClient {
             body,
             headers,
             timeout.unwrap_or(self.default_timeout),
+            self.response_size_limit,
         )
         .await?;
-        self.enforce_status_and_size(&resp)?;
         Ok(resp)
-    }
-
-    fn enforce_status_and_size(&self, resp: &HttpResponse) -> Result<()> {
-        // Audit finding 04: allow-list check moved to caller (see
-        // `is_status_allowed`). We only enforce the response-size
-        // cap here — that's a transport concern (OOM guard), not a
-        // DSL-flow concern.
-        if let Some(cap) = self.response_size_limit {
-            // UDS path reads the full body via `.collect()` — we can
-            // only enforce the cap post-hoc. For streaming UDS with
-            // mid-read abort, see follow-up task.
-            let approx = resp
-                .body
-                .as_ref()
-                .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(0))
-                .unwrap_or(0);
-            if approx > cap {
-                return Err(RuuterError::HttpRequest(format!(
-                    "uds upstream body {} bytes exceeds http_response_size_limit {}",
-                    approx, cap
-                )));
-            }
-        }
-        Ok(())
     }
 
     /// Audit finding 04: expose the allow-list decision so callers
@@ -1327,10 +1393,17 @@ impl HttpClient {
 ///
 /// Example: `RUUTER_HTTP_REWRITE=https://jsonplaceholder.typicode.com=http://127.0.0.1:9999`
 ///
-/// Off by default (env var absent → no rewriting). Kept out of the
-/// `HttpClient` struct so no test-mode flag propagates into production
-/// config surfaces.
-/// Env-var name for [`rewrite_url_for_tests`] and [`rewrite_env_is_active_in_release`].
+/// **h2ck.me v1 T-6 — Cargo-feature gated.** The rewriter is
+/// compiled ONLY when `debug_assertions` is on (i.e. debug / test
+/// builds) OR the `dev-http-rewrite` Cargo feature is explicitly
+/// enabled. Release binaries built without the feature contain no
+/// rewriter code at all — an operator who accidentally sets
+/// `RUUTER_HTTP_REWRITE` in prod gets no behaviour change (pre-T-6
+/// the same setting silently disabled SSRF for the rewritten
+/// origin, closed only by a boot WARN as a M2 mitigation).
+///
+/// Env-var name for [`rewrite_url_for_tests`] and
+/// [`rewrite_env_is_active_in_release`].
 pub const RUUTER_HTTP_REWRITE_ENV: &str = "RUUTER_HTTP_REWRITE";
 
 /// h2ck.me v1 T-14 — env var that short-circuits every outbound
@@ -1370,20 +1443,12 @@ pub fn offline_stub_response() -> HttpResponse {
     }
 }
 
-/// h2ck.me M2 — surface whether `RUUTER_HTTP_REWRITE` is set in a
-/// posture where it could silently disable SSRF checks. The rewrite
-/// runs BEFORE `check_ssrf`; in a debug build that's fine (tests
-/// legitimately need to redirect outbound URLs to a local mockito
-/// instance without punching a hole in the allowlist), but in a
-/// release build the same env var lets an operator misconfigure
-/// their way past every SSRF guard for the rewritten origin. Boot
-/// code calls this and emits a WARN so the misconfiguration shows
-/// up in the same log stream as "Loaded config from …".
-///
-/// Returns `true` only when the env var is set to a non-empty value
-/// AND the current build has `debug_assertions` disabled. Test
-/// binaries always run with `debug_assertions` on, so this returns
-/// `false` in the framework's own test suite regardless of value.
+/// h2ck.me M2 / v1 T-6 — surface whether `RUUTER_HTTP_REWRITE` is
+/// set in a posture where it could silently disable SSRF checks.
+/// Feature-gated behind `dev-http-rewrite` in release builds; the
+/// non-feature branch always returns `false`, so the release WARN
+/// site short-circuits to a no-op.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 pub fn rewrite_env_is_active_in_release() -> bool {
     if cfg!(debug_assertions) {
         return false;
@@ -1394,6 +1459,19 @@ pub fn rewrite_env_is_active_in_release() -> bool {
         .unwrap_or(false)
 }
 
+/// h2ck.me v1 T-6 — release build without the `dev-http-rewrite`
+/// feature: the rewriter code path is not compiled in, so the WARN
+/// helper always returns `false`. Keeping the public signature
+/// stable lets `main.rs` call it unconditionally.
+#[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
+pub fn rewrite_env_is_active_in_release() -> bool {
+    false
+}
+
+/// h2ck.me v1 T-6 — real rewrite implementation. Only compiled in
+/// debug builds or when the `dev-http-rewrite` feature is on. See
+/// `RUUTER_HTTP_REWRITE_ENV` for the env-var syntax.
+#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
 fn rewrite_url_for_tests(url: &str) -> Option<String> {
     let raw = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok()?;
     if raw.is_empty() {
@@ -1410,6 +1488,16 @@ fn rewrite_url_for_tests(url: &str) -> Option<String> {
             return Some(format!("{}{}", to, rest));
         }
     }
+    None
+}
+
+/// h2ck.me v1 T-6 — stub for release builds without the
+/// `dev-http-rewrite` feature. `_url` is intentionally ignored;
+/// returning `None` unconditionally means the request path uses
+/// the URL as-provided, and no env-var-driven bypass can affect
+/// SSRF checks.
+#[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
+fn rewrite_url_for_tests(_url: &str) -> Option<String> {
     None
 }
 
