@@ -65,7 +65,12 @@ fn build(files: &[(&str, &str)]) -> (Arc<DslRouter>, StateStore) {
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
     let state = StateStore::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone());
     let router = DslRouter::new(loaded.http, loaded.guards, cfg, state.clone(), ws, engine);
     (Arc::new(router), state)
 }

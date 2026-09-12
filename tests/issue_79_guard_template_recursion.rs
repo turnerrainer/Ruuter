@@ -61,10 +61,13 @@ fn build(files: &[(&str, &str)]) -> DslRouter {
     let ws = WsRegistry::new();
     let shared_http = Arc::new(ArcSwap::from_pointee(loaded.http));
     let shared_guards = Arc::new(ArcSwap::from_pointee(loaded.guards));
-    let engine = StepEngine::new(HttpClient::new(&cfg))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(shared_http.clone())
-        .with_guards(shared_guards.clone(), cfg.guards.mode);
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        shared_guards.clone(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(shared_http.clone());
     DslRouter::from_shared(
         shared_http,
         shared_guards,
