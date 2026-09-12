@@ -21,8 +21,8 @@ async fn main() {
     // Load configuration BEFORE initialising tracing so
     // `logging.format` is honoured. If config load fails, fall back
     // to `eprintln!` because there is no subscriber yet.
-    let (config, config_source) = match AppConfig::load_or_default() {
-        Ok(pair) => pair,
+    let (config, config_source, config_notes) = match AppConfig::load_or_default_with_notes() {
+        Ok(tuple) => tuple,
         Err(e) => {
             eprintln!("Failed to load config: {}", e);
             std::process::exit(1);
@@ -46,6 +46,12 @@ async fn main() {
     // Java operators port `application.yml` verbatim and get a
     // no-op at runtime for fields the framework doesn't wire yet.
     ruuter_on_rust::config::warn_on_stale_config_fields(&config);
+
+    // T-1 — WARNs that need the raw YAML (can't be observed from
+    // the parsed `AppConfig` alone). Explicit
+    // `http_response_size_limit: null` fires here; absent fields do
+    // not, thanks to `default_http_response_size_limit`.
+    ruuter_on_rust::config::warn_on_raw_config_notes(&config_notes);
 
     // h2ck.me M2 — flag `RUUTER_HTTP_REWRITE` in release builds. The
     // env var is documented as test-only but the code path is
@@ -124,7 +130,11 @@ async fn main() {
 
     // Shared state store (project-namespaced k/v) — used by HTTP DSLs
     // today, and by event-trigger DSLs once the WS/cron sources land.
-    let state = StateStore::new();
+    // h2ck.me v1 T-5 — bounded via `config.state.max_entries_per_project`
+    // (default 100_000). `null` in ruuter.yaml opts back into
+    // unbounded for operators who know their DSLs key on a bounded
+    // namespace.
+    let state = StateStore::with_config(&config.state);
 
     // Shared WS connection registry. The HTTP router (server-side
     // WS), source supervisor (outbound WS), and step engine
@@ -170,18 +180,18 @@ async fn main() {
     let http_client = HttpClient::new(&config);
     let http_client_for_handle = http_client.clone();
     let logging_arc = Arc::new(config.logging.clone());
-    let mut engine = StepEngine::new(http_client)
+    // h2ck.me H1 + v1 T-4 — guards ARE a required constructor arg
+    // so the `template:` step always enforces the same guard chain
+    // the HTTP entry path runs. Pre-T-4, `with_guards` was a
+    // builder — any caller that forgot to invoke it silently
+    // reopened the H1 bypass.
+    let mut engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
         .with_ws_registry(ws_registry.clone())
         // `with_dsls_shared` (not `with_dsls`) so the engine and the
         // router below observe the *same* ArcSwap. Without this, a
         // hot-reload publish on the router would leave the engine's
         // template-lookup handle pointing at the stale tree.
         .with_dsls_shared(shared_http_dsls.clone())
-        // h2ck.me H1 — share the guards ArcSwap with the engine so
-        // the `template:` step enforces the same guard chain the
-        // HTTP entry path runs. Skipping this would leave a public
-        // DSL free to template into a guarded admin route.
-        .with_guards(shared_guards.clone(), config.guards.mode)
         .with_expr_registry(expr_registry)
         .with_logging(logging_arc.clone());
     if let Some(n) = config.max_step_recursions {

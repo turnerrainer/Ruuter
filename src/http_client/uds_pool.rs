@@ -18,7 +18,7 @@
 use crate::{Result, RuuterError};
 use dashmap::DashMap;
 use http::{Method, Request, Uri};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -176,13 +176,19 @@ impl Default for UdsPool {
 }
 
 /// Pool-backed replacement for the per-request handshake in
-/// `super::uds::request_over_unix`. Same signature (plus `pool`)
-/// and produces the same `HttpResponse` shape.
+/// `super::uds::request_over_unix`. Same signature (plus `pool` and
+/// `response_size_limit`) and produces the same `HttpResponse` shape.
 ///
 /// Argument count intentionally mirrors the underlying reqwest-shape
-/// (socket path, host, path, method, body, headers, timeout) — folding
-/// them into a struct would just move the plumbing without simplifying
-/// the call sites that already have each value in scope.
+/// (socket path, host, path, method, body, headers, timeout,
+/// response cap) — folding them into a struct would just move the
+/// plumbing without simplifying the call sites that already have
+/// each value in scope.
+///
+/// h2ck.me v1 T-2: `response_size_limit` is honoured mid-stream via
+/// `Limited::new`, matching the TCP path. Content-Length is also
+/// preflighted before body read so oversized-CL responses skip the
+/// buffering entirely.
 #[allow(clippy::too_many_arguments)]
 pub async fn request_over_unix_pooled(
     pool: &UdsPool,
@@ -193,6 +199,7 @@ pub async fn request_over_unix_pooled(
     body: Option<&Value>,
     headers: Option<&HashMap<String, Value>>,
     timeout: Duration,
+    response_size_limit: Option<usize>,
 ) -> Result<HttpResponse> {
     let client = pool.client_for(socket_path);
 
@@ -260,11 +267,54 @@ pub async fn request_over_unix_pooled(
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
-    let bytes = tokio::time::timeout(timeout, res.into_body().collect())
-        .await
-        .map_err(|_| RuuterError::Timeout(format!("uds body exceeded {:?}", timeout)))?
-        .map_err(|e| RuuterError::HttpRequest(format!("uds body (pooled): {}", e)))?
-        .to_bytes();
+    // h2ck.me v1 T-2 — Content-Length preflight mirrors the TCP path.
+    // Skips the body read entirely for oversized-CL responses.
+    if let Some(cap) = response_size_limit {
+        if let Some(len_str) = response_headers.get("content-length") {
+            if let Ok(declared) = len_str.parse::<usize>() {
+                if declared > cap {
+                    return Err(RuuterError::HttpRequest(format!(
+                        "uds upstream declared body {} bytes exceeds http_response_size_limit {}",
+                        declared, cap
+                    )));
+                }
+            }
+        }
+    }
+
+    // h2ck.me v1 T-2 — wrap the body in Limited so a chunked / no-
+    // Content-Length response can't grow past the cap. Pre-fix,
+    // `.into_body().collect()` buffered the full payload before any
+    // check ran; a misbehaving sidecar could OOM the process.
+    let bytes = if let Some(cap) = response_size_limit {
+        let limited = Limited::new(res.into_body(), cap);
+        let collected = tokio::time::timeout(timeout, limited.collect())
+            .await
+            .map_err(|_| RuuterError::Timeout(format!("uds body exceeded {:?}", timeout)))?;
+        match collected {
+            Ok(c) => c.to_bytes(),
+            Err(e) => {
+                if e.downcast_ref::<http_body_util::LengthLimitError>()
+                    .is_some()
+                {
+                    return Err(RuuterError::HttpRequest(format!(
+                        "uds upstream response body exceeded http_response_size_limit {}",
+                        cap
+                    )));
+                }
+                return Err(RuuterError::HttpRequest(format!(
+                    "uds body (pooled): {}",
+                    e
+                )));
+            }
+        }
+    } else {
+        tokio::time::timeout(timeout, res.into_body().collect())
+            .await
+            .map_err(|_| RuuterError::Timeout(format!("uds body exceeded {:?}", timeout)))?
+            .map_err(|e| RuuterError::HttpRequest(format!("uds body (pooled): {}", e)))?
+            .to_bytes()
+    };
 
     // Issue #98 — Content-Type-driven decode, shared with the TCP
     // path. Fixes a pre-#98 bug on this seam: non-JSON UDS
