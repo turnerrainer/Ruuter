@@ -2,6 +2,16 @@
 # timestamp the cron job wrote. Useful for verifying the integration
 # end-to-end without inspecting Ruuter logs.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Companion endpoint to /scheduled/heartbeat — reads back the"
+  additive: true
+
 read_state:
   state:
     get:

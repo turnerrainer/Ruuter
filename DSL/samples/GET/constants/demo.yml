@@ -3,6 +3,16 @@
 # response body is a plain string with no runtime substitution.
 # See book/src/dsl/constants.md for the syntax reference.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Constants demo. `[#DOMAIN_URL]` and `#{PORT}` both come from"
+  additive: true
+
 respond:
   return:
     domain: "[#DOMAIN_URL]"
