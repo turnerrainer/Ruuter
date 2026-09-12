@@ -2,6 +2,13 @@
 # `.guard.yml` (or `.guard`) inside the folder it protects. Guards
 # every DSL under `vault/`. Sibling `<stem>.guard.yml` still works too.
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. This guard still runs; the
+# `override_ancestors: false` matches pre-T-12 semantics.
+declaration:
+  description: "In-folder guard (Java-Ruuter parity). File name is literally"
+  override_ancestors: false
+
 check:
   switch:
     - condition: "${!incoming.headers['x-vault-token']}"

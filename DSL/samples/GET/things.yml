@@ -5,6 +5,16 @@
 #
 # `incoming.params.pathParams` is a JS array (URL order preserved).
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Sample: path parameters. One DSL serves multiple URL shapes"
+  additive: true
+
 route:
   switch:
     - condition: "${incoming.params.pathParams.length === 0}"

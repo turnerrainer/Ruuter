@@ -37,9 +37,13 @@ fn build_router(root: &Path) -> Arc<DslRouter> {
     let http = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.http));
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     Arc::new(DslRouter::from_shared(
         http,
         guards,
@@ -265,9 +269,13 @@ respond:
     let http = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.http));
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     let router = Arc::new(DslRouter::from_shared(
         http,
         guards,
@@ -330,9 +338,13 @@ reply:
     let http = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.http));
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     let router = Arc::new(DslRouter::from_shared(
         http,
         guards,
@@ -388,9 +400,13 @@ reply:
     let http = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.http));
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     let router = Arc::new(DslRouter::from_shared(
         http,
         guards,
