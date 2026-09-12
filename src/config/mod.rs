@@ -31,7 +31,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub max_step_recursions: Option<u32>,
 
-    #[serde(default)]
+    /// T-1 — outbound response-body cap, in bytes, per `http.*` step.
+    /// Absent-in-YAML defaults to `Some(16 * 1024 * 1024)` (matches
+    /// `AppConfig::default()`); explicit `null` opts into uncapped
+    /// reads and fires a boot WARN naming the field. Before the fix,
+    /// `#[serde(default)]` on `Option<usize>` yielded `None` — every
+    /// operator whose ruuter.yaml omitted the field silently ran
+    /// uncapped, so a misbehaving upstream could OOM the process by
+    /// returning a very large body.
+    #[serde(default = "default_http_response_size_limit")]
     pub http_response_size_limit: Option<usize>,
 
     #[serde(default = "default_http_request_timeout")]
@@ -92,6 +100,14 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub optimistic_concurrency: OptimisticConcurrencyConfig,
+
+    /// h2ck.me v1 T-5 — process-wide state store bounds. Prevents
+    /// a DSL that keys state on request data (`state.set(key =
+    /// ${incoming.body.foo})`) from OOMing the process by growing
+    /// the map without bound. `None` = unbounded (pre-T-5 behaviour;
+    /// safe only when every DSL keys on a bounded namespace).
+    #[serde(default)]
+    pub state: StateConfig,
 
     /// Task 043 — outbound Unix-domain-socket transport aliases.
     ///
@@ -169,6 +185,44 @@ pub enum HttpVersion {
     #[default]
     Http1,
     Http2,
+}
+
+/// h2ck.me v1 T-5 — process-wide state store bounds. Config sub-tree
+/// under `state:` in ruuter.yaml. Absent block = defaults (100_000
+/// entries per project, WARN at 80% of cap). Set
+/// `max_entries_per_project: null` to opt out of the cap entirely
+/// (matches the pre-T-5 unbounded behaviour); the boot-time notes
+/// don't emit a WARN for that opt-out today (unlike T-1's cap null)
+/// because the state store is not a DoS-adjacent surface if the DSL
+/// author knows their keys are bounded.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateConfig {
+    /// Per-project cap on the number of entries in the state store.
+    /// `None` = unbounded (pre-T-5 behaviour). The DSL author can
+    /// exceed this by writing to a NEW project name; the cap is
+    /// per-project, not global.
+    #[serde(default = "default_state_max_entries_per_project")]
+    pub max_entries_per_project: Option<usize>,
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self {
+            max_entries_per_project: default_state_max_entries_per_project(),
+        }
+    }
+}
+
+/// h2ck.me v1 T-5 — 100_000 entries per project is the ratio the
+/// audit picked: high enough that legitimate DSLs (session tables,
+/// dedup markers with sensible TTLs enforced upstream, small
+/// counters) never hit it; low enough that a DSL that keys on
+/// request data trips the cap before the process is under real
+/// memory pressure. Operators with larger legitimate state (e.g.
+/// long-lived per-user sessions in projects with millions of users)
+/// should raise it explicitly.
+fn default_state_max_entries_per_project() -> Option<usize> {
+    Some(100_000)
 }
 
 /// Audit finding 14 — guard evaluation mode.
@@ -270,6 +324,17 @@ fn default_response_wrapper() -> bool {
 /// on every boot for operators who never touched the field.
 fn default_stop_in_case_of_exception() -> bool {
     true
+}
+
+/// T-1 — 16 MiB cap for outbound `http.*` response bodies. Matches
+/// `AppConfig::default()` so `serde(default = ...)` deserialisation
+/// (used when an operator's ruuter.yaml exists but omits the key)
+/// produces the same value as the no-config-file fallback path.
+/// Explicit `null` in YAML still deserialises to `None` — that's the
+/// operator opt-in for uncapped, and `warn_on_raw_config_notes`
+/// surfaces it as a WARN at boot.
+fn default_http_response_size_limit() -> Option<usize> {
+    Some(16 * 1024 * 1024)
 }
 
 impl Default for ResponseConfig {
@@ -747,6 +812,7 @@ impl Default for AppConfig {
             proxy: ProxyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
+            state: StateConfig::default(),
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
@@ -788,6 +854,42 @@ fn config_search_paths() -> Vec<PathBuf> {
     out
 }
 
+/// T-1 — observations that can only be made against the raw YAML,
+/// not the parsed `AppConfig` (which cannot distinguish
+/// "field-absent" from "field-explicitly-null"). Populated by
+/// `AppConfig::load_or_default_with_notes` and consumed by
+/// `warn_on_raw_config_notes` after the tracing subscriber is up.
+#[derive(Debug, Default, Clone)]
+pub struct RawConfigNotes {
+    /// True when the loaded ruuter.yaml contains an explicit
+    /// `http_response_size_limit: null` — an operator opt-in to
+    /// uncapped outbound response body reads. WARNed at boot so a
+    /// mistake (typo, copy-paste of a Java template that used null
+    /// as a sentinel) doesn't silently disable the cap.
+    pub http_response_size_limit_explicit_null: bool,
+}
+
+/// T-1 — scan a raw ruuter.yaml body for observations that the typed
+/// `AppConfig` can't preserve after serde deserialisation. Public so
+/// tests can exercise the detection independently of file I/O.
+pub fn raw_config_notes(body: &str) -> RawConfigNotes {
+    let mut notes = RawConfigNotes::default();
+    let Ok(root) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(body) else {
+        return notes;
+    };
+    let Some(map) = root.as_mapping() else {
+        return notes;
+    };
+    if let Some(v) = map.get(serde_yaml_ng::Value::String(
+        "http_response_size_limit".to_string(),
+    )) {
+        if v.is_null() {
+            notes.http_response_size_limit_explicit_null = true;
+        }
+    }
+    notes
+}
+
 impl AppConfig {
     /// Resolve, load, and return the operator's AppConfig. Falls back to
     /// `AppConfig::default()` when no config file is found on any of the
@@ -796,7 +898,18 @@ impl AppConfig {
     /// Returns a tuple `(config, source)` — `source` is `Some(path)` when
     /// a file was loaded, `None` when defaults were used. Caller logs the
     /// choice at INFO so ops can see which config took effect.
+    ///
+    /// Prefer `load_or_default_with_notes` in `main.rs` so raw-YAML
+    /// observations (T-1: explicit-null cap) reach
+    /// `warn_on_raw_config_notes`.
     pub fn load_or_default() -> crate::Result<(Self, Option<PathBuf>)> {
+        Self::load_or_default_with_notes().map(|(c, p, _)| (c, p))
+    }
+
+    /// T-1 — same as `load_or_default` but also returns the raw-YAML
+    /// observation struct so the boot path can emit
+    /// `warn_on_raw_config_notes` after the tracing subscriber is up.
+    pub fn load_or_default_with_notes() -> crate::Result<(Self, Option<PathBuf>, RawConfigNotes)> {
         for path in config_search_paths() {
             if path.exists() {
                 let body = std::fs::read_to_string(&path).map_err(|e| {
@@ -813,10 +926,11 @@ impl AppConfig {
                         e
                     ))
                 })?;
-                return Ok((cfg, Some(path)));
+                let notes = raw_config_notes(&body);
+                return Ok((cfg, Some(path), notes));
             }
         }
-        Ok((Self::default(), None))
+        Ok((Self::default(), None, RawConfigNotes::default()))
     }
 }
 
@@ -844,6 +958,12 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // book/src/logging/) all four are wired end-to-end.
     // No WARN emitted regardless of value.
 
+    // T-1 — the numeric-vs-none WARN lives in
+    // `warn_on_raw_config_notes` because "operator wrote null" is
+    // observable only against the raw YAML body, not the parsed
+    // `AppConfig` (which cannot distinguish an absent field from a
+    // field explicitly set to null).
+
     // allowed_filetypes vs processed_filetypes — pre-fix Rust only
     // reads processed_filetypes. Warn when they differ so operators
     // know allowed_filetypes was silently the same list.
@@ -855,6 +975,23 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
              the loader only consults processed_filetypes. allowed_filetypes is a \
              Java-parity noun that has no gating effect. Fold the two into \
              processed_filetypes or accept that allowed_filetypes is inert."
+        );
+    }
+}
+
+/// T-1 — emit WARNs for observations that need the raw YAML body
+/// (see `RawConfigNotes`). Called from `main.rs` right after
+/// `warn_on_stale_config_fields`, in the same "post-tracing-init,
+/// pre-listener-startup" window.
+pub fn warn_on_raw_config_notes(notes: &RawConfigNotes) {
+    if notes.http_response_size_limit_explicit_null {
+        tracing::warn!(
+            "config: http_response_size_limit=null explicitly disables the outbound \
+             response body cap. Every http.* step will read the full upstream body \
+             into memory, so a misbehaving upstream can OOM the process. Intended \
+             for internal-only deployments where the trade-off is understood. \
+             Set a numeric cap in bytes (default 16777216 = 16 MiB) unless this \
+             opt-in is deliberate."
         );
     }
 }

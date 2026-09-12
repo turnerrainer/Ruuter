@@ -263,9 +263,13 @@ async fn run_mock_http(
                 mock.register(&setup.mocks);
             }
             for seed in &setup.state {
+                // h2ck.me v1 T-5 — StateStore::set returns Result; a
+                // cap breach during seeding is a harness misconfig,
+                // not a test failure. Expect-panic surfaces the cause.
                 harness
                     .state
-                    .set(&seed.project, &seed.key, seed.value.clone());
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
 
@@ -299,9 +303,13 @@ async fn run_trigger_inject(
                 mock.register(&setup.mocks);
             }
             for seed in &setup.state {
+                // h2ck.me v1 T-5 — StateStore::set returns Result; a
+                // cap breach during seeding is a harness misconfig,
+                // not a test failure. Expect-panic surfaces the cause.
                 harness
                     .state
-                    .set(&seed.project, &seed.key, seed.value.clone());
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
 
@@ -330,7 +338,12 @@ async fn run_ws_client(
     let ws_registry = WsRegistry::new();
     let http_client = HttpClient::new(&config);
     let shared_http_dsls = Arc::new(loaded.http);
-    let engine = StepEngine::new(http_client)
+    // h2ck.me v1 T-4 — StepEngine::new requires a guards handle.
+    // Wrap the loader's guard tree so template-step guard
+    // enforcement matches a real boot.
+    let shared_guards: ruuter_on_rust::dsl::loader::SharedGuards =
+        Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards.clone()));
+    let engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
         .with_ws_registry(ws_registry.clone())
         .with_dsls(shared_http_dsls.clone());
     let _trigger = Arc::new(TriggerDispatcher::new(
@@ -362,7 +375,12 @@ async fn run_ws_client(
     for s in &file.tests {
         if let Some(setup) = &s.setup {
             for seed in &setup.state {
-                state.set(&seed.project, &seed.key, seed.value.clone());
+                // h2ck.me v1 T-5 — StateStore::set is fallible; on a
+                // ws-client seed collision with the cap we surface
+                // the harness failure rather than swallow it.
+                state
+                    .set(&seed.project, &seed.key, seed.value.clone())
+                    .expect("state store cap must not be reached during test setup");
             }
         }
         let outcome = run_ws_scenario(addr, &state, s).await;
@@ -383,7 +401,8 @@ async fn run_http_scenario(
         for seed in &setup.state {
             harness
                 .state
-                .set(&seed.project, &seed.key, seed.value.clone());
+                .set(&seed.project, &seed.key, seed.value.clone())
+                .expect("state store cap must not be reached during test setup");
         }
     }
 

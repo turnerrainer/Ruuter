@@ -90,9 +90,13 @@ fn build_router(cfg: AppConfig, files: &[(&str, &str)]) -> DslRouter {
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
     let shared = Arc::new(loaded.http);
-    let engine = StepEngine::new(HttpClient::new(&cfg))
-        .with_ws_registry(ws.clone())
-        .with_dsls(shared.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls(shared.clone());
     DslRouter::from_arc(shared, loaded.guards, cfg, StateStore::new(), ws, engine)
 }
 
@@ -408,9 +412,13 @@ reply:
     let ws = WsRegistry::new();
     let shared = Arc::new(loaded.http);
     let http_client = HttpClient::new(&cfg2);
-    let engine = StepEngine::new(http_client.clone())
-        .with_ws_registry(ws.clone())
-        .with_dsls(shared.clone());
+    let engine = StepEngine::new(
+        http_client.clone(),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg2.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls(shared.clone());
     let router = Arc::new(DslRouter::from_arc(
         shared,
         loaded.guards,

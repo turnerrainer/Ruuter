@@ -27,7 +27,12 @@ fn build_router_with_dsl(project: &str, method: &str, path: &str, body: &str) ->
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let dsls = loader.load_all().expect("load dsls");
     let ws_registry = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws_registry.clone());
     DslRouter::new(
         dsls,
         std::collections::HashMap::new(),
@@ -132,7 +137,12 @@ respond:
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let dsls = loader.load_all().expect("load");
     let ws_registry = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws_registry.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws_registry.clone());
     let router = DslRouter::new(
         dsls,
         std::collections::HashMap::new(),

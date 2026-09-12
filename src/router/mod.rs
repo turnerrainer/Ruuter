@@ -234,6 +234,12 @@ impl DslRouter {
         Router::new()
             .route("/_/unguarded", get(handle_unguarded))
             .route("/_/openapi.json", get(openapi_handler))
+            // h2ck.me v1 T-5 — per-project state-store footprint.
+            // Cap-diagnostic. Only meaningful once the operator has
+            // set `state.max_entries_per_project`; the endpoint
+            // works with the cap-off store too but the response
+            // notes `cap: null` and scans the map to count.
+            .route("/_/state-stats", get(handle_state_stats))
             .with_state(self)
     }
 
@@ -497,6 +503,64 @@ async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResp
             "guarded": total_guarded,
             "unguarded": total_unguarded,
             "routes": total_guarded + total_unguarded,
+        },
+        "projects": projects,
+    }))
+}
+
+/// h2ck.me v1 T-5 — per-project state-store footprint for operator
+/// diagnostics. Admin-gated (`RUUTER_ADMIN_ENABLED=true` and mounted
+/// via `admin_router`). Body shape:
+/// ```json
+/// {
+///   "cap": 100000,
+///   "totals": { "projects": 3, "entries": 42 },
+///   "projects": [
+///     { "project": "orders", "entries": 12, "cap": 100000, "used_pct": 0.012 },
+///     ...
+///   ]
+/// }
+/// ```
+/// `cap: null` at the top and per-project when the operator opted
+/// out of the cap (`state.max_entries_per_project: null`). Sorted
+/// alphabetically by project so dashboards can key on order.
+async fn handle_state_stats(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
+    let cap = router.state.max_entries_per_project();
+    let mut stats = router.state.project_stats();
+    stats.sort_by(|a, b| a.project.cmp(&b.project));
+
+    let total_entries: usize = stats.iter().map(|s| s.entries).sum();
+    let projects: Vec<serde_json::Value> = stats
+        .iter()
+        .map(|s| {
+            let used_pct = s.cap.and_then(|c| {
+                if c == 0 {
+                    None
+                } else {
+                    Some(s.entries as f64 / c as f64)
+                }
+            });
+            let mut obj = json!({
+                "project": s.project,
+                "entries": s.entries,
+            });
+            if let Some(c) = s.cap {
+                obj["cap"] = json!(c);
+            } else {
+                obj["cap"] = serde_json::Value::Null;
+            }
+            if let Some(p) = used_pct {
+                obj["used_pct"] = json!(p);
+            }
+            obj
+        })
+        .collect();
+
+    Json(json!({
+        "cap": cap,
+        "totals": {
+            "projects": stats.len(),
+            "entries": total_entries,
         },
         "projects": projects,
     }))
