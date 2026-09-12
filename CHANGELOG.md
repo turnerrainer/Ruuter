@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0-rc] - 2026-09-12
+
+Sixteen h2ck.me v1 backlog items shipped in one batch (T-1..T-16,
+PRs #101–#116). Two breaking Rust API changes (T-4
+`StepEngine::new` signature, T-5 `StateStore` return types), two
+client-facing behaviour changes (T-10 multipart map-key, T-15
+wrong-method 405 + `Allow:`), new operator surfaces
+(`ruuter-doctor` binary, `RUUTER_OFFLINE=true` env, inbound
+`TimeoutLayer`), P0 security hardening (T-1 / T-2 / T-3), and
+boot-time WARNs (T-9 OWASP, T-13 CSRF).
+
+Semver-minor bump. Every item below has its own PR with a
+dedicated regression-test file; ~130 new test functions total.
+See CLAUDE.md's "Handling a breaking change" section for the
+process this batch followed.
+
 ### Fixed
 
 - **h2ck.me v1 T-1 — `http_response_size_limit` default resolves
