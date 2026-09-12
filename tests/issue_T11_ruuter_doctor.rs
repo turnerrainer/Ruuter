@@ -27,19 +27,14 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn doctor_path() -> PathBuf {
-    // Cargo drops binaries at $CARGO_TARGET_DIR/debug/<name>. When
-    // CARGO_TARGET_DIR is unset, uses ./target relative to the
-    // workspace root. We resolve both.
-    let candidate1 = std::env::var("CARGO_TARGET_DIR")
-        .ok()
-        .map(|d| PathBuf::from(d).join("debug/ruuter-doctor"));
-    let candidate2 = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/ruuter-doctor");
-    if let Some(p) = candidate1 {
-        if p.exists() {
-            return p;
-        }
-    }
-    candidate2
+    // Cargo sets CARGO_BIN_EXE_<name> for integration tests when
+    // the crate declares <name> as a [[bin]] target. This is the
+    // canonical way to find a sibling binary — works in CI, works
+    // with CARGO_TARGET_DIR overrides, works with cargo-nextest,
+    // works with cross. The doctor binary is declared in
+    // Cargo.toml as [[bin]] name = "ruuter-doctor" so cargo
+    // guarantees it's built before this integration test runs.
+    PathBuf::from(env!("CARGO_BIN_EXE_ruuter-doctor"))
 }
 
 fn fixture(name: &str) -> PathBuf {
