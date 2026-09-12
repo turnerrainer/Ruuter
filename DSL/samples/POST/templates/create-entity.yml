@@ -1,4 +1,15 @@
 # Reusable template - creates entity with metadata
+
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Reusable template - creates entity with metadata"
+  additive: true
+
 prepare_entity:
   assign:
     entity:

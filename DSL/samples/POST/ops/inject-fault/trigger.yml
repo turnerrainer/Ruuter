@@ -1,6 +1,16 @@
 # POST /samples/ops/inject-fault/trigger — permanently blocked in prod
 # by the override guard above (even with a valid bearer token).
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "POST /samples/ops/inject-fault/trigger — permanently blocked in prod"
+  additive: true
+
 respond:
   return: { fired: true }
   next: end

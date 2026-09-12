@@ -8,6 +8,16 @@
 # DSL/samples/POST/scheduled.guard.yml that verifies the caller is
 # CronManager (e.g. checking an X-Internal-Caller shared secret).
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "Sample scheduled-work endpoint. This is a regular Ruuter HTTP DSL"
+  additive: true
+
 record_seen:
   state:
     set:

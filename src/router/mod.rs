@@ -169,6 +169,43 @@ impl DslRouter {
         }
     }
 
+    /// h2ck.me v1 T-15 — return the sorted list of HTTP methods
+    /// that DO resolve for `(project, path)`. Used to produce the
+    /// `Allow:` header on a 405 Method Not Allowed response when
+    /// the requested method doesn't match but the path exists for
+    /// some other method. RFC 7231 §7.4.1: 405 must include Allow.
+    ///
+    /// Empty return = the path is not routed at all → 404, not 405.
+    pub fn methods_allowed_for_path(&self, project: &str, path: &str) -> Vec<String> {
+        let snapshot = self.dsls.load();
+        let Some(by_method) = snapshot.get(project) else {
+            return Vec::new();
+        };
+        let mut allowed: Vec<String> = by_method
+            .keys()
+            .filter(|method| {
+                // Try each method's resolver against the path. Same
+                // stripping-suffix loop as `resolve_dsl_with_path_params`
+                // but only checks existence — no Dsl clone.
+                let m: &str = method.as_str();
+                let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+                while !segments.is_empty() {
+                    let candidate = format!("{}/{}", m, segments.join("/"));
+                    if let Some(map) = by_method.get(m) {
+                        if map.contains_key(&candidate) {
+                            return true;
+                        }
+                    }
+                    segments.pop();
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        allowed.sort();
+        allowed
+    }
+
     /// Return the list of guard DSLs that protect `dsl_key`, ordered
     /// outermost-first. A guard at key `<METHOD>/path/<stem>` applies
     /// to every DSL whose key starts with `<METHOD>/path/<stem>/`.
@@ -234,6 +271,12 @@ impl DslRouter {
         Router::new()
             .route("/_/unguarded", get(handle_unguarded))
             .route("/_/openapi.json", get(openapi_handler))
+            // h2ck.me v1 T-5 — per-project state-store footprint.
+            // Cap-diagnostic. Only meaningful once the operator has
+            // set `state.max_entries_per_project`; the endpoint
+            // works with the cap-off store too but the response
+            // notes `cap: null` and scans the map to count.
+            .route("/_/state-stats", get(handle_state_stats))
             .with_state(self)
     }
 
@@ -245,6 +288,10 @@ impl DslRouter {
     /// dispatch a self-call.
     pub fn build_axum_router_from_arc(self: Arc<Self>) -> Router {
         let cors = build_cors_layer(&self.config.cors);
+        // h2ck.me v1 T-7 — inbound request wall-clock deadline via
+        // tower_http::timeout::TimeoutLayer. Snapshot the config
+        // value before consuming `self` into the router state.
+        let request_timeout = self.config.incoming_requests.request_timeout_ms;
         let state = self;
 
         // h2ck.me M1 — `/_/openapi.json` moved to admin_router. The
@@ -256,6 +303,18 @@ impl DslRouter {
             .with_state(state);
         if let Some(layer) = cors {
             router = router.layer(layer);
+        }
+        // h2ck.me v1 T-7 — layered AFTER CORS so pre-flight OPTIONS
+        // still responds fast even under heavy load. `None` opts
+        // out of the timeout (matches pre-T-7 behaviour); a numeric
+        // value produces a `504 Gateway Timeout` on breach with
+        // tower_http's default body. See
+        // `book/src/ops/incoming-request-timeout.md` for the
+        // full contract.
+        if let Some(ms) = request_timeout {
+            router = router.layer(tower_http::timeout::TimeoutLayer::new(
+                std::time::Duration::from_millis(ms),
+            ));
         }
         router
     }
@@ -481,6 +540,64 @@ async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResp
             "guarded": total_guarded,
             "unguarded": total_unguarded,
             "routes": total_guarded + total_unguarded,
+        },
+        "projects": projects,
+    }))
+}
+
+/// h2ck.me v1 T-5 — per-project state-store footprint for operator
+/// diagnostics. Admin-gated (`RUUTER_ADMIN_ENABLED=true` and mounted
+/// via `admin_router`). Body shape:
+/// ```json
+/// {
+///   "cap": 100000,
+///   "totals": { "projects": 3, "entries": 42 },
+///   "projects": [
+///     { "project": "orders", "entries": 12, "cap": 100000, "used_pct": 0.012 },
+///     ...
+///   ]
+/// }
+/// ```
+/// `cap: null` at the top and per-project when the operator opted
+/// out of the cap (`state.max_entries_per_project: null`). Sorted
+/// alphabetically by project so dashboards can key on order.
+async fn handle_state_stats(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
+    let cap = router.state.max_entries_per_project();
+    let mut stats = router.state.project_stats();
+    stats.sort_by(|a, b| a.project.cmp(&b.project));
+
+    let total_entries: usize = stats.iter().map(|s| s.entries).sum();
+    let projects: Vec<serde_json::Value> = stats
+        .iter()
+        .map(|s| {
+            let used_pct = s.cap.and_then(|c| {
+                if c == 0 {
+                    None
+                } else {
+                    Some(s.entries as f64 / c as f64)
+                }
+            });
+            let mut obj = json!({
+                "project": s.project,
+                "entries": s.entries,
+            });
+            if let Some(c) = s.cap {
+                obj["cap"] = json!(c);
+            } else {
+                obj["cap"] = serde_json::Value::Null;
+            }
+            if let Some(p) = used_pct {
+                obj["used_pct"] = json!(p);
+            }
+            obj
+        })
+        .collect();
+
+    Json(json!({
+        "cap": cap,
+        "totals": {
+            "projects": stats.len(),
+            "entries": total_entries,
         },
         "projects": projects,
     }))
@@ -718,8 +835,47 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         headers_map.insert(k.to_ascii_lowercase(), v.clone());
     }
 
-    // Read body bytes (up to 16 MiB) then parse as JSON object.
-    let body_bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await {
+    // h2ck.me v1 T-8 — Content-Length preflight. `axum::body::to_bytes`
+    // uses `http_body_util::Limited` internally and DOES reject
+    // mid-stream on the first over-limit frame — user-space
+    // accumulation is bounded at ~16 MiB. But when the client
+    // declares a Content-Length above the cap, we can reject the
+    // request BEFORE reading any body bytes off the socket, cutting
+    // out the hyper socket-buffer accumulation the RUNTIME audit
+    // observed as a 100 → 117 MB RSS spike on a 100 MB POST. The
+    // response body shape mirrors the mid-stream body_too_large the
+    // Limited path already produces so #92-style callers see the
+    // same structured error either way.
+    const MAX_INBOUND_BODY_BYTES: usize = 16 * 1024 * 1024;
+    if let Some(cl_str) = request
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Ok(declared) = cl_str.parse::<usize>() {
+            if declared > MAX_INBOUND_BODY_BYTES {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "body_too_large",
+                        "declared": declared,
+                        "cap": MAX_INBOUND_BODY_BYTES,
+                        "message": format!(
+                            "declared Content-Length {} exceeds inbound body cap {} (h2ck.me v1 T-8)",
+                            declared, MAX_INBOUND_BODY_BYTES
+                        ),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Read body bytes (up to 16 MiB) then parse as JSON object. The
+    // Limited body in `to_bytes` catches over-cap chunked / unknown-
+    // length payloads mid-stream; the preflight above handles the
+    // declared-CL case before any body reads.
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_INBOUND_BODY_BYTES).await {
         Ok(b) => b,
         Err(e) => {
             return (
@@ -941,12 +1097,34 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                 raw_string,
             )
         }
-        Err(RuuterError::FileNotFound(_)) => (
-            StatusCode::NOT_FOUND,
-            json!({"error": "Not Found"}),
-            HashMap::new(),
-            None,
-        ),
+        Err(RuuterError::FileNotFound(_)) => {
+            // h2ck.me v1 T-15 — if the path exists for at least one
+            // OTHER method, return 405 with an `Allow:` header
+            // listing the registered methods (RFC 7231 §7.4.1).
+            // 404 stays reserved for "no such path at all".
+            let allowed = router.methods_allowed_for_path(&project, &endpoint_path);
+            if allowed.is_empty() {
+                (
+                    StatusCode::NOT_FOUND,
+                    json!({"error": "Not Found"}),
+                    HashMap::new(),
+                    None,
+                )
+            } else {
+                let allow_header = allowed.join(", ");
+                let mut hdrs = HashMap::new();
+                hdrs.insert("Allow".to_string(), allow_header.clone());
+                (
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    json!({
+                        "error": "Method Not Allowed",
+                        "allow": allowed,
+                    }),
+                    hdrs,
+                    None,
+                )
+            }
+        }
         Err(RuuterError::BadRequest(msg)) => (
             StatusCode::BAD_REQUEST,
             json!({ "error": msg }),
@@ -1029,7 +1207,25 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
             }
             resp
         }
-        (Err(_), _) => (status_code, Json(body_value)).into_response(),
+        (Err(_), _) => {
+            // h2ck.me v1 T-15 — error branches produce `extra_headers`
+            // too (405 carries `Allow: <methods>`). Apply them here
+            // so the response goes out with the same header shape
+            // as the Ok branches. Pre-T-15 this branch dropped
+            // extra_headers on the floor, so the 405 status code
+            // shipped without the Allow header even after the
+            // FileNotFound handler had built one.
+            let mut resp = (status_code, Json(body_value)).into_response();
+            for (k, v) in extra_headers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::try_from(k.as_str()),
+                    HeaderValue::try_from(v.as_str()),
+                ) {
+                    resp.headers_mut().insert(name, value);
+                }
+            }
+            resp
+        }
     };
 
     // Echo traceparent + X-Trace-Id so ops can correlate a client-side
@@ -1351,9 +1547,19 @@ async fn parse_multipart_body(
             bytes.extend_from_slice(&chunk);
         }
         let content = String::from_utf8_lossy(&bytes).into_owned();
-        // Prefer filename as key (Java behaviour for `file[]`
-        // uploads); fall back to field name.
-        let key = filename.or(name).unwrap_or_else(|| "part".to_string());
+        // h2ck.me v1 T-10 — prefer the FIELD NAME as the map key
+        // over the filename. Pre-fix, `filename.or(name)` meant an
+        // attacker-controlled filename (path-traversal shape,
+        // Unicode homoglyph, etc.) became the map key that
+        // downstream DSLs read via `${incoming.body.<key>}`. In-
+        // framework the key is just a JSON-map key — no fs code
+        // touches it — but a DSL that hands the key to a trusted
+        // system (path building, log line, cache key) inherits
+        // whatever nastiness the filename carried. Post-fix, the
+        // stable field name wins; the filename is used as a
+        // fallback only when the field has no name (`part` is the
+        // final fallback for truly-anonymous fields).
+        let key = name.or(filename).unwrap_or_else(|| "part".to_string());
         out.insert(key, Value::String(content));
     }
     Ok(out)

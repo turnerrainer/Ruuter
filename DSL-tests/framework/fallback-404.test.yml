@@ -13,9 +13,13 @@ tests:
     expect:
       status: 404
 
-  - name: unknown method on known path returns 404
+  # h2ck.me v1 T-15 — wrong method on a KNOWN path now returns
+  # 405 Method Not Allowed with an `Allow:` header listing the
+  # registered methods. Pre-T-15 this was 404. Pinned here so a
+  # future refactor can't downgrade the invariant.
+  - name: unknown method on known path returns 405 with Allow header
     request:
       method: DELETE
       path: /samples/ping
     expect:
-      status: 404
+      status: 405
