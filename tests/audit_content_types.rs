@@ -33,9 +33,13 @@ fn build_router(dsl_root: &Path) -> Arc<DslRouter> {
     let guards = Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards));
     let state = StateStore::new();
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&config))
-        .with_ws_registry(ws.clone())
-        .with_dsls_shared(http.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&config),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        config.guards.mode,
+    )
+    .with_ws_registry(ws.clone())
+    .with_dsls_shared(http.clone());
     Arc::new(DslRouter::from_shared(
         http, guards, config, state, ws, engine,
     ))
@@ -117,13 +121,19 @@ reply:
 
 #[tokio::test]
 async fn inbound_multipart_form_data_parses_file_parts() {
+    // h2ck.me v1 T-10 — post-fix, the field NAME wins over
+    // filename as the incoming.body map key. Pre-fix this DSL
+    // read `${incoming.body['note.txt']}` (the client-controlled
+    // filename); post-fix it must read `${incoming.body.file}`
+    // (the stable form-field name), which is the shape a DSL
+    // author would write against known form contracts.
     let tmp = TempDir::new().unwrap();
     write_dsl(
         tmp.path(),
         "svc/POST/upload.yml",
         r#"
 reply:
-  return: "${incoming.body['note.txt']}"
+  return: "${incoming.body.file}"
   status: 200
 "#,
     );

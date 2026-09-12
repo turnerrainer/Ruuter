@@ -48,7 +48,12 @@ fn build_router_with_dsls(files: &[(&str, &str)]) -> Arc<DslRouter> {
     let loader = DslLoader::new(cfg.clone(), HashMap::new());
     let loaded = loader.load_everything().unwrap();
     let ws = WsRegistry::new();
-    let engine = StepEngine::new(HttpClient::new(&cfg)).with_ws_registry(ws.clone());
+    let engine = StepEngine::new(
+        HttpClient::new(&cfg),
+        ruuter_on_rust::steps::engine::empty_shared_guards(),
+        cfg.guards.mode,
+    )
+    .with_ws_registry(ws.clone());
     Arc::new(DslRouter::new(
         loaded.http,
         loaded.guards,

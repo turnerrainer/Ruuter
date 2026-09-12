@@ -15,7 +15,7 @@
 
 use crate::{Result, RuuterError};
 use http::{Method, Request};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -34,6 +34,13 @@ use super::HttpResponse;
 /// - `path_and_query` — the request-line target, e.g. `/orders?limit=10`
 /// - `method`, `body`, `headers` — same shape as TCP client
 /// - `timeout` — wall-clock limit; both connect and read are covered
+/// - `response_size_limit` — h2ck.me v1 T-2: when `Some(cap)`, the
+///   response body is wrapped in `http_body_util::Limited` before
+///   `.collect()`, so a misbehaving sidecar returning a very large
+///   body aborts mid-stream at the cap boundary instead of being
+///   fully buffered in memory. `None` keeps the pre-T-2 unbounded
+///   read for callers that opt out explicitly.
+#[allow(clippy::too_many_arguments)]
 pub async fn request_over_unix(
     socket_path: &Path,
     origin_host: &str,
@@ -42,6 +49,7 @@ pub async fn request_over_unix(
     body: Option<&Value>,
     headers: Option<&HashMap<String, Value>>,
     timeout: Duration,
+    response_size_limit: Option<usize>,
 ) -> Result<HttpResponse> {
     let socket_path = socket_path.to_path_buf();
     let origin_host = origin_host.to_string();
@@ -130,12 +138,54 @@ pub async fn request_over_unix(
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
-        let body_bytes = res
-            .into_body()
-            .collect()
-            .await
-            .map_err(|e| RuuterError::HttpRequest(format!("uds body: {}", e)))?
-            .to_bytes();
+        // h2ck.me v1 T-2 — Content-Length preflight, mirrors the TCP
+        // path at `http_client/mod.rs`. Skips the body read entirely
+        // when the upstream declared a length bigger than the cap;
+        // the streaming Limited::new below is the mid-stream fallback
+        // (chunked / no Content-Length / mismatched declaration).
+        if let Some(cap) = response_size_limit {
+            if let Some(len_str) = response_headers.get("content-length") {
+                if let Ok(declared) = len_str.parse::<usize>() {
+                    if declared > cap {
+                        return Err(RuuterError::HttpRequest(format!(
+                            "uds upstream declared body {} bytes exceeds http_response_size_limit {}",
+                            declared, cap
+                        )));
+                    }
+                }
+            }
+        }
+
+        // h2ck.me v1 T-2 — wrap the body in Limited so the reader
+        // aborts mid-stream at the cap. Pre-fix, `.into_body().collect()`
+        // buffered the full upstream payload before any check ran; a
+        // misbehaving sidecar could OOM the process by sending
+        // gigabytes of data. Post-fix, LengthLimitError surfaces from
+        // Limited and the caller sees the same shaped error as the
+        // Content-Length preflight above.
+        let body_bytes = if let Some(cap) = response_size_limit {
+            let limited = Limited::new(res.into_body(), cap);
+            match limited.collect().await {
+                Ok(collected) => collected.to_bytes(),
+                Err(e) => {
+                    if e.downcast_ref::<http_body_util::LengthLimitError>()
+                        .is_some()
+                    {
+                        return Err(RuuterError::HttpRequest(format!(
+                            "uds upstream response body exceeded http_response_size_limit {}",
+                            cap
+                        )));
+                    }
+                    return Err(RuuterError::HttpRequest(format!("uds body: {}", e)));
+                }
+            }
+        } else {
+            res.into_body()
+                .collect()
+                .await
+                .map_err(|e| RuuterError::HttpRequest(format!("uds body: {}", e)))?
+                .to_bytes()
+        };
 
         // Issue #98 — Content-Type-driven decode, shared with the TCP
         // path. Fixes a pre-#98 bug on this seam: non-JSON UDS
