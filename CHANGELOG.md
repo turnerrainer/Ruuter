@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **h2ck.me v1 T-12 — every HTTP DSL sample under `DSL/samples/`
+  now carries a `declaration:` block.** Pre-fix, `grep -rln
+  '^declaration:' DSL/samples/` returned 2 of 58 samples;
+  Ruuter's own samples didn't demonstrate the feature Ruuter
+  advertises. Post-fix, 54 additional samples got a minimal
+  declaration (description + `additive: true` allowlist for HTTP
+  DSLs, `override_ancestors: false` for guards) so DSL authors
+  reading the tree have a working reference.
+
+  The `additive: true` posture means the declaration is
+  documentation-only — undeclared fields still pass through and
+  the sample keeps its existing runtime behaviour. Authors who
+  want strict rejection flip `additive` to `strict: true`.
+
+  WS, trigger, and cron samples are intentionally unchanged —
+  they're not OpenAPI-routable and `warn_on_missing_declarations`
+  already skips them.
+
+  Regression coverage: 2 test functions in
+  `tests/issue_T12_samples_have_declarations.rs` — load
+  `DSL/samples/` and assert `warn_on_missing_declarations` returns
+  0, plus a per-DSL walk that asserts `dsl.declaration.is_some()`
+  for every HTTP-method-bucketed DSL.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed

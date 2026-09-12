@@ -10,6 +10,16 @@
 #   -H 'Content-Type: application/json' \
 #   -d '{"from":"A","to":"B","amount":100}'
 
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "DSL-authored idempotency (as of v0.7.0 — framework-level"
+  additive: true
+
 record:
   state:
     set:
