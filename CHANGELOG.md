@@ -9,6 +9,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **h2ck.me v1 T-1 — `http_response_size_limit` default resolves
+  to `None` on operator YAML.** Pre-fix,
+  `#[serde(default)]` on `pub http_response_size_limit:
+  Option<usize>` fell back to `Default::default()` → `None`, so any
+  operator whose `ruuter.yaml` omitted the field silently ran with
+  the outbound response-body cap disabled. `HttpClient::request`
+  then read via `response.bytes().await`, which allocates the whole
+  upstream body — a misbehaving Resql/TIM sidecar (or attacker-
+  controlled upstream, when the deployment allowed one) could OOM
+  the process by returning a very large body. `AppConfig::default()`
+  did carry `Some(16 * 1024 * 1024)`, but only the "no ruuter.yaml
+  found" boot path used it; the operator-YAML path did not.
+
+  Post-fix, `#[serde(default = "default_http_response_size_limit")]`
+  binds an absent field to `Some(16 * 1024 * 1024)`. Explicit
+  `http_response_size_limit: null` still deserialises to `None` so
+  the uncapped opt-in survives for internal-only deployments; a
+  new `warn_on_raw_config_notes` boot WARN names the field when
+  that opt-in is exercised, so a stray null (typo, copy-paste of a
+  Java template that used null as a sentinel) surfaces at boot in
+  the same log stream as "Loaded config from …". Detection uses a
+  raw-YAML scan (`raw_config_notes`) because the parsed
+  `AppConfig` cannot distinguish "field absent" from "field
+  explicitly null" — both deserialise identically once the default
+  fn runs. `AppConfig::load_or_default_with_notes` returns the
+  observation struct alongside the parsed config; the pre-existing
+  `AppConfig::load_or_default` delegates so no external caller
+  broke.
+
+  Regression coverage: 20 test functions in
+  `tests/issue_T1_http_response_size_limit_default.rs` pin the
+  full matrix — absent, empty document, numeric, large numeric,
+  zero, explicit null, YAML `~` shorthand, malformed YAML, and
+  subscriber-driven tests that capture the actual `tracing::warn!`
+  output on each of those inputs.
+
+- **h2ck.me v1 T-2 — UDS outbound reads response body unbounded
+  regardless of `http_response_size_limit`.** Pre-fix, both UDS
+  transports (`http_client/uds.rs::request_over_unix` and
+  `http_client/uds_pool.rs::request_over_unix_pooled`) called
+  `.into_body().collect().await.to_bytes()` with no cap; a POST-HOC
+  size check in `HttpClient::enforce_status_and_size` then rejected
+  based on the already-buffered `HttpResponse`. Result: a
+  misbehaving trusted sidecar (Resql/TIM bug — not compromise) could
+  OOM Ruuter by returning a very large body, and T-1's config-default
+  fix did not close the seam because the check ran after the read.
+
+  Post-fix, both UDS paths now:
+    1. Preflight `Content-Length` against `response_size_limit` and
+       reject with `RuuterError::HttpRequest("uds upstream declared
+       body N bytes exceeds http_response_size_limit M")` before
+       reading the body. Skips the buffering entirely for
+       oversized-declared responses. Mirrors the TCP path at
+       `http_client/mod.rs`.
+    2. Wrap `res.into_body()` in `http_body_util::Limited::new(body,
+       cap)` before `.collect()`. Chunked / unknown-length responses
+       that would previously buffer past the cap now abort
+       mid-stream at the cap boundary and return
+       `RuuterError::HttpRequest("uds upstream response body
+       exceeded http_response_size_limit M")`.
+    3. The post-hoc `enforce_status_and_size` in `HttpClient` is
+       deleted — dead code once the cap is enforced upstream.
+
+  Public-API surface: `request_over_unix` and
+  `request_over_unix_pooled` gain a trailing `response_size_limit:
+  Option<usize>` argument (matches how the TCP path threads the cap
+  through `HttpClient::response_size_limit`). New test-only builder
+  `HttpClient::with_response_size_limit(Option<usize>)`. Neither is
+  a breaking change for internal callers; external callers of the
+  pub UDS transports (none known) need to pass a cap or `None`.
+
+  Regression coverage: 12 test functions in
+  `tests/issue_T2_uds_body_cap.rs` — Content-Length preflight,
+  mid-stream Limited abort on chunked bodies (no Content-Length),
+  `None` cap opt-out reads full body, cap-equal-to-body edge (off-
+  by-one), cap = 0 rejects any non-empty body, JSON-decode path
+  survives Limited wrap (#98 interaction), pooled + non-pooled
+  parity, alias-map + `unix://` routing parity.
+
 - **h2ck.me v1 T-3 — DNS-rebinding TOCTOU in
   `HttpClient::check_ssrf`.** Pre-fix, `check_ssrf` resolved the URL
   host via `tokio::net::lookup_host` and rejected the request if any
