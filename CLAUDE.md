@@ -2,7 +2,7 @@
 
 Entry-point brief for coding agents (Claude Code, Cursor, etc.) working
 on this repository. Human contributors: start with `README.md`, then
-skim this file for the release gate and the v0.9.11-rc breaking-change
+skim this file for the release gate and the v0.10.0-rc breaking-change
 surface.
 
 Agents shipping a breaking change: read the [Handling a breaking
@@ -35,14 +35,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-10 on `11dae74`):
+Expected on a clean `dev` (verified 2026-09-12 on `0cbb8b3`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 606 passed / 0 failed / 3 ignored across 71 test binaries |
+| `cargo test --no-fail-fast` | 776 passed / 0 failed / 3 ignored across 90 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 64 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
@@ -229,6 +229,157 @@ the recovery shape if it slips.
 For a new breaking change, copy the shape of the closest analog
 above — same CHANGELOG structure, same test-file naming, same
 PR-body template.
+
+## Behaviour-change surface as of v0.10.0-rc (h2ck.me v1 T-1..T-16)
+
+Sixteen backlog items shipped in one minor-bump batch, PRs #101–#116.
+Two Rust-API breaks, two client-facing behaviour changes, six new
+operator surfaces, three P0 security fixes, five boot WARNs. Full
+detail in [CHANGELOG.md § 0.10.0-rc](CHANGELOG.md#0100-rc---2026-09-12).
+
+### 1. `StepEngine::new` requires `guards` + `guards_mode` (T-4, PR #104)
+
+**Rust API breaking.** Pre-fix, `guards: Option<SharedGuards>` was
+populated via a `with_guards()` builder — any embedder that forgot
+the builder call silently reopened the v0.9.11-rc H1 template-bypass.
+Post-fix: `pub fn new(http_client: HttpClient, guards: SharedGuards,
+guards_mode: GuardMode) -> Self`. The `with_guards` builder is gone.
+Callers with legitimately no guards pass a new module-level helper
+`empty_shared_guards()` — an explicit call reviewers can spot. Any
+future call site that forgets guards fails to compile.
+
+**Migration:**
+```rust
+// Before:
+let engine = StepEngine::new(http_client)
+    .with_guards(shared_guards, cfg.guards.mode);
+
+// After:
+let engine = StepEngine::new(http_client, shared_guards, cfg.guards.mode);
+
+// No-guards case (test fixtures, dsl-test harness):
+let engine = StepEngine::new(
+    http_client,
+    ruuter_on_rust::steps::engine::empty_shared_guards(),
+    cfg.guards.mode,
+);
+```
+
+Internal callers (main.rs, testkit, dsl-test, ~50 tests) updated in
+PR #104. External embedders must follow the same shape.
+
+### 2. `StateStore::set` / `update` return `Result` (T-5, PR #105)
+
+**Rust API breaking + new config surface.** Pre-fix, `StateStore`
+was an unbounded `DashMap<StateKey, Value>` — a DSL keying state on
+request data (`state.set(key = ${incoming.body.foo})`) could OOM the
+process. Post-fix:
+
+- New config `state.max_entries_per_project` (default `100_000`,
+  `null` = unbounded).
+- `StateStore::set(...)` returns `Result<()>`. A new-key insert
+  past the cap fails with `RuuterError::InvalidStep("state.set
+  rejected for project 'X': entry count N reached the cap
+  max_entries_per_project=M …")`. Existing-key updates are always
+  allowed.
+- `StateStore::update(...)` returns `Result<Value>` with the same
+  cap contract on new-key inserts.
+- `StateStore::delete` decrements the per-project count.
+- 80%-of-cap boot WARN fires once per project.
+- New admin endpoint `GET /_/state-stats` under `admin_router`.
+
+**Migration for direct callers:** `store.set(...)?` on the DSL path
+(the framework's own step executor already does this). External
+callers must `?` or `.expect()` on both `set` and `update`.
+
+### 3. Multipart uploads key on field name, not filename (T-10, PR #110)
+
+**DSL behaviour breaking.** Pre-fix, `filename.or(name)` in
+`parse_multipart_body` meant an attacker-controlled filename (path
+traversal, homoglyph) became the `incoming.body.<key>` a DSL read
+downstream. Post-fix: `name.or(filename)`. Field name wins;
+filename is used ONLY when the field has no `name=`. Anonymous
+fields still fall back to `"part"`.
+
+**DSL-author migration:** `${incoming.body['note.txt']}` from a
+multipart upload → `${incoming.body.file}` (the stable form-field
+name). Standard form contracts already do this.
+
+### 4. Wrong method on known path → 405 + `Allow:` (T-15, PR #115)
+
+**HTTP wire behaviour.** RFC 7231 §7.4.1 compliance. Pre-fix,
+`PUT /svc/things` when only `GET /svc/things` was routed returned
+`404`. Post-fix: `405 Method Not Allowed` with `Allow: GET, POST,
+PUT` (sorted alphabetically) + body
+`{"error":"Method Not Allowed","allow":["GET","POST","PUT"]}`.
+Paths that don't resolve for ANY method still `404`. Unknown
+projects still `404`. Path-param resolvers work correctly:
+`PATCH /svc/things/42` when only `GET /svc/things.yml` matches via
+suffix-stripping → `405 + Allow: GET`.
+
+**Client migration:** clients hard-coded to `404 == unknown` on
+existing-path/wrong-method may want to also branch on 405. Non-
+existent paths still return 404 — the semantic that has always
+held.
+
+### 5. `RUUTER_HTTP_REWRITE` behind `dev-http-rewrite` Cargo feature (T-6, PR #106)
+
+**Env-var behaviour + build shape.** Pre-fix, the rewriter code
+shipped in every release binary; an operator who accidentally set
+`RUUTER_HTTP_REWRITE` in prod silently disabled SSRF for the
+rewritten origin (only a boot WARN as mitigation). Post-fix:
+`rewrite_url_for_tests` and `rewrite_env_is_active_in_release` are
+compiled ONLY when `debug_assertions` is on OR the
+`dev-http-rewrite` Cargo feature is enabled.
+
+**Operator posture:**
+- Stock `cargo build --release` → rewriter compiled out. Setting
+  the env in prod is a no-op.
+- CI builds `--features dev-http-rewrite` so `dsl-test` scenarios'
+  `http_rewrite:` blocks keep working (see `.github/workflows/tests.yml`).
+- Downstream integration harnesses that want the rewriter in a
+  release binary must enable the feature explicitly.
+
+### 6. Everything else — configuration surface
+
+Non-breaking additions worth knowing:
+
+- **T-1 (PR #101)**: `http_response_size_limit` absent-YAML default
+  is now `Some(16 * 1024 * 1024)`. Pre-fix it silently fell back to
+  `None`; the AppConfig-default `Some(16 MiB)` only applied on
+  no-ruuter.yaml boots. Set to `null` explicitly to opt out; a boot
+  WARN names the field when you do.
+- **T-2 (PR #102)**: UDS transports cap the response body mid-
+  stream via `http_body_util::Limited` + Content-Length preflight.
+  Post-hoc `enforce_status_and_size` removed as dead code.
+- **T-3 (PR #103)**: DNS-rebinding TOCTOU on `check_ssrf` closed
+  by pinning reqwest via `ClientBuilder::resolve(host, addr)` to
+  the exact IP the check saw.
+- **T-7 (PR #107)**: New config `incoming_requests.request_timeout_ms`
+  (default `30_000`, `null` = disabled) wired via
+  `tower_http::timeout::TimeoutLayer`. Breaches surface as
+  `408 Request Timeout`.
+- **T-8 (PR #108)**: Content-Length preflight in `handle_request`
+  returns `413 Payload Too Large` before body read when declared
+  CL > 16 MiB.
+- **T-9 (PR #109)**: Boot WARN when any listener binds non-loopback
+  AND `response_default_headers` doesn't include the OWASP baseline
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-
+  Security`, `Referrer-Policy`).
+- **T-11 (PR #111)**: New `ruuter-doctor` binary — pre-boot config
+  sanity checker. Exit 0 clean / 1 warnings would fire / 2
+  unparseable / 3 bad args. Ships in the container alongside
+  `dsl-lint` and `dsl-test`.
+- **T-12 (PR #112)**: 54 shipped DSL samples got `declaration:`
+  blocks demonstrating the feature.
+- **T-13 (PR #113)**: Boot WARN when `csrf.allowed_origins` is
+  empty (CSRF check silently off).
+- **T-14 (PR #114)**: `RUUTER_OFFLINE=true` env short-circuits
+  every outbound HTTP call to the #89 transport-error stub
+  (`status: 0, error: "offline"`). Boot WARN when set.
+- **T-16 (PR #116)**: Unknown-project 404s no longer echo the
+  client's raw first URL segment as `dsl.project` in the trace
+  span / access log. Renders as `<unknown>`.
 
 ## Behaviour-change surface as of v0.9.15-rc (issues #89 / #90 / #91 / #92)
 

@@ -3,24 +3,49 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.9.16-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.10.0-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.15-rc?** One fix on top of v0.9.15-rc.
-> `http.*` response bodies are now decoded by the upstream
-> `Content-Type` header instead of a parse-JSON-and-see-what-sticks
-> heuristic — `application/json` (with or without `; charset=…`) and
-> `application/*+json` parse; everything else, including missing
-> `Content-Type`, arrives as a UTF-8 lossy string. A
-> `Content-Type: application/json` that lies (gateway-502 pattern
-> returning HTML) logs a WARN and falls back to a raw string so the
-> DSL can still forward / inspect. The UDS transport (both single and
-> pooled) now uses the same helper — pre-fix it silently discarded
-> non-JSON payloads. **Behaviour change for DSL authors:** routes
-> that relied on the old byte-heuristic to parse JSON out of a
-> `text/plain` or missing-`Content-Type` upstream now see a string;
-> fix the upstream to send `Content-Type: application/json`, or add
-> `${JSON.parse(r.response.body)}` in the DSL (#98). Details in
-> [CHANGELOG.md § 0.9.16-rc](CHANGELOG.md#0916-rc---2026-09-11).
+> **Upgrading from v0.9.16-rc?** Minor bump — sixteen backlog
+> items shipped in one batch (T-1..T-16, PRs #101–#116).
+>
+> **Two Rust-API breaking changes** for embedders:
+> - `StepEngine::new` now takes `(HttpClient, SharedGuards,
+>   GuardMode)`. Use `empty_shared_guards()` for the "no guards"
+>   case; the pre-fix `.with_guards()` builder is gone. Callers
+>   that skipped guard wiring silently reopened the v0.9.11-rc
+>   template-bypass — the compile error is the regression pin.
+> - `StateStore::set` returns `Result<()>` (was `()`); `update`
+>   returns `Result<Value>` (was `Value`). New keys past the
+>   configured `state.max_entries_per_project` cap surface as
+>   `RuuterError::InvalidStep` instead of silently growing the
+>   map.
+>
+> **Two client-facing behaviour changes** for DSL authors and HTTP
+> clients:
+> - Multipart uploads key `incoming.body.<X>` on the form-field
+>   NAME (`name="file"`) rather than the client-controlled
+>   `filename=`. DSLs that read `${incoming.body['note.txt']}`
+>   from an upload now read `${incoming.body.file}`.
+> - Wrong method on a routed path returns `405 Method Not
+>   Allowed` with `Allow: GET, POST, PUT` instead of `404`.
+>   Non-existent paths still `404`.
+>
+> **Operator-facing surface**: `ruuter-doctor` binary for pre-boot
+> config validation, `RUUTER_OFFLINE=true` env for hard-stubbed
+> outbound, inbound `TimeoutLayer` (30 s default), Content-Length
+> preflight → 413 before body read, `state.max_entries_per_project`
+> cap (default 100 k, `null` opts out), `dev-http-rewrite` Cargo
+> feature gate on `RUUTER_HTTP_REWRITE`, boot WARNs for missing
+> OWASP baseline headers on a non-loopback bind and for empty
+> `csrf.allowed_origins`.
+>
+> **Under the hood** (P0 security): `http_response_size_limit`
+> default now applies to operator YAML (was silently unbounded);
+> UDS transports cap the response body mid-stream via
+> `http_body_util::Limited`; DNS-rebinding TOCTOU on `check_ssrf`
+> closed by pinning reqwest to the resolved IP.
+>
+> Full detail in [CHANGELOG.md § 0.10.0-rc](CHANGELOG.md#0100-rc---2026-09-12).
 
 ## Try it in one command
 
@@ -28,7 +53,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.9.16-rc
+    turnerrainer/ruuter:0.10.0-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -42,7 +67,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.9.16-rc
+    turnerrainer/ruuter:0.10.0-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -65,12 +90,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.16-rc \
+    turnerrainer/ruuter:0.10.0-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.9.16-rc \
+    turnerrainer/ruuter:0.10.0-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 
