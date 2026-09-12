@@ -306,15 +306,13 @@ jobs:
 
       # Create the GitHub Release entry for this tag if one doesn't
       # already exist. Body = the matching CHANGELOG.md section
-      # extracted by a simple sed-between-headings. Stable tags are
-      # marked `--latest`; pre-release tags (`-rc`, `-beta`, ...) are
-      # marked `--prerelease` and are NOT elected Latest, so casual
-      # visitors to the Releases page and consumers of the GitHub
-      # "latest release" API keep pointing at the newest stable rather
-      # than being pulled forward onto an unfinished RC. The moving
-      # Docker `:rc` tag (composed above) is the pull recipe for
-      # partners tracking the RC track. Skipped cleanly when the
-      # release already exists (backfilled by hand, re-runs, etc.).
+      # extracted by a simple sed-between-headings. Marks the release
+      # as "latest" for stable tags AND for the top of the current
+      # RC track (pre-release tags), overriding GitHub's default
+      # "no pre-release as Latest" so browsers of the Releases page
+      # see the most recent shipped version front and centre. Skipped
+      # cleanly when the release already exists (backfilled by hand,
+      # re-runs, etc.).
       - name: Create or refresh GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -342,23 +340,16 @@ jobs:
             printf 'Container images:\n- `docker pull turnerrainer/ruuter:%s`\n- `docker pull ghcr.io/turnerrainer/ruuter:%s`\n' \
                    "${VERSION}" "${VERSION}" > "${notes_file}"
           fi
-          # Two shapes, mutually exclusive: stable → --latest,
-          # pre-release → --prerelease + --latest=false. `gh release
-          # create` refuses to combine `--latest` with `--prerelease`,
-          # and its default without either flag is server-side
-          # heuristics we don't want to depend on.
-          if [ "${PRERELEASE}" = "true" ]; then
-            gh release create "${TAG_REF}" \
-                --title "${TAG_REF}" \
-                --notes-file "${notes_file}" \
-                --prerelease \
-                --latest=false
-          else
-            gh release create "${TAG_REF}" \
-                --title "${TAG_REF}" \
-                --notes-file "${notes_file}" \
-                --latest
-          fi
+          # Always mark as Latest — stable and RC alike. For RCs we
+          # also need `--prerelease=false` so GitHub accepts the
+          # `--latest` flag (server refuses to elect a pre-release).
+          # Tag name still carries `-rc`; the pre-release flag is a
+          # UI convention we're intentionally overriding on this repo
+          # where RCs ARE the shipped artefacts.
+          gh release create "${TAG_REF}" \
+              --title "${TAG_REF}" \
+              --notes-file "${notes_file}" \
+              --latest
           rm -f "${notes_file}"
 
       - name: Install cosign
