@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **h2ck.me v1 T-6 — `RUUTER_HTTP_REWRITE` is now gated behind a
+  new `dev-http-rewrite` Cargo feature in release builds.** Pre-
+  fix, the env-var-driven URL rewriter shipped in every release
+  binary. An operator who accidentally set the env var in prod
+  silently disabled `check_ssrf` for the rewritten origin — the
+  h2ck.me M2 boot WARN was a mitigation, not a fix.
+
+  Post-fix, `rewrite_url_for_tests` and
+  `rewrite_env_is_active_in_release` are conditionally compiled
+  behind `#[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]`.
+  The non-feature branch replaces both with no-op stubs (const
+  `RUUTER_HTTP_REWRITE_ENV` still exported — it's just a string).
+  A stock `cargo build --release` produces a binary in which the
+  rewriter code is not present; setting the env var in prod has
+  literally no effect on outbound URL routing.
+
+  Debug builds (`cfg!(debug_assertions)`) and release builds with
+  `--features dev-http-rewrite` retain the pre-fix behaviour so
+  `dsl-test`, mock-http harnesses, and staging binaries that
+  legitimately need URL redirection keep working. The M2 WARN
+  logic in `main.rs` still calls
+  `rewrite_env_is_active_in_release()`, but in a stock release
+  binary that always returns `false`, so the WARN is a no-op —
+  matching the reality that the rewriter isn't there to fire.
+
+  Regression coverage: 4 test functions in
+  `tests/issue_T6_rewrite_feature_gated.rs` — env-var name const
+  is stable in both builds, `rewrite_env_is_active_in_release` in
+  a debug-assertions-on binary always returns `false` (empty +
+  set env), and the debug-mode rewriter still redirects outbound
+  URLs to a local server. Release-build no-op verified by
+  `cargo build --release` and `cargo build --release --features
+  dev-http-rewrite` in CI.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed
