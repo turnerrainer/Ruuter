@@ -6,7 +6,7 @@ use once_cell::sync::OnceCell;
 use reqwest::{Client, Method};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,33 @@ pub mod uds;
 pub mod uds_pool;
 
 use uds_pool::UdsPool;
+
+/// h2ck.me v1 T-3 — outcome of `HttpClient::check_ssrf`. When the URL
+/// passed validation but required a DNS lookup, the picked
+/// address(es) come back so the caller can pin the outbound reqwest
+/// client to those exact IPs via `reqwest::ClientBuilder::resolve`.
+/// This closes the DNS-rebinding TOCTOU: an attacker-controlled
+/// resolver that returns a public IP for the SSRF check and a
+/// private IP for the subsequent reqwest connect cannot flip the
+/// answer because reqwest is bound to the pre-approved addr.
+/// When no lookup was needed (IP-literal URL, allowlist opt-in, or
+/// `block_private_networks=false`), the caller uses the shared
+/// `HttpClient::client` unchanged.
+#[derive(Debug, Clone)]
+pub(crate) enum SsrfResolution {
+    /// No DNS pinning needed — either the URL host is an IP literal,
+    /// the SSRF block wasn't active, or an allowlist approved the
+    /// request explicitly.
+    NoPinning,
+    /// URL host resolved and every candidate address passed the
+    /// private-network check. The caller must build a fresh reqwest
+    /// client with `.resolve(host, addr)` per addr so the connect
+    /// uses these pinned addresses.
+    Pinned {
+        host: String,
+        addrs: Vec<SocketAddr>,
+    },
+}
 
 /// Task 044 — implemented by the framework's DSL router so
 /// `HttpClient` can dispatch `http.<verb>` self-calls back through
@@ -266,7 +293,7 @@ impl HttpClient {
         &self.uds_pool
     }
 
-    async fn check_ssrf(&self, url: &str) -> Result<()> {
+    async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
         if self.outbound_disabled {
             return Err(RuuterError::HttpRequest(
                 "outbound HTTP is disabled by internal_requests.disabled".into(),
@@ -309,35 +336,34 @@ impl HttpClient {
                 )));
             }
         }
-        // h2ck.me N4 / F2 — reject targets in loopback / link-local /
-        // private ranges when no explicit allowlist has already
-        // approved them. An operator who intentionally allows a
-        // private target via `allowed_ips` or `allowed_urls` opts out
-        // of this check for that host — the allowlist branches above
-        // return early on hit, so we only reach here for a permissive
-        // config (both allowlists empty), which is exactly the
-        // cloud-metadata SSRF exposure documented in N4/F2.
+        // h2ck.me N4 / F2 / v1 T-3 — reject targets in loopback /
+        // link-local / private ranges when no explicit allowlist has
+        // already approved them. An operator who intentionally allows
+        // a private target via `allowed_ips` or `allowed_urls` opts
+        // out of this check for that host — the allowlist branches
+        // above return early on hit, so we only reach here for a
+        // permissive config (both allowlists empty), which is
+        // exactly the cloud-metadata SSRF exposure documented in
+        // N4/F2.
         //
         // F2 extension over N4: hostnames MUST also be checked. The
         // original N4 fix only parsed the URL host as an `IpAddr`,
         // so `http://localhost/`, `http://metadata.google.internal/`,
-        // and any attacker-controlled DNS name slipped past. We now
+        // and any attacker-controlled DNS name slipped past. We
         // resolve the host via `tokio::net::lookup_host` and check
         // every returned address against `is_private_or_local`. A
         // single private hit rejects the request.
         //
-        // DNS-rebinding note: reqwest resolves per connection, not
-        // per request; within a pooled connection the resolved
-        // address is stable, so a rebinding between check and
-        // connect requires the resolver to return a DIFFERENT
-        // address on the second call. The reqwest client below
-        // performs a fresh resolve for the actual connect, but that
-        // resolve happens seconds later (in the worst case) — an
-        // attacker who controls the DNS record can flip the answer.
-        // Full rebinding defence requires pinning the reqwest
-        // connection to the resolved IP; documented as a future
-        // hardening pass. The current check closes the practical
-        // hostname-encoded metadata-SSRF path from the F2 report.
+        // v1 T-3 (DNS-rebinding close): the resolved addresses are
+        // now returned as `SsrfResolution::Pinned` so the caller
+        // can build a per-request reqwest client with
+        // `.resolve(host, addr)` for each addr. Pre-fix, reqwest
+        // performed a FRESH resolve at connect time — an attacker
+        // controlling the DNS record could flip the answer between
+        // check and connect (`public → check pass → connect fires
+        // → private`). Post-fix, reqwest is bound to the exact IP
+        // that passed the check; a fresh DNS answer at connect time
+        // cannot flip it.
         if self.block_private_networks
             && self.allowed_url_prefixes.is_empty()
             && self.allowed_ip_hosts.is_empty()
@@ -357,31 +383,81 @@ impl HttpClient {
                         host
                     )));
                 }
-            } else {
-                // Hostname — resolve and check every candidate address.
-                // A single private hit rejects the whole request; that
-                // matches the operator's mental model of the flag
-                // ("nothing that resolves to a private range").
-                let lookup_target = format!("{}:{}", host, port);
-                let addrs = tokio::net::lookup_host(lookup_target.as_str())
-                    .await
-                    .map_err(|e| {
-                        RuuterError::HttpRequest(format!("dns lookup for '{}' failed: {}", host, e))
-                    })?;
-                for a in addrs {
-                    if is_private_or_local(a.ip()) {
-                        return Err(RuuterError::HttpRequest(format!(
-                            "outbound to '{}' blocked: DNS resolved to private / link-local {} \
-                             (set internal_requests.block_private_networks=false or \
-                             add the host to internal_requests.allowed_ips to opt in)",
-                            host,
-                            a.ip()
-                        )));
-                    }
+                // IP-literal URL — no DNS to pin.
+                return Ok(SsrfResolution::NoPinning);
+            }
+            // Hostname — resolve and check every candidate address.
+            // A single private hit rejects the whole request; that
+            // matches the operator's mental model of the flag
+            // ("nothing that resolves to a private range"). ALL
+            // returned addrs are pinned so multi-A-record hosts
+            // still function under failover.
+            let lookup_target = format!("{}:{}", host, port);
+            let mut collected: Vec<SocketAddr> = Vec::new();
+            let addrs = tokio::net::lookup_host(lookup_target.as_str())
+                .await
+                .map_err(|e| {
+                    RuuterError::HttpRequest(format!("dns lookup for '{}' failed: {}", host, e))
+                })?;
+            for a in addrs {
+                if is_private_or_local(a.ip()) {
+                    return Err(RuuterError::HttpRequest(format!(
+                        "outbound to '{}' blocked: DNS resolved to private / link-local {} \
+                         (set internal_requests.block_private_networks=false or \
+                         add the host to internal_requests.allowed_ips to opt in)",
+                        host,
+                        a.ip()
+                    )));
                 }
+                collected.push(a);
+            }
+            if collected.is_empty() {
+                // Shouldn't happen — lookup_host returning zero addrs
+                // is unusual, but if it does, reject rather than fall
+                // through to an unpinned connect.
+                return Err(RuuterError::HttpRequest(format!(
+                    "outbound to '{}' blocked: DNS returned no addresses",
+                    host
+                )));
+            }
+            return Ok(SsrfResolution::Pinned {
+                host: host.to_string(),
+                addrs: collected,
+            });
+        }
+        Ok(SsrfResolution::NoPinning)
+    }
+
+    /// h2ck.me v1 T-3 — pick the reqwest client to use for this
+    /// request. When `check_ssrf` returned `Pinned`, build a fresh
+    /// per-request client with every resolved address wired via
+    /// `.resolve()`, so reqwest connects only to those addresses and
+    /// cannot flip to a fresh (attacker-controlled) DNS answer at
+    /// connect time. Falls back to the shared pooled client in the
+    /// no-pinning case (IP-literal URL, allowlist opt-in, or
+    /// block_private_networks disabled).
+    fn build_pinned_client(
+        &self,
+        resolution: &SsrfResolution,
+        per_request_timeout: Duration,
+    ) -> Result<Client> {
+        match resolution {
+            SsrfResolution::NoPinning => Ok(self.client.clone()),
+            SsrfResolution::Pinned { host, addrs } => {
+                let mut builder = Client::builder()
+                    .timeout(per_request_timeout)
+                    .redirect(reqwest::redirect::Policy::none());
+                for addr in addrs {
+                    builder = builder.resolve(host, *addr);
+                }
+                builder.build().map_err(|e| {
+                    RuuterError::HttpRequest(format!(
+                        "failed to build DNS-pinned client for '{}': {}",
+                        host, e
+                    ))
+                })
             }
         }
-        Ok(())
     }
 
     pub async fn request(
@@ -477,12 +553,18 @@ impl HttpClient {
                 .await;
         }
 
-        self.check_ssrf(url).await?;
+        // h2ck.me v1 T-3 — perform the SSRF check first and pick the
+        // reqwest client accordingly. `SsrfResolution::Pinned` builds
+        // a fresh per-request client with `.resolve()` wired to the
+        // exact IP(s) that passed the check; the actual connect can
+        // no longer flip to a fresh (attacker-controlled) DNS answer.
+        let ssrf = self.check_ssrf(url).await?;
+        let per_request_timeout = timeout.unwrap_or(self.default_timeout);
+        let effective_client = self.build_pinned_client(&ssrf, per_request_timeout)?;
 
-        let mut request = self
-            .client
+        let mut request = effective_client
             .request(method, url)
-            .timeout(timeout.unwrap_or(self.default_timeout));
+            .timeout(per_request_timeout);
 
         if let Some(q) = query {
             for (k, v) in q {
