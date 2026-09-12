@@ -285,9 +285,7 @@ struct CaptureGuard {
 
 fn capture(buf: SharedBuf) -> CaptureGuard {
     use tracing_subscriber::{fmt, EnvFilter};
-    let lock = subscriber_mutex()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let lock = subscriber_mutex().lock().unwrap_or_else(|p| p.into_inner());
     let subscriber = fmt()
         .with_writer(buf)
         .with_max_level(tracing::Level::WARN)
