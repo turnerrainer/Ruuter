@@ -934,6 +934,32 @@ impl AppConfig {
     }
 }
 
+/// h2ck.me v1 T-11 — load with an OPTIONAL explicit override path
+/// (used by `ruuter-doctor --config <path>`). When `override_path`
+/// is `Some(p)`, that path is used exclusively; the conventional
+/// search order is skipped. When `None`, delegates to
+/// `AppConfig::load_or_default` so behaviour matches the main
+/// binary exactly.
+///
+/// Returns the same `(Self, Option<PathBuf>)` tuple as
+/// `load_or_default` — with the override, `source` is
+/// `Some(override_path)` on success.
+pub fn load_or_default_via_env_or_path(
+    override_path: Option<&std::path::Path>,
+) -> crate::Result<(AppConfig, Option<PathBuf>)> {
+    if let Some(p) = override_path {
+        let path = p.to_path_buf();
+        let body = std::fs::read_to_string(&path).map_err(|e| {
+            crate::RuuterError::Config(format!("reading config file {}: {}", path.display(), e))
+        })?;
+        let cfg: AppConfig = serde_yaml_ng::from_str(&body).map_err(|e| {
+            crate::RuuterError::Config(format!("parsing config file {}: {}", path.display(), e))
+        })?;
+        return Ok((cfg, Some(path)));
+    }
+    AppConfig::load_or_default()
+}
+
 /// Audit finding 15 — startup warning for config fields that the
 /// framework accepts (so operators can port a Java `application.yml`
 /// as-is) but doesn't yet wire end-to-end. Each warn line names the
