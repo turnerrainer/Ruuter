@@ -426,6 +426,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points at the doc, matching the fleet's default-off-warn pattern.
   5 tests in `tests/issue_T13_csrf_empty_origins_warn.rs`.
 
+### Added
+
+- **h2ck.me v1 T-14 — `RUUTER_OFFLINE=true` env for hard-stubbed
+  outbound HTTP.** `dsl-test` already has a MockServer + per-test
+  `http_rewrite:` for hermetic testing; production and staging
+  boot had no analogue. Post-fix, setting the env to any truthy
+  value (`true`, `1`, `yes`, `on`, case-insensitive) short-
+  circuits every outbound `http.*` step BEFORE `check_ssrf` /
+  connect / UDS. Response shape matches issue #89's
+  transport-error stub so DSL `check_*` switches keyed on
+  `${result.response.status == 0}` fire in offline mode too:
+
+  ```json
+  { "status": 0,
+    "error": "offline",
+    "body": { "error": "offline", "message": "..." },
+    "headers": {} }
+  ```
+
+  `main.rs` emits a boot WARN whenever the env is set so ops
+  teams don't confuse offline-mode zero-status responses for
+  a real upstream outage.
+
+  New public helpers in `ruuter_on_rust::http_client`:
+  `ruuter_offline_env_active() -> bool`,
+  `offline_stub_response() -> HttpResponse`, and the const
+  `RUUTER_OFFLINE_ENV`.
+
+  Regression coverage: 16 test functions in
+  `tests/issue_T14_ruuter_offline_env.rs` pin the truthy-value
+  classifier (unset, empty, false, 0, true, TRUE, 1, yes, on,
+  junk), stub shape (status/error/body/headers), and end-to-end
+  behaviour through `HttpClient::request`. Env mutations are
+  serialised through a process-wide mutex to avoid races with
+  parallel tests.
+
 ## [0.9.16-rc] - 2026-09-11
 
 ### Changed

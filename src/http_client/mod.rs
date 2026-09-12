@@ -502,6 +502,18 @@ impl HttpClient {
         timeout: Option<Duration>,
         content_type: Option<&str>,
     ) -> Result<HttpResponse> {
+        // h2ck.me v1 T-14 — `RUUTER_OFFLINE=true` short-circuits
+        // every outbound before check_ssrf / dial / UDS. Same stub
+        // shape as issue #89's transport-error path so DSL authors
+        // can pin their `check_*` switches (`${result.response.status
+        // == 0}` or `${result.response.error == 'offline'}`) once and
+        // have them fire in offline mode too. `main.rs` emits a boot
+        // WARN when the env is set so ops know the process is in
+        // offline mode.
+        if ruuter_offline_env_active() {
+            return Ok(offline_stub_response());
+        }
+
         // Test-only URL rewriting (see `rewrite_url_for_tests`). Applied
         // BEFORE SSRF checks so tests can point at a local mock without
         // punching a hole in the allowlist.
@@ -1393,6 +1405,43 @@ impl HttpClient {
 /// Env-var name for [`rewrite_url_for_tests`] and
 /// [`rewrite_env_is_active_in_release`].
 pub const RUUTER_HTTP_REWRITE_ENV: &str = "RUUTER_HTTP_REWRITE";
+
+/// h2ck.me v1 T-14 — env var that short-circuits every outbound
+/// HTTP call into a stub response (matches the #89 transport-error
+/// shape). Set to any truthy string (`true`, `1`, `yes`, `on`) to
+/// enable. Intended for staging / integration harnesses; ops emits
+/// a boot WARN whenever it's set.
+pub const RUUTER_OFFLINE_ENV: &str = "RUUTER_OFFLINE";
+
+/// h2ck.me v1 T-14 — true when `RUUTER_OFFLINE` is set to a truthy
+/// value. Case-insensitive on `true`, `1`, `yes`, `on`. Empty /
+/// unset / falsey → false. Public so `main.rs` can wire the boot
+/// WARN using the same predicate the request path uses.
+pub fn ruuter_offline_env_active() -> bool {
+    let Ok(v) = std::env::var(RUUTER_OFFLINE_ENV) else {
+        return false;
+    };
+    let trimmed = v.trim().to_ascii_lowercase();
+    matches!(trimmed.as_str(), "true" | "1" | "yes" | "on")
+}
+
+/// h2ck.me v1 T-14 — the stub response every outbound gets in
+/// offline mode. Same shape as issue #89's transport-error stub
+/// (`status: 0`, `error: Some("offline")`) so DSL `check_*` switches
+/// keyed on `${result.response.status == 0}` fire in offline mode
+/// too. Body carries a machine-readable `{"error":"offline"}` so
+/// DSLs that inspect the body see a self-describing marker.
+pub fn offline_stub_response() -> HttpResponse {
+    HttpResponse {
+        status: 0,
+        body: Some(serde_json::json!({
+            "error": "offline",
+            "message": "outbound HTTP is disabled by RUUTER_OFFLINE (h2ck.me v1 T-14)",
+        })),
+        headers: HashMap::new(),
+        error: Some("offline".to_string()),
+    }
+}
 
 /// h2ck.me M2 / v1 T-6 — surface whether `RUUTER_HTTP_REWRITE` is
 /// set in a posture where it could silently disable SSRF checks.
