@@ -63,6 +63,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No production code change; scaffolding only. Semver: additive
   test-only.
 
+- **h2ck.me v1 T-30 — Graceful shutdown on SIGTERM / SIGINT.**
+  Pre-fix, `src/main.rs` awaited `axum::serve(...)` (and each
+  multi-listener spawned task) without a shutdown-signal hook. On
+  Kubernetes rolling deploys, `docker stop`, or `systemctl
+  stop`, the runtime would deliver SIGTERM and — with no
+  handler installed — either kept accepting new work until the
+  terminationGracePeriodSeconds SIGKILL, or dropped tokio tasks
+  partway through a DSL run, tearing the in-flight HTTP response
+  the caller was waiting on.
+
+  Post-fix, a single `tokio::sync::watch` shutdown signal is
+  flipped by a dedicated watcher task when SIGINT or SIGTERM
+  arrives. Each `axum::serve` call now consumes it via
+  `with_graceful_shutdown` (stops accepting, waits for in-flight
+  requests to complete). The UDS accept loop `tokio::select`s on
+  the same signal, breaks out on shutdown, and drains a
+  `tokio::task::JoinSet` of in-flight per-connection tasks with
+  a bounded grace window (`SHUTDOWN_GRACE_SECS = 15`; connections
+  still active past the wall are `abort_all`'d with a WARN naming
+  the leak). SIGTERM handling is `#[cfg(unix)]`-gated so the
+  crate remains buildable on Windows for developer dev-loop
+  purposes; on non-Unix platforms only Ctrl+C fires the signal.
+
+  Regression coverage: `tests/issue_T30_graceful_shutdown.rs`
+  spawns ruuter as a subprocess with a temp DSL that calls a slow
+  in-test upstream (5s reply). The test fires an inbound request,
+  waits 1.5s so the upstream call is in flight, sends `SIGTERM`
+  via `/bin/kill -TERM <pid>`, then asserts (a) the response
+  arrives with HTTP 200 and the mocked upstream body — no torn or
+  aborted response, and (b) the ruuter process exits within 20s
+  of SIGTERM (well under the k8s SIGKILL default of 30s). Ships a
+  small hand-rolled HTTP GET client to avoid pulling in a new
+  dev-dep just for this test.
+
+  No config surface change. `SHUTDOWN_GRACE_SECS` is currently a
+  compile-time constant; if a downstream deployment reports
+  needing a different value, add a config knob then.
+
 ### Documentation
 
 - **h2ck.me v1 T-32 — Document query-parameter last-wins

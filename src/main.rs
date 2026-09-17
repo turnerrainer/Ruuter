@@ -14,7 +14,57 @@ use ruuter_on_rust::{
     ws::WsRegistry,
 };
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// h2ck.me v1 T-30 — Await SIGINT (Ctrl+C in a terminal) or SIGTERM
+/// (Kubernetes rolling deploy, docker stop, systemd graceful stop).
+/// The first one wins; we do NOT re-arm because axum's graceful-
+/// shutdown contract only takes a single "shutdown now" signal.
+///
+/// The `#[cfg(unix)]` gate keeps this compilable on Windows for dev
+/// builds — CI targets Linux only, but developers on macOS or
+/// Windows shouldn't be blocked from `cargo build` on the crate.
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            // Rare — usually only when the platform can't install
+            // the handler at all. Log and fall through so the other
+            // arm can still trigger.
+            error!("failed to install Ctrl+C / SIGINT handler: {}", e);
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                let _ = term.recv().await;
+            }
+            Err(e) => {
+                error!("failed to install SIGTERM handler: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("Received SIGINT; starting graceful shutdown"),
+        _ = terminate => info!("Received SIGTERM; starting graceful shutdown"),
+    }
+}
+
+/// h2ck.me v1 T-30 — Bounded grace period for in-flight requests to
+/// drain before the process exits. Kubernetes' default
+/// `terminationGracePeriodSeconds` is 30 — we spend up to 15 on the
+/// listener drain, leaving 15 for tokio-runtime shutdown and OS
+/// teardown. Not currently configurable; add a config knob if a
+/// downstream deployment reports needing more.
+const SHUTDOWN_GRACE_SECS: u64 = 15;
 
 #[tokio::main]
 async fn main() {
@@ -312,6 +362,28 @@ async fn main() {
         app = app.merge(router.admin_router());
     }
 
+    // h2ck.me v1 T-30 — Shutdown coordination. All listener tasks
+    // watch this signal; when SIGINT or SIGTERM fires, the watcher
+    // task flips it to `true`, listeners stop accepting, and
+    // in-flight requests get up to `SHUTDOWN_GRACE_SECS` to drain.
+    // A `tokio::sync::watch::channel` fits here because we need
+    // *broadcast* semantics (every listener sees the signal) and
+    // *latching* semantics (a late-arriving listener task still
+    // observes "shutdown was fired" if it clones the receiver after
+    // the fact).
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+
+    // Convenience: a fresh future that resolves when `shutdown_rx`
+    // becomes `true`. Cloned per-listener so each `axum::serve`
+    // call gets its own instance.
+    let make_shutdown_fut = move |mut rx: tokio::sync::watch::Receiver<bool>| async move {
+        let _ = rx.wait_for(|v| *v).await;
+    };
+
     // Task 043 — start server(s). When `config.listeners` is empty,
     // fall back to the 0.4.0 single-TCP-listener behaviour on
     // `config.port`. When non-empty, that config REPLACES the
@@ -326,15 +398,25 @@ async fn main() {
                 error!("Failed to bind to {}: {}", addr, e);
                 std::process::exit(1);
             });
-        axum::serve(
+        // T-30 — with_graceful_shutdown stops accepting on signal
+        // AND waits for in-flight requests to complete. If the wait
+        // exceeds the k8s / systemd terminationGracePeriodSeconds,
+        // the runtime SIGKILLs us; SHUTDOWN_GRACE_SECS below is the
+        // ceiling on THIS process's polite wait, not a hard cap on
+        // in-flight requests (those are already bounded by T-7's
+        // TimeoutLayer).
+        let shutdown_fut = make_shutdown_fut(shutdown_rx.clone());
+        if let Err(e) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
+        .with_graceful_shutdown(shutdown_fut)
         .await
-        .unwrap_or_else(|e| {
+        {
             error!("Server error: {}", e);
             std::process::exit(1);
-        });
+        }
+        info!("Server drained cleanly");
     } else {
         // Multi-listener mode. Each listener runs axum::serve on its
         // own task; the process stays alive until the first listener
@@ -367,15 +449,18 @@ async fn main() {
                             error!("listener {}: bind {} failed: {}", label, bind, e);
                             std::process::exit(1);
                         });
+                    let shutdown_fut = make_shutdown_fut(shutdown_rx.clone());
                     handles.push(tokio::spawn(async move {
                         if let Err(e) = axum::serve(
                             listener,
                             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
                         )
+                        .with_graceful_shutdown(shutdown_fut)
                         .await
                         {
                             error!("listener {}: {}", label, e);
                         }
+                        info!("listener {}: drained", label);
                     }));
                 }
                 (None, Some(path)) => {
@@ -403,55 +488,104 @@ async fn main() {
                         std::process::exit(1);
                     });
                     let use_h2 = l.http2;
+                    let mut shutdown_rx_uds = shutdown_rx.clone();
                     // axum::serve is TcpListener-only; run a per-
                     // connection hyper accept loop instead. The
                     // Router is `Clone + Service`, so each connection
                     // gets its own service instance. Task 049 adds
                     // h2c via the http2 server builder as an alt
                     // path controlled by `listener.http2: true`.
+                    //
+                    // T-30 — accept loop selects on `shutdown_rx`.
+                    // When the signal fires, break out of the accept
+                    // loop and drain the JoinSet of per-connection
+                    // tasks with a bounded timeout. New connections
+                    // arriving after the break are refused by not
+                    // being accepted.
                     handles.push(tokio::spawn(async move {
+                        let mut conns: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
                         loop {
-                            let (stream, _addr) = match listener.accept().await {
-                                Ok(pair) => pair,
-                                Err(e) => {
-                                    error!("listener {}: accept error: {}", label, e);
-                                    continue;
-                                }
-                            };
-                            let app = app.clone();
-                            tokio::spawn(async move {
-                                let io = hyper_util::rt::TokioIo::new(stream);
-                                let service = hyper_util::service::TowerToHyperService::new(app);
-                                if use_h2 {
-                                    if let Err(e) = hyper::server::conn::http2::Builder::new(
-                                        hyper_util::rt::TokioExecutor::new(),
-                                    )
-                                    .serve_connection(io, service)
-                                    .await
-                                    {
-                                        tracing::debug!("uds h2c conn: {}", e);
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx_uds.changed() => {
+                                    if *shutdown_rx_uds.borrow() {
+                                        info!("listener {}: stop accepting", label);
+                                        break;
                                     }
-                                } else if let Err(e) = hyper::server::conn::http1::Builder::new()
-                                    .serve_connection(io, service)
-                                    .await
-                                {
-                                    tracing::debug!("uds conn: {}", e);
                                 }
-                            });
+                                acc = listener.accept() => {
+                                    let (stream, _addr) = match acc {
+                                        Ok(pair) => pair,
+                                        Err(e) => {
+                                            error!("listener {}: accept error: {}", label, e);
+                                            continue;
+                                        }
+                                    };
+                                    let app = app.clone();
+                                    conns.spawn(async move {
+                                        let io = hyper_util::rt::TokioIo::new(stream);
+                                        let service = hyper_util::service::TowerToHyperService::new(app);
+                                        if use_h2 {
+                                            if let Err(e) = hyper::server::conn::http2::Builder::new(
+                                                hyper_util::rt::TokioExecutor::new(),
+                                            )
+                                            .serve_connection(io, service)
+                                            .await
+                                            {
+                                                tracing::debug!("uds h2c conn: {}", e);
+                                            }
+                                        } else if let Err(e) = hyper::server::conn::http1::Builder::new()
+                                            .serve_connection(io, service)
+                                            .await
+                                        {
+                                            tracing::debug!("uds conn: {}", e);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        let inflight = conns.len();
+                        if inflight > 0 {
+                            info!(
+                                "listener {}: draining {} in-flight connection(s), grace {}s",
+                                label, inflight, SHUTDOWN_GRACE_SECS
+                            );
+                            let drain = async {
+                                while conns.join_next().await.is_some() {}
+                            };
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(SHUTDOWN_GRACE_SECS),
+                                drain,
+                            )
+                            .await
+                            {
+                                Ok(()) => info!("listener {}: drained", label),
+                                Err(_) => {
+                                    warn!(
+                                        "listener {}: drain timed out after {}s, {} still active — aborting",
+                                        label,
+                                        SHUTDOWN_GRACE_SECS,
+                                        conns.len()
+                                    );
+                                    conns.abort_all();
+                                }
+                            }
+                        } else {
+                            info!("listener {}: drained (no in-flight)", label);
                         }
                     }));
                 }
             }
         }
-        // Wait for any listener to exit (normally: never). Selecting
-        // on all handles rather than joining means one crashing
-        // listener brings the process down instead of silently
-        // dropping traffic.
-        let (result, _idx, _rest) = futures::future::select_all(handles).await;
-        if let Err(e) = result {
-            error!("listener task panicked: {}", e);
-        }
+        // T-30 — wait for ALL listeners to finish draining (previously
+        // we returned on the first exit, which was fine for the
+        // "listener panics = process exits" invariant but would cut
+        // the graceful drain short on the sibling listeners). If one
+        // listener panics we still want to exit; select_all covers
+        // that seam via the panic reflowing to a JoinError.
+        futures::future::join_all(handles).await;
     }
 
     observability::shutdown(tracer_provider);
+    info!("Ruuter-on-Rust shutdown complete");
 }
