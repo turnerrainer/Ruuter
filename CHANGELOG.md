@@ -101,6 +101,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compile-time constant; if a downstream deployment reports
   needing a different value, add a config knob then.
 
+- **h2ck.me v1 T-28 — Multipart part-count + per-part-size cap.**
+  Pre-fix, `parse_multipart_body` in `src/router/mod.rs` iterated
+  every part via `multer::Multipart::next_field()` with no upper
+  bound. A body carrying 10 000 parts allocated a HashMap entry
+  (and buffered the field bytes) per part; a single 500 MB part
+  accumulated into a `Vec<u8>` before the caller ever saw it. The
+  aggregate 16 MiB body cap on the fallback handler bounded the
+  total, but nothing bounded the *shape* — an attacker within the
+  aggregate cap could still choose "10 000 tiny parts" to
+  amplify per-part HashMap overhead, or "one very large part" to
+  push per-part accumulation to the limit. Surfaced as F-PR-2 in
+  `BREAK-TESTS-OWASP-PROBES-v1` (10 000-part body returned 200 in
+  250 ms).
+
+  Post-fix, `IncomingRequestsConfig` grows two Optional caps:
+  - `multipart_max_parts` (default `Some(100)`, `None` opts out).
+  - `multipart_max_part_size` (default `Some(4 * 1024 * 1024)`,
+    `None` opts out).
+
+  `parse_multipart_body` now returns a typed `MultipartError`
+  enum. `TooManyParts { limit }` and `PartTooLarge { limit }`
+  map to `413 Payload Too Large` with a structured JSON body
+  (`{"error":"multipart_too_many_parts","limit":100}` or
+  `..._part_too_large`); the parse-level `Parse(String)` still
+  maps to `400 Bad Request` with the existing `multipart parse:`
+  prefix so callers who already branch on 400 don't have to
+  change. The per-part-size cap is enforced mid-stream (the
+  parser aborts when a single part's cumulative byte count
+  exceeds the cap), so an attacker sending a 500 MB part
+  triggers rejection at 4 MiB + 1 rather than after 500 MB of
+  accumulation.
+
+  Regression coverage: 8 test functions in
+  `tests/issue_T28_multipart_cap.rs`. Boundary case (100 parts
+  admits, 101 rejects), the named-in-backlog 500-part probe (413
+  with `multipart_too_many_parts`), per-part-size cap
+  (2 KiB body under 1 KiB cap rejects, 500 B under 1 KiB cap
+  admits), explicit `None` opt-out (500 parts admits), parse
+  error still 400 (distinct from cap breach), cap = 1 admits one
+  and rejects two. Two existing test files
+  (`tests/security.rs`, `tests/security_hardening.rs`) that
+  constructed `IncomingRequestsConfig` as a struct literal were
+  updated to include the two new `None` fields — no behavioural
+  change to those tests.
+
+  Semver: config surface addition + wire-visible change (a body
+  that used to return 400 with `multipart parse: …` may now
+  return 413 with `multipart_too_many_parts`). Clients that
+  hard-coded `400 == "any multipart problem"` need to add a 413
+  branch, or set both caps to `null` in ruuter.yaml to preserve
+  pre-fix behaviour.
+
 ### Documentation
 
 - **h2ck.me v1 T-32 — Document query-parameter last-wins

@@ -668,6 +668,46 @@ pub struct IncomingRequestsConfig {
     /// the load-balancer defaults operators typically run behind.
     #[serde(default = "default_incoming_request_timeout_ms")]
     pub request_timeout_ms: Option<u64>,
+
+    /// h2ck.me v1 T-28 — cap on the number of parts in a
+    /// `multipart/form-data` inbound body. Pre-fix, the multipart
+    /// parser iterated every part with no upper bound; a 10 000-part
+    /// body allocated a HashMap entry (and buffered the field bytes)
+    /// per part, giving an attacker cheap memory / CPU amplification
+    /// against any DSL that accepts multipart. Post-fix, an inbound
+    /// body carrying more than `multipart_max_parts` parts is
+    /// rejected with `413 Payload Too Large` before the excess parts
+    /// are buffered.
+    ///
+    /// - `Some(n)` → reject at `n + 1`-th part.
+    /// - `None` → unbounded (pre-fix behaviour; only safe for
+    ///   deployments that don't accept multipart at all).
+    ///
+    /// Default is `Some(100)` — comfortably above any reasonable
+    /// form (browser file uploads rarely exceed 20 parts) and well
+    /// under the point at which per-part allocation becomes a DoS
+    /// surface.
+    #[serde(default = "default_multipart_max_parts")]
+    pub multipart_max_parts: Option<usize>,
+
+    /// h2ck.me v1 T-28 — cap on the size of any single part in a
+    /// `multipart/form-data` inbound body. Enforced mid-stream: as
+    /// soon as a part's cumulative byte count exceeds the cap, the
+    /// request is aborted with `413 Payload Too Large`. Bounds the
+    /// per-part user-space accumulation independently of the
+    /// aggregate `to_bytes(...)` cap on the whole body.
+    ///
+    /// - `Some(n)` → abort mid-stream at `n + 1`-th byte of a
+    ///   single part.
+    /// - `None` → unbounded per part (still bounded by the whole-
+    ///   body cap upstream).
+    ///
+    /// Default is `Some(4 * 1024 * 1024)` (4 MiB) — larger than
+    /// typical form / image uploads, smaller than the 16 MiB body
+    /// cap so a well-formed multipart body of many small parts
+    /// still fits under the limit.
+    #[serde(default = "default_multipart_max_part_size")]
+    pub multipart_max_part_size: Option<usize>,
 }
 
 /// h2ck.me S4 — trusted reverse-proxy list. Only requests whose
@@ -787,8 +827,18 @@ impl Default for IncomingRequestsConfig {
             allowed_method_types: default_allowed_methods(),
             headers: HashMap::new(),
             request_timeout_ms: default_incoming_request_timeout_ms(),
+            multipart_max_parts: default_multipart_max_parts(),
+            multipart_max_part_size: default_multipart_max_part_size(),
         }
     }
+}
+
+fn default_multipart_max_parts() -> Option<usize> {
+    Some(100)
+}
+
+fn default_multipart_max_part_size() -> Option<usize> {
+    Some(4 * 1024 * 1024)
 }
 
 impl Default for AppConfig {
