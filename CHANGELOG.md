@@ -63,6 +63,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No production code change; scaffolding only. Semver: additive
   test-only.
 
+### Documentation
+
+- **h2ck.me v1 T-32 — Document query-parameter last-wins
+  semantics.** Duplicate keys in the URL query string (`?x=a&x=b`)
+  collapse to a single `${incoming.params.x}` value; the parser
+  uses `url::form_urlencoded::parse` collected into
+  `HashMap<String, String>`, so the LAST occurrence wins.
+  Behaviour is safe (no data loss, no server-side confusion), but
+  a DSL author who trusts the "first sent" reading — or who
+  expects an array-shape return — misbehaves silently.
+
+  New section in `book/src/dsl/context.md` on query-parameter
+  shape, naming the two footgun cases (attacker-picked value,
+  silent drop) and the framework's non-position on multi-value
+  keys: no built-in array primitive; use `?tags=red,blue,green`
+  and split in the DSL if you need multi-value semantics.
+
+  Companion small doc fix: the pre-existing table entry for
+  `incoming.query` was inaccurate — the JS bindings expose
+  `incoming.params` (`src/scripting/{boa,quickjs}.rs`), never
+  `incoming.query`, so the "alias" claim misled DSL authors.
+  Table entry updated to name `incoming.params` directly.
+
+  Regression coverage: `tests/issue_T32_query_param_last_wins.rs`
+  — 5 test functions pinning last-wins behaviour on
+  two-duplicate, three-duplicate, unique-key, single-value, and
+  same-value-adjacent-duplicate inputs. Every one asserts the
+  observable `${incoming.params.<key>}` for the shape the docs
+  now describe. If a future refactor changes the collision
+  policy, these tests fail loudly.
+
 ## [0.10.0-rc] - 2026-09-12
 
 Sixteen h2ck.me v1 backlog items shipped in one batch (T-1..T-16,
