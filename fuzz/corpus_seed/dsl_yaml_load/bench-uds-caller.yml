@@ -1,0 +1,24 @@
+# 043 A/B (UDS side): calls bench-target via the `side` alias which
+# the operator maps to /tmp/bench-side.sock in unix_socket_map.
+
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "043 A/B (UDS side): calls bench-target via the `side` alias which"
+  additive: true
+
+fetch:
+  call: http.get
+  args:
+    url: "http://side/samples/bench-target"
+    timeout: 500
+  result: r
+  next: respond
+
+respond:
+  return: "${r.body}"
+  next: end

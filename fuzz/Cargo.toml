@@ -1,0 +1,45 @@
+[package]
+name = "ruuter-on-rust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standard cargo-fuzz metadata — signals "this crate is fuzzed" to
+# tooling that inspects it. Docs at
+# https://rust-fuzz.github.io/book/cargo-fuzz.html
+[package.metadata]
+cargo-fuzz = true
+
+# Mark this crate as its own workspace root so `cargo` doesn't try
+# to bubble it up into the parent Ruuter-on-Rust crate (which has
+# no `[workspace]` declaration and treats fuzz/ as a leaf).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The parent crate is the *unit under test*. Path dep keeps every
+# API change (e.g. T-4 `StepEngine::new` signature) visible to the
+# fuzz targets at compile time.
+ruuter-on-rust = { path = ".." }
+serde_json = "1"
+
+# `cargo fuzz` requires each target as its own binary so the runner
+# can select which one to feed inputs to. `test = false` /
+# `doc = false` avoids surfacing the target as a regular `cargo test`
+# artefact — the fuzz crate is nightly-only anyway (libfuzzer-sys
+# uses `-Zsanitizer=address`), so a stable-toolchain `cargo test`
+# never touches these paths.
+
+[[bin]]
+name = "dsl_yaml_load"
+path = "fuzz_targets/dsl_yaml_load.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_body_deserialize"
+path = "fuzz_targets/http_body_deserialize.rs"
+test = false
+doc = false
+bench = false
