@@ -7,62 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
+### Added
 
-- **RUSTSEC-2026-0285 — bump `rustls` from 0.23.40 to 0.23.45.**
-  The `rustls` advisory (published 2026-09-14, TLS 1.3 handshake
-  messages incorrectly accepted across encryption level boundaries,
-  severity 5.3 medium) was flagged by the daily `cargo audit --deny
-  warnings` sweep. Fix is a straightforward Cargo.lock bump —
-  `rustls` is a transitive dep only (via `reqwest` → `hyper-rustls`
-  and the `dsl-test` HTTPS harness); no direct source touch needed.
-  Companion transitive bumps: `rustls-webpki` 0.103.13 → 0.103.15,
-  and a few `windows-sys` unifications from 0.52.0 → 0.60.2. No
-  behaviour change; release-gate unblocker for anything landing on
-  `dev` after 2026-09-14.
+- **h2ck.me v1 T-31 — JSON deep-nesting regression pin.**
+  Serde_json rejects incoming JSON bodies past a ~128-layer
+  implicit recursion limit. The 2026-09-11 audit sweep
+  (`BREAK-TESTS-OWASP-PROBES-v1` §F-PR-5) probed the framework
+  with depth-100 (`200 OK`) and depth-1000 (`400 Bad Request`)
+  bodies; behaviour is safe today, but there was no regression
+  test pinning it. A future `serde_json` upgrade could raise or
+  remove the limit and silently regress the fleet.
 
-### Fixed
-
-- **h2ck.me v1 T-24 — `StateStore::set` TOCTOU on `contains_key` +
-  `insert`.** Pre-fix, the update-vs-new-key branch in
-  `StateStore::set` (`src/state/mod.rs`) split `contains_key(&key)`
-  from `inner.insert(key, value)` across two DashMap operations. Two
-  threads racing on the SAME new key could both observe "absent" and
-  both walk the new-key path — each performing the T-5 cap check and
-  each bumping the per-project counter — before either committed the
-  insert. Because DashMap's `insert` is idempotent, the stored value
-  was correct, but the per-project counter over-reported by (N
-  contenders - 1). With T-5's per-project entry cap enabled, that
-  over-count causes premature "cap reached" rejections under
-  contention: two concurrent writes to the same key can double-charge
-  the counter, so a subsequent unrelated insert may hit a phantom
-  cap that isn't actually saturated by real state. No auth or data-
-  corruption impact — stability / fairness bug only. Surfaced in the
-  2026-09-17 concurrency mini-audit.
-
-  Post-fix, the branch is decided under the DashMap shard lock via
-  the `Entry` API. The `Occupied` arm handles updates without a
-  count change; the `Vacant` arm sees "new key" exactly once per
-  real insert, so the counter is bumped at most once per real insert
-  regardless of contention. The `update` method is left as-is: its
-  soft-cap posture is documented (comment at `src/state/mod.rs:275`)
-  because the closure passed to `update` may be user-supplied and
-  should not run under a shard lock.
-
-  Regression coverage: 5 test functions in
-  `tests/issue_T24_statestore_toctou.rs`. The named-in-backlog pin —
-  200 threads racing on the SAME new key under
-  `max_entries_per_project=1` — asserts the counter reads exactly 1
-  (not >1) and every contender returns `Ok`. Companions cover
-  uncapped same-key contention (exactly one stored key),
-  different-key contention with headroom (all admit, counter = N),
-  different-key contention past cap (exactly CAP threads succeed,
-  the rest reject with the T-5 error shape, counter settles at
-  exactly CAP), and serial re-set of an existing key past cap
-  (update path admits, cap enforcement intact for a new key). Pre-
-  fix, all four concurrency-shaped tests were sporadically flaky in
-  a way that reflected the underlying race; post-fix they pass
-  deterministically.
+  New `tests/security_json_depth.rs` — 3 test functions asserting
+  depth 10 → 200 (trivial-shape sanity), depth 100 → 200 (below the
+  limit), depth 200 → 400 (above the limit). Bodies constructed
+  iteratively so the test harness itself doesn't hit the Rust
+  call-stack limit while composing the input. If serde_json ever
+  changes the depth ceiling, the "depth 200 rejected" assertion
+  will start returning 2xx and this file will fail loudly, giving
+  the upgrader a chance to decide whether Ruuter should ship its
+  own explicit cap. No production code change.
 
 ## [0.10.0-rc] - 2026-09-12
 
