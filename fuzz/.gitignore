@@ -1,0 +1,9 @@
+# cargo-fuzz output — never check in the runtime artefacts.
+target/
+Cargo.lock
+# Coverage output.
+coverage/
+# Runner-produced input corpora that grew from the seed. Rebuilt on
+# every clean run, and can bloat the repo quickly.
+corpus/
+artifacts/

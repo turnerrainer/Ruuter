@@ -28,6 +28,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the upgrader a chance to decide whether Ruuter should ship its
   own explicit cap. No production code change.
 
+- **h2ck.me v1 T-23 — cargo-fuzz scaffolding + two initial
+  targets.** Ruuter is largely a stack of parsers; fleet doctrine
+  §9.3 names DSL loading as fuzz-adoption target #1 and DTO
+  deserialisation as #2. This PR lands the scaffolding so
+  findings can start compounding — every fuzz-found crash becomes
+  a checked-in `#[test]` case forever after.
+
+  New crate under `fuzz/` (own `[workspace]`, so `cargo build` at
+  the Ruuter-on-Rust root ignores it). Two initial targets:
+  - `fuzz_targets/dsl_yaml_load.rs` — feeds arbitrary UTF-8 to
+    `DslParser::parse_content` and asserts no panic.
+  - `fuzz_targets/http_body_deserialize.rs` — feeds arbitrary
+    bytes to `serde_json::from_slice::<Value>` (the inbound
+    handler's JSON path) and asserts round-trip invariant:
+    `parse(serialize(v)) == v` for every accepted value.
+
+  Seed corpus (`fuzz/corpus_seed/…`) includes eight DSLs from
+  `DSL/samples/` and four JSON bodies covering nested, array,
+  edge-case (empty, negative, unicode, null), and a simple
+  object shape. Runtime corpus (`fuzz/corpus/`) is `.gitignore`d
+  and populated on first run.
+
+  New CI workflow `.github/workflows/fuzz.yml`: runs both
+  targets nightly at 03:00 UTC for 10 minutes each on
+  nightly-toolchain runners, uploads artefacts on crash.
+  Manual dispatch supported for on-demand smoke tests after a
+  parser change.
+
+  Local run instructions in `fuzz/README.md`. Requires
+  `cargo install cargo-fuzz` and a nightly toolchain
+  (libfuzzer-sys uses `-Zsanitizer=address`).
+
+  No production code change; scaffolding only. Semver: additive
+  test-only.
+
 ## [0.10.0-rc] - 2026-09-12
 
 Sixteen h2ck.me v1 backlog items shipped in one batch (T-1..T-16,

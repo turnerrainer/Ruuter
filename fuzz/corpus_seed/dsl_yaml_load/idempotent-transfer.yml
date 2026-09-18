@@ -1,0 +1,38 @@
+# DSL-authored idempotency (as of v0.7.0 — framework-level
+# Idempotency-Key handling was removed; see
+# book/src/dsl/idempotency-pattern.md for the canonical pattern).
+# This sample stores the latest transfer under a per-project state
+# key so downstream steps or a companion DSL can read it back. A
+# fuller pattern would derive a dedup key from
+# `sha256(canonical(incoming.body))` and short-circuit on hit.
+#
+# curl -X POST http://localhost:8080/samples/idempotent-transfer \
+#   -H 'Content-Type: application/json' \
+#   -d '{"from":"A","to":"B","amount":100}'
+
+# h2ck.me v1 T-12 — declaration block added to demonstrate
+# the declaration surface. `additive: true` means the
+# allowlist below is documentation-only; undeclared fields
+# still pass through, so this sample keeps its existing
+# runtime behaviour. Set `strict: true` or remove `additive`
+# to enforce.
+declaration:
+  description: "DSL-authored idempotency (as of v0.7.0 — framework-level"
+  additive: true
+
+record:
+  state:
+    set:
+      key: "transfer_last_id"
+      value: "${incoming.body.from + '->' + incoming.body.to + ':' + incoming.body.amount}"
+  next: reply
+
+reply:
+  return:
+    accepted: true
+    from: "${incoming.body.from}"
+    to: "${incoming.body.to}"
+    amount: "${incoming.body.amount}"
+    ref: "txn-${Date.now()}"
+  status: 202
+  next: end

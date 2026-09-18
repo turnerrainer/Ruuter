@@ -1,0 +1,81 @@
+name: fuzz
+
+# h2ck.me v1 T-23 — nightly cargo-fuzz sweep on the DSL loader and
+# JSON body deserialiser. Findings surface as checked-in `#[test]`
+# cases in the main suite; the fuzz corpus rotation loses inputs
+# on run, so the important artefact is the promoted regression
+# test, not the corpus itself.
+
+on:
+  schedule:
+    # 03:00 UTC daily — avoids collision with the security cron
+    # (06:00 UTC) so a single runner slot isn't hogged, and puts
+    # findings in front of ops when the workday starts in EU.
+    - cron: "0 3 * * *"
+  # Allow manual dispatch — useful when a code change lands and
+  # you want to smoke-test the fuzz path immediately.
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      # `fail-fast: false` — one target crashing shouldn't cancel
+      # the sibling target's chance to surface its own findings.
+      fail-fast: false
+      matrix:
+        target:
+          - dsl_yaml_load
+          - http_body_deserialize
+    steps:
+      - uses: actions/checkout@v5
+
+      # cargo-fuzz's libfuzzer-sys uses `-Zsanitizer=address` which
+      # is nightly-only. Pin a specific nightly for reproducibility
+      # — if the sanitizer breaks on a new nightly, we don't want
+      # a schedule run to silently start emitting false positives.
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup default nightly
+
+      - name: Cache cargo-fuzz binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-bin-v1
+
+      - name: Install cargo-fuzz
+        run: |
+          if ! command -v cargo-fuzz >/dev/null; then
+            cargo install --locked cargo-fuzz
+          fi
+
+      - name: Seed corpus
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          if [ -d fuzz/corpus_seed/${{ matrix.target }} ]; then
+            cp -n fuzz/corpus_seed/${{ matrix.target }}/* fuzz/corpus/${{ matrix.target }}/ || true
+          fi
+
+      - name: Run fuzz target
+        # `-max_total_time=600` = 10 minutes per target. That's the
+        # sweet spot: long enough that libfuzzer's coverage-guided
+        # generator explores non-trivial branches, short enough that
+        # the CI slot doesn't hog the runner.
+        # `-timeout=25` — if a single input takes >25s, treat it as
+        # a hang and record it.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600 -timeout=25
+
+      - name: Upload artefacts on crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-artefacts
+          path: |
+            fuzz/artifacts/${{ matrix.target }}
+            fuzz/corpus/${{ matrix.target }}
+          retention-days: 30
