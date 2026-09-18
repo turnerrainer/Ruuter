@@ -139,6 +139,10 @@ async fn method_not_in_allow_list_returns_405() {
         // h2ck.me v1 T-7 — required field on IncomingRequestsConfig
         // now; None preserves pre-T-7 no-inbound-timeout behaviour.
         request_timeout_ms: None,
+        // h2ck.me v1 T-28 — multipart caps required now; None
+        // preserves pre-T-28 unbounded behaviour for this test.
+        multipart_max_parts: None,
+        multipart_max_part_size: None,
     };
     let router = build_router(
         cfg,

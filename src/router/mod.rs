@@ -950,12 +950,38 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                     .into_response();
             }
         };
-        match parse_multipart_body(&body_bytes, &boundary).await {
+        // h2ck.me v1 T-28 — cap the number of parts + per-part size
+        // BEFORE the excess bytes are buffered, so an attacker
+        // sending a 10 000-part body doesn't allocate 10 000 HashMap
+        // entries just to have the last 9 900 discarded.
+        let max_parts = router.config.incoming_requests.multipart_max_parts;
+        let max_part_size = router.config.incoming_requests.multipart_max_part_size;
+        match parse_multipart_body(&body_bytes, &boundary, max_parts, max_part_size).await {
             Ok(m) => m,
-            Err(e) => {
+            Err(MultipartError::TooManyParts { limit }) => {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "multipart_too_many_parts",
+                        "limit": limit,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(MultipartError::PartTooLarge { limit }) => {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "multipart_part_too_large",
+                        "limit": limit,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(MultipartError::Parse(msg)) => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": format!("multipart parse: {}", e) })),
+                    Json(json!({ "error": format!("multipart parse: {}", msg) })),
                 )
                     .into_response();
             }
@@ -1519,6 +1545,26 @@ impl DslRouter {
     }
 }
 
+/// h2ck.me v1 T-28 — typed error from `parse_multipart_body` so the
+/// caller can map cap violations to 413 and shape-level parse
+/// errors to 400. The pre-T-28 code returned `Result<_, String>`
+/// and hard-coded a 400 for every failure, which conflated "body
+/// too large" (a policy cap breach the caller should see with a
+/// distinct status) with "malformed multipart frame".
+pub(crate) enum MultipartError {
+    /// The multipart body carries more parts than
+    /// `multipart_max_parts` allows. `limit` is the operator-
+    /// configured cap for the diagnostic body.
+    TooManyParts { limit: usize },
+    /// A single part's byte count exceeded
+    /// `multipart_max_part_size`. Detected mid-stream so the parser
+    /// aborts before buffering the entire oversized part.
+    PartTooLarge { limit: usize },
+    /// Parser-level failure (malformed boundary, truncated frame,
+    /// unexpected EOF). Maps to `400 Bad Request` at the call site.
+    Parse(String),
+}
+
 /// Audit finding 11 — parse a `multipart/form-data` body into a
 /// `HashMap<String, Value>`. Each part with `filename="…"` becomes
 /// `<filename> → <utf-8 lossy contents>` (matches Java's
@@ -1530,21 +1576,56 @@ impl DslRouter {
 /// Deliberately minimal parser — depends on `multer` (a lightweight
 /// multipart crate). We only need the "extract every part into the
 /// map" contract; boundary detection is delegated.
+///
+/// h2ck.me v1 T-28 — the `max_parts` and `max_part_size` args (both
+/// `Option<usize>`, `None` = unbounded) let the caller enforce
+/// operator-configured caps. Cap breaches surface as
+/// `MultipartError::TooManyParts` / `PartTooLarge` for the caller
+/// to map to `413 Payload Too Large`.
 async fn parse_multipart_body(
     body_bytes: &[u8],
     boundary: &str,
-) -> std::result::Result<HashMap<String, Value>, String> {
+    max_parts: Option<usize>,
+    max_part_size: Option<usize>,
+) -> std::result::Result<HashMap<String, Value>, MultipartError> {
     use futures::stream;
     let stream_body: bytes::Bytes = body_bytes.to_vec().into();
     let stream = stream::iter(vec![Ok::<_, std::io::Error>(stream_body)]);
     let mut multipart = multer::Multipart::new(stream, boundary.to_string());
     let mut out = HashMap::new();
-    while let Some(mut field) = multipart.next_field().await.map_err(|e| e.to_string())? {
+    let mut part_count: usize = 0;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| MultipartError::Parse(e.to_string()))?
+    {
+        // T-28 — reject the (n+1)-th part before we buffer its
+        // bytes. `>` (not `>=`) so a body with exactly `cap` parts
+        // is admitted; the check fires only on the first part that
+        // would push the count past the cap.
+        part_count += 1;
+        if let Some(cap) = max_parts {
+            if part_count > cap {
+                return Err(MultipartError::TooManyParts { limit: cap });
+            }
+        }
         let filename = field.file_name().map(|s| s.to_string());
         let name = field.name().map(|s| s.to_string());
         let mut bytes = Vec::new();
-        while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|e| MultipartError::Parse(e.to_string()))?
+        {
             bytes.extend_from_slice(&chunk);
+            // T-28 — bound per-part accumulation so a single 500 MB
+            // part can't OOM the process even under a low
+            // max_parts cap.
+            if let Some(psize) = max_part_size {
+                if bytes.len() > psize {
+                    return Err(MultipartError::PartTooLarge { limit: psize });
+                }
+            }
         }
         let content = String::from_utf8_lossy(&bytes).into_owned();
         // h2ck.me v1 T-10 — prefer the FIELD NAME as the map key
