@@ -1,0 +1,123 @@
+name: auto-tag on release bump
+
+# When a `chore(release): bump to vX.Y.Z(-rc)?` commit lands on
+# `dev` (i.e. a release PR has just merged), read the version from
+# Cargo.toml and, if no `v<version>` tag already exists on the
+# commit, create + push it. The publish.yml workflow triggers on
+# `push: tags: v*`, so tagging is the single knob that starts the
+# GHCR + Docker Hub deployment.
+#
+# Why this workflow (not baked into publish.yml directly):
+# publish.yml's `on:` trigger for tag push is a hard contract with
+# GitHub's tag matcher; a companion `on: push: branches: [dev]`
+# arm would run publish for EVERY dev push (not just release
+# commits) or need brittle in-workflow guards. Splitting the "when
+# to tag" logic here keeps publish.yml a single-purpose "given a
+# tag, publish it" builder — which is exactly what human operators
+# also want when they run `gh workflow run publish.yml -f tag=...`
+# for a hotfix retag.
+#
+# Idempotent: if the tag already exists (e.g. because a human
+# tagged manually before the workflow ran), the tag-create step
+# is a no-op. Never force-updates an existing tag.
+#
+# Safety: only tags when the HEAD commit's message starts with
+# `chore(release): bump to v` — accidental version changes in
+# other commits do NOT auto-tag. Matches the commit message
+# format CLAUDE.md § "Handling a breaking change" prescribes.
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  # Required to push tags via the GITHUB_TOKEN.
+  contents: write
+
+concurrency:
+  # Serialize per-branch so two rapid merges to dev can't race on
+  # the tag creation.
+  group: auto-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history — needed so `git tag` on the head commit
+          # sees the same SHA GitHub sees, and so we can inspect
+          # HEAD's commit message.
+          fetch-depth: 0
+          # Use a token with push permission on the branch so the
+          # subsequent `git push` can create the tag.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Guard on commit-message prefix
+        id: guard
+        run: |
+          msg=$(git log -1 --pretty=%s)
+          echo "commit message: $msg"
+          if [[ "$msg" == chore\(release\):\ bump\ to\ v* ]]; then
+            echo "release_commit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_commit=false" >> "$GITHUB_OUTPUT"
+            echo "not a release-bump commit; nothing to do"
+          fi
+
+      - name: Read version from Cargo.toml
+        if: steps.guard.outputs.release_commit == 'true'
+        id: version
+        run: |
+          # `cargo pkgid` is heavier and needs a build; a grep-based
+          # read of the version line is enough and matches how the
+          # rest of the release-carrying files are inspected.
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.+)"$/\1/')
+          if [[ -z "$version" ]]; then
+            echo "::error::could not parse version from Cargo.toml"
+            exit 1
+          fi
+          echo "version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if tag already exists
+        if: steps.guard.outputs.release_commit == 'true'
+        id: exists
+        run: |
+          tag='${{ steps.version.outputs.tag }}'
+          # Query the remote directly rather than relying on the
+          # local repo's tags cache — cheaper than a `git fetch
+          # --tags` and works even if the checkout dropped tags.
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q "refs/tags/$tag"; then
+            echo "$tag already exists on origin; skipping"
+            echo "should_tag=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$tag does not exist; will create"
+            echo "should_tag=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create + push tag
+        if: >-
+          steps.guard.outputs.release_commit == 'true' &&
+          steps.exists.outputs.should_tag == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Annotated tag so `git describe` and GitHub's release
+          # UI both show the version body cleanly. Message
+          # deliberately terse; the CHANGELOG entry is the source
+          # of truth for what shipped.
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Ruuter-on-Rust $VERSION
+
+Auto-tagged by .github/workflows/auto-tag.yml on merge of the
+chore(release) commit for this version. See CHANGELOG.md for the
+detailed list of items shipped." "${{ github.sha }}"
+          git push origin "$TAG"
+          echo "Pushed $TAG; publish.yml will pick it up on the tag trigger"
