@@ -187,6 +187,18 @@ bare `-rc` (not `-rc.N`); see
 `memory/project_rc_version_convention.md` if that memory is
 loaded.
 
+**Tagging is now automatic on release-bump merge.** As of
+v0.10.1-rc, `.github/workflows/auto-tag.yml` watches `dev` and
+creates + pushes `v<version>` when a `chore(release): bump to v…`
+commit lands. Publish.yml then triggers on the tag push and
+handles the multi-arch GHCR + Docker Hub build. Practical
+consequence: the "cut it" imperative is now spent on the
+release-bump PR itself — once the PR merges, the tag +
+deployment run without further intervention. If a downstream
+hotfix needs a retag against an existing tag, use `gh workflow
+run publish.yml -f tag=v…` (the workflow's manual dispatch is
+still gated by release authority).
+
 ### Verifying the fix before opening the PR
 
 Run the full release gate at the top of this file. Every check
