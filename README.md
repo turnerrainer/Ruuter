@@ -3,49 +3,47 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.10.0-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.10.1-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.9.16-rc?** Minor bump — sixteen backlog
-> items shipped in one batch (T-1..T-16, PRs #101–#116).
+> **Upgrading from v0.10.0-rc?** Patch RC — six h2ck.me v1
+> backlog items shipped as one batch (T-23, T-24, T-28, T-30,
+> T-31, T-32; PRs #126–#131).
 >
-> **Two Rust-API breaking changes** for embedders:
-> - `StepEngine::new` now takes `(HttpClient, SharedGuards,
->   GuardMode)`. Use `empty_shared_guards()` for the "no guards"
->   case; the pre-fix `.with_guards()` builder is gone. Callers
->   that skipped guard wiring silently reopened the v0.9.11-rc
->   template-bypass — the compile error is the regression pin.
-> - `StateStore::set` returns `Result<()>` (was `()`); `update`
->   returns `Result<Value>` (was `Value`). New keys past the
->   configured `state.max_entries_per_project` cap surface as
->   `RuuterError::InvalidStep` instead of silently growing the
->   map.
+> **One client-facing wire behaviour change** for HTTP clients
+> uploading multipart:
+> - A `multipart/form-data` body carrying more than
+>   `incoming_requests.multipart_max_parts` (default `100`) or a
+>   single part larger than `incoming_requests.multipart_max_part_size`
+>   (default `4 MiB`) now returns `413 Payload Too Large` with a
+>   structured JSON body naming the violated limit. Set either
+>   cap to `null` in ruuter.yaml to preserve pre-fix unbounded
+>   behaviour. Clients that hard-coded "400 == any multipart
+>   problem" need a 413 branch.
 >
-> **Two client-facing behaviour changes** for DSL authors and HTTP
-> clients:
-> - Multipart uploads key `incoming.body.<X>` on the form-field
->   NAME (`name="file"`) rather than the client-controlled
->   `filename=`. DSLs that read `${incoming.body['note.txt']}`
->   from an upload now read `${incoming.body.file}`.
-> - Wrong method on a routed path returns `405 Method Not
->   Allowed` with `Allow: GET, POST, PUT` instead of `404`.
->   Non-existent paths still `404`.
+> **Operator-facing surface**: graceful shutdown on SIGTERM /
+> SIGINT — inbound requests drain up to 15 s before the process
+> exits, so Kubernetes rolling deploys / `docker stop` no longer
+> tear in-flight responses. Two new multipart caps
+> (`multipart_max_parts`, `multipart_max_part_size`) under
+> `incoming_requests`; both default-on with sensible values, both
+> opt-out via `null`.
 >
-> **Operator-facing surface**: `ruuter-doctor` binary for pre-boot
-> config validation, `RUUTER_OFFLINE=true` env for hard-stubbed
-> outbound, inbound `TimeoutLayer` (30 s default), Content-Length
-> preflight → 413 before body read, `state.max_entries_per_project`
-> cap (default 100 k, `null` opts out), `dev-http-rewrite` Cargo
-> feature gate on `RUUTER_HTTP_REWRITE`, boot WARNs for missing
-> OWASP baseline headers on a non-loopback bind and for empty
-> `csrf.allowed_origins`.
+> **Under the hood** (concurrency + fuzz surface): `StateStore::set`
+> TOCTOU on same-key contention closed via DashMap `Entry` API
+> — the per-project entry counter no longer over-reports under
+> load. New `fuzz/` crate scaffolding + nightly CI workflow for
+> the DSL loader and JSON body deserialiser; scaffolding only, no
+> production code touch.
 >
-> **Under the hood** (P0 security): `http_response_size_limit`
-> default now applies to operator YAML (was silently unbounded);
-> UDS transports cap the response body mid-stream via
-> `http_body_util::Limited`; DNS-rebinding TOCTOU on `check_ssrf`
-> closed by pinning reqwest to the resolved IP.
+> **Docs + tests**: `book/src/dsl/context.md` documents the
+> `incoming.params` last-wins semantics for duplicate query
+> keys, and fixes a stale table entry that claimed
+> `incoming.query` existed (it doesn't — only `incoming.params`
+> is bound in the JS runtime). Positive-control regression pin
+> for `serde_json`'s implicit ~128-layer JSON depth limit — if a
+> future dep bump changes the ceiling, the pin fails loudly.
 >
-> Full detail in [CHANGELOG.md § 0.10.0-rc](CHANGELOG.md#0100-rc---2026-09-12).
+> Full detail in [CHANGELOG.md § 0.10.1-rc](CHANGELOG.md#0101-rc---2026-09-18).
 
 ## Try it in one command
 
@@ -53,7 +51,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.10.0-rc
+    turnerrainer/ruuter:0.10.1-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -67,7 +65,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.10.0-rc
+    turnerrainer/ruuter:0.10.1-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -90,12 +88,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.10.0-rc \
+    turnerrainer/ruuter:0.10.1-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.10.0-rc \
+    turnerrainer/ruuter:0.10.1-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 
