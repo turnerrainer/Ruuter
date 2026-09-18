@@ -124,47 +124,69 @@ impl StateStore {
     /// the map. Pre-T-5 callers that ignored the return value need
     /// to `?` it or handle explicitly. Setting an EXISTING key is
     /// always allowed (it's an update, no count change).
+    ///
+    /// h2ck.me v1 T-24 — pre-fix, the update-vs-new-key branch used
+    /// `contains_key` followed by a separate `insert`. Two threads
+    /// racing on the same new key could both observe "absent," both
+    /// bump the per-project counter, and both `insert` (idempotent).
+    /// Post-fix, the branch is decided under the DashMap shard lock
+    /// via the `entry` API — the `Vacant` arm sees "new key" exactly
+    /// once per real insert, so the counter is bumped at most once
+    /// per real insert. Same-key contention now settles at the
+    /// truthful count.
     pub fn set(&self, project: &str, key: &str, value: Value) -> Result<()> {
         let state_key = StateKey::new(project, key);
-        // Update path — key already present, no count change.
-        if self.inner.contains_key(&state_key) {
-            self.inner.insert(state_key, value);
-            return Ok(());
-        }
-        // New-key path — cap check + count bump.
-        if let Some(cap) = self.max_entries_per_project {
-            let current = self.project_counts.get(project).map(|v| *v).unwrap_or(0);
-            if current >= cap {
-                return Err(RuuterError::InvalidStep(format!(
-                    "state.set rejected for project '{}': entry count {} \
-                     reached the cap max_entries_per_project={} (h2ck.me v1 T-5). \
-                     Delete unused keys or raise the cap in ruuter.yaml.",
-                    project, current, cap
-                )));
+        // Atomic under DashMap: `entry` locks the shard for this key
+        // exclusively, so only one thread can be in either arm at a
+        // time. We deliberately do the cap check + counter bump
+        // inside the `Vacant` arm — holding the shard guard across
+        // the read of `project_counts` is fine (different DashMap,
+        // no lock-order cycle), and the closure passed to `set` is
+        // us, not user code.
+        use dashmap::mapref::entry::Entry;
+        match self.inner.entry(state_key) {
+            Entry::Occupied(mut o) => {
+                // Update path — no count change.
+                o.insert(value);
+                Ok(())
             }
-            // 80% WARN once per project per process lifetime. Using
-            // `saturating_mul` so a cap near usize::MAX doesn't panic;
-            // integer division floors, which is fine — the point is
-            // "you're approaching the wall," not an exact percentage.
-            let warn_threshold = cap.saturating_mul(80) / 100;
-            if current + 1 == warn_threshold && !self.warned_projects.contains_key(project) {
-                self.warned_projects.insert(project.to_string(), ());
-                tracing::warn!(
-                    project = %project,
-                    entries = current + 1,
-                    cap = cap,
-                    "state store for project reached 80% of max_entries_per_project cap \
-                     (h2ck.me v1 T-5) — inserts will start failing at {}%",
-                    100
-                );
+            Entry::Vacant(v) => {
+                if let Some(cap) = self.max_entries_per_project {
+                    let current = self.project_counts.get(project).map(|c| *c).unwrap_or(0);
+                    if current >= cap {
+                        return Err(RuuterError::InvalidStep(format!(
+                            "state.set rejected for project '{}': entry count {} \
+                             reached the cap max_entries_per_project={} (h2ck.me v1 T-5). \
+                             Delete unused keys or raise the cap in ruuter.yaml.",
+                            project, current, cap
+                        )));
+                    }
+                    // 80% WARN once per project per process lifetime. Using
+                    // `saturating_mul` so a cap near usize::MAX doesn't panic;
+                    // integer division floors, which is fine — the point is
+                    // "you're approaching the wall," not an exact percentage.
+                    let warn_threshold = cap.saturating_mul(80) / 100;
+                    if current + 1 == warn_threshold && !self.warned_projects.contains_key(project)
+                    {
+                        self.warned_projects.insert(project.to_string(), ());
+                        tracing::warn!(
+                            project = %project,
+                            entries = current + 1,
+                            cap = cap,
+                            "state store for project reached 80% of max_entries_per_project cap \
+                             (h2ck.me v1 T-5) — inserts will start failing at {}%",
+                            100
+                        );
+                    }
+                    self.project_counts
+                        .entry(project.to_string())
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                }
+                v.insert(value);
+                Ok(())
             }
-            self.project_counts
-                .entry(project.to_string())
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
         }
-        self.inner.insert(state_key, value);
-        Ok(())
     }
 
     pub fn delete(&self, project: &str, key: &str) -> Option<Value> {
