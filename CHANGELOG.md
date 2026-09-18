@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1-rc] - 2026-09-18
+
+Six h2ck.me v1 batch-2 backlog items shipped in one round (T-23,
+T-24, T-28, T-30, T-31, T-32; PRs #126–#131). One client-facing
+wire behaviour change (T-28 multipart cap → new `413` shape), one
+concurrency correctness fix (T-24 StateStore TOCTOU), one
+operator-facing surface addition (T-30 graceful shutdown on
+SIGTERM), and three additive test / docs / scaffolding items
+(T-23 fuzz, T-31 JSON depth pin, T-32 query-param docs). One
+transitive `rustls` security bump (RUSTSEC-2026-0285) rode in
+alongside T-24; see #126's chore commit.
+
+Semver-patch RC bump. `StateStore::set` is now correct under
+same-key contention; the multipart 413 shape is the only
+wire-visible change and is fully opt-out via
+`incoming_requests.multipart_max_parts: null` /
+`multipart_max_part_size: null`. Every item has its own dedicated
+regression-test file.
+
 ### Added
 
 - **h2ck.me v1 T-31 — JSON deep-nesting regression pin.**

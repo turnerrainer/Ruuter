@@ -2,8 +2,8 @@
 
 Entry-point brief for coding agents (Claude Code, Cursor, etc.) working
 on this repository. Human contributors: start with `README.md`, then
-skim this file for the release gate and the v0.10.0-rc breaking-change
-surface.
+skim this file for the release gate and the v0.10.1-rc / v0.10.0-rc
+behaviour-change surfaces.
 
 Agents shipping a breaking change: read the [Handling a breaking
 change](#handling-a-breaking-change-mandatory-for-coding-agents)
@@ -35,14 +35,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-12 on `0cbb8b3`):
+Expected on a clean `dev` (verified 2026-09-18 on `1b12150`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 776 passed / 0 failed / 3 ignored across 90 test binaries |
+| `cargo test --no-fail-fast` | 798 passed / 0 failed / 3 ignored across 95 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 64 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
@@ -229,6 +229,121 @@ the recovery shape if it slips.
 For a new breaking change, copy the shape of the closest analog
 above — same CHANGELOG structure, same test-file naming, same
 PR-body template.
+
+## Behaviour-change surface as of v0.10.1-rc (h2ck.me v1 batch-2: T-23, T-24, T-28, T-30, T-31, T-32)
+
+Six items shipped in one round, PRs #126–#131. One client-facing
+wire change (T-28), one concurrency correctness fix (T-24), one
+operator-facing surface addition (T-30 graceful shutdown), and
+three additive test/docs/scaffolding items (T-23 fuzz, T-31 JSON
+depth pin, T-32 query-param docs). Full detail in
+[CHANGELOG.md § 0.10.1-rc](CHANGELOG.md#0101-rc---2026-09-18).
+
+### 1. Multipart part-count + per-part-size caps (T-28, PR #129)
+
+**DSL / wire behaviour change.** `IncomingRequestsConfig` gains
+two Optional caps: `multipart_max_parts` (default `Some(100)`)
+and `multipart_max_part_size` (default `Some(4 * 1024 * 1024)`).
+Either cap breached surfaces as `413 Payload Too Large` with a
+structured JSON body naming the violated limit
+(`multipart_too_many_parts` / `multipart_part_too_large`, with
+the `limit` value). Parse-level errors still map to `400` with
+the existing `multipart parse:` prefix.
+
+Per-part size enforced mid-stream — a 500 MB single part aborts
+at 4 MiB + 1 byte, not after buffering the full 500 MB.
+
+**Migration:**
+
+- Client hard-coded to "400 = any multipart problem" → add a
+  413 branch, or set both caps to `null` in ruuter.yaml to
+  preserve pre-fix unbounded behaviour.
+- Existing DSLs unchanged; caps operate at the parser boundary.
+
+### 2. `StateStore::set` TOCTOU on same-key contention (T-24, PR #126)
+
+**Concurrency correctness fix, no API change.** Pre-fix, the
+update-vs-new-key branch split `contains_key(&key)` from a
+subsequent `inner.insert(key, value)` across two DashMap
+operations. Two threads racing on the SAME new key could both
+pass the "vacant" observation and both bump the per-project
+counter before either committed the insert. With T-5's
+per-project entry cap enabled, that over-count caused premature
+"cap reached" rejections under load.
+
+Post-fix, the branch is decided under the DashMap shard lock via
+the `Entry` API. The `Occupied` arm handles updates without a
+count change; the `Vacant` arm sees "new key" exactly once per
+real insert. `StateStore::update` keeps its existing soft-cap
+posture (comment at `src/state/mod.rs`) — its closure may be
+user-supplied and must not run under a shard lock.
+
+### 3. Graceful shutdown on SIGTERM / SIGINT (T-30, PR #128)
+
+**Operator-facing surface + observable behaviour change.**
+Pre-fix, `src/main.rs` awaited `axum::serve(...)` (and each
+multi-listener spawned task) without a shutdown-signal hook.
+Kubernetes rolling deploys / `docker stop` / `systemctl stop`
+delivered SIGTERM to a process with no handler installed —
+either it kept accepting until the k8s SIGKILL, or tokio dropped
+tasks partway through a DSL run, tearing the in-flight HTTP
+response the caller was waiting on.
+
+Post-fix, a single `tokio::sync::watch` shutdown signal is
+flipped by a dedicated watcher task when SIGINT or SIGTERM
+arrives. Each `axum::serve` call consumes it via
+`with_graceful_shutdown` (stops accepting, waits for in-flight
+requests to complete). UDS accept loops `tokio::select` on the
+same signal, then drain a `JoinSet` of in-flight per-connection
+tasks with a bounded grace window (`SHUTDOWN_GRACE_SECS = 15`;
+connections still active past the wall are `abort_all`'d with a
+WARN naming the leak).
+
+SIGTERM handling is `#[cfg(unix)]`-gated so the crate remains
+buildable on Windows for developer dev-loop purposes; on
+non-Unix only Ctrl+C fires the signal.
+
+`SHUTDOWN_GRACE_SECS` is currently a compile-time constant; add
+a config knob when a downstream deployment reports needing a
+different value.
+
+### 4. `incoming.params` last-wins docs + stale-alias fix (T-32, PR #130)
+
+**Docs only.** `book/src/dsl/context.md` now documents duplicate
+query-key resolution: `?x=a&x=b` → `${incoming.params.x}` is
+`"b"` (last wins, HashMap iteration order over
+`url::form_urlencoded::parse`). Two footgun cases named
+(attacker-picked value, silent drop) and the framework's
+non-position on multi-value keys documented (no built-in array
+primitive; encode multiplicity into the value shape).
+
+Companion small doc fix: the pre-existing table entry for
+`incoming.query` was inaccurate — the JS runtime only binds
+`incoming.params`. Table entry updated.
+
+Regression pin in `tests/issue_T32_query_param_last_wins.rs`
+fails loudly if the collision policy ever changes.
+
+### 5. cargo-fuzz scaffolding + JSON depth pin + rustls bump (T-23, T-31, chore)
+
+**No production code change.** New `fuzz/` crate (own workspace)
+with two initial targets: DSL YAML loader (`DslParser::parse_content`
+no-panic invariant) and JSON body deserialiser (round-trip
+invariant `parse(serialize(v)) == v`). CI workflow
+`.github/workflows/fuzz.yml` runs both nightly at 03:00 UTC for
+10 minutes each on nightly-toolchain runners. Requires
+`cargo install cargo-fuzz` and a nightly toolchain for local runs.
+
+`tests/security_json_depth.rs` pins `serde_json`'s implicit
+~128-layer recursion cap — depth-100 admits, depth-200 rejects.
+If a future `serde_json` bump raises or removes the limit, the
+"depth 200 rejected" assertion starts returning 2xx and the
+release gate fails loudly.
+
+Transitive `rustls` 0.23.40 → 0.23.45 for RUSTSEC-2026-0285
+(TLS 1.3 handshake messages accepted across encryption
+boundaries). Ruuter uses rustls only via `reqwest` → `hyper-rustls`
+and the `dsl-test` HTTPS harness; no direct source touch.
 
 ## Behaviour-change surface as of v0.10.0-rc (h2ck.me v1 T-1..T-16)
 
