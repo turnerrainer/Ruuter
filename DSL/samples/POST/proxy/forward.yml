@@ -1,0 +1,16 @@
+declaration:
+  description: >
+    Issue #134 - streaming byte-identical pass-through proxy.
+    Forwards the client's request body unchanged to the configured
+    upstream, preserving the request Content-Type (including the
+    multipart boundary) and returning the upstream status, headers,
+    and body verbatim. The DSL body is intentionally empty - the
+    router dispatches to the proxy handler before StepEngine runs.
+  proxy:
+    upstream: "[#PROXY_UPSTREAM]"
+    preserve_headers: true
+    max_body_bytes: 67108864
+    max_in_flight: 32
+    inbound_progress_timeout_ms: 10000
+    allowed_encodings: ["identity"]
+    request_timeout_ms: 60000

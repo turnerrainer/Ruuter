@@ -8,6 +8,8 @@ use crate::state::StateStore;
 use crate::steps::engine::{DslExecutionResult, StepEngine};
 use crate::ws::{random_client_id, Outbound, WsRegistry};
 use crate::{Result, RuuterError};
+
+pub mod proxy;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::{
@@ -37,6 +39,12 @@ pub struct DslRouter {
     state: StateStore,
     ws_registry: WsRegistry,
     openapi_spec: Arc<ArcSwap<Value>>,
+    /// Issue #134 — pass-through proxy client. Separate reqwest client
+    /// pool from the one `http.*` steps use, so a saturated proxy
+    /// workload cannot starve the DSL step budget. Shared across
+    /// requests; the per-route Semaphore registry inside it bounds
+    /// concurrency per `declaration.proxy.max_in_flight`.
+    proxy_client: proxy::ProxyClient,
 }
 
 impl DslRouter {
@@ -98,6 +106,14 @@ impl DslRouter {
             &dsls.load(),
             env!("CARGO_PKG_VERSION"),
         )));
+        // Issue #134 — build the dedicated proxy client at router
+        // construction time so a config error (invalid reqwest pool
+        // params) surfaces at boot, not at the first proxied request.
+        // A failed build is unreachable in practice but we fail loudly
+        // if it happens so an operator sees the misconfiguration
+        // immediately.
+        let proxy_client = proxy::ProxyClient::new(&config, engine.http_client().clone())
+            .expect("pass_through_proxy config is invalid");
         Self {
             dsls,
             guards,
@@ -106,6 +122,7 @@ impl DslRouter {
             config,
             ws_registry,
             openapi_spec,
+            proxy_client,
         }
     }
 
@@ -139,7 +156,7 @@ impl DslRouter {
     /// order. Returns `(matched_dsl, matched_key, path_params)` on
     /// success; `None` if no shortened key resolves. The matched key
     /// is what guards prefix-match against.
-    fn resolve_dsl_with_path_params(
+    pub(crate) fn resolve_dsl_with_path_params(
         &self,
         project: &str,
         method: &str,
@@ -215,7 +232,7 @@ impl DslRouter {
     /// skipped and only the closest-match (longest key) override guard
     /// runs. Non-override guards stack normally when no override is
     /// present anywhere on the path.
-    fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<(String, Dsl)> {
+    pub(crate) fn applicable_guards(&self, project: &str, dsl_key: &str) -> Vec<(String, Dsl)> {
         // Delegate the matching rules to the shared audit helper
         // (issue #45) so this hot-path resolver, `dsl-lint
         // --require-guard`, and `GET /_/unguarded` all agree on which
@@ -835,6 +852,101 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
         headers_map.insert(k.to_ascii_lowercase(), v.clone());
     }
 
+    // Issue #134 — pass-through proxy early-dispatch. Runs BEFORE the
+    // 16 MiB global Content-Length preflight: proxy routes have their
+    // own per-route `max_body_bytes` cap (declared on the route) that
+    // the proxy handler enforces. Guards still run against a header-
+    // only `ExecutionContext` (empty `incoming.body`) before any
+    // upstream connection is opened.
+    let upper_method = method.as_str().to_uppercase();
+    if let Some((proxy_dsl, matched_key, path_params)) =
+        router.resolve_dsl_with_path_params(&project, &upper_method, &endpoint_path)
+    {
+        if let Some(decl_block) = proxy_dsl.declaration.as_ref() {
+            if let Some(proxy_decl) = decl_block.proxy.clone() {
+                let origin = resolve_origin(&headers_map, peer_addr, &router.config.proxy.trusted);
+                let traceparent = headers_map
+                    .get("traceparent")
+                    .cloned()
+                    .unwrap_or_else(generate_traceparent);
+                let route_key = format!("{}|{}", project, matched_key);
+
+                // Header-only guard execution. Same semantics as the
+                // normal path (declaration enforcement, guard-stack
+                // recursion check, outer-first ordering) except that
+                // the ExecutionContext has an empty body map and the
+                // terminal DSL's own `apply_declaration` filter is
+                // skipped (proxy routes don't present a body view the
+                // declaration could filter).
+                let mut query_with_params = query.clone();
+                query_with_params.insert(
+                    "pathParams".to_string(),
+                    Value::Array(path_params.into_iter().map(Value::String).collect()),
+                );
+                let mut headers_with_tp = headers_map.clone();
+                headers_with_tp.insert("traceparent".to_string(), traceparent.clone());
+
+                let context = ExecutionContext::with_state(
+                    HashMap::new(),
+                    query_with_params,
+                    headers_with_tp,
+                    origin,
+                    project.to_string(),
+                    router.state.clone(),
+                )
+                .with_traceparent(traceparent.clone())
+                .with_expr_registry(router.engine.expr_registry().clone());
+
+                for (guard_key, guard) in router.applicable_guards(&project, &matched_key) {
+                    if let Some(decl) = &guard.declaration {
+                        if let Err(e) = enforce_guard_declaration(
+                            decl,
+                            context.request_body(),
+                            context.request_query(),
+                            context.request_headers(),
+                            &upper_method,
+                        ) {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({"error": e.to_string()})),
+                            )
+                                .into_response();
+                        }
+                    }
+                    let _guard_frame = match context.push_guard(guard_key) {
+                        Ok(frame) => frame,
+                        Err(e) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": e.to_string()})),
+                            )
+                                .into_response();
+                        }
+                    };
+                    let guard_result = match router.engine.run(&guard, &context).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(error = %error_chain(&e), "proxy guard execution failed");
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": "guard execution failed"})),
+                            )
+                                .into_response();
+                        }
+                    };
+                    if guard_result.status >= 400 {
+                        return build_guard_short_circuit(guard_result);
+                    }
+                }
+
+                return router
+                    .proxy_client
+                    .forward(&proxy_decl, &route_key, &traceparent, request)
+                    .await;
+            }
+        }
+    }
+
     // h2ck.me v1 T-8 — Content-Length preflight. `axum::body::to_bytes`
     // uses `http_body_util::Limited` internally and DOES reject
     // mid-stream on the first over-limit frame — user-space
@@ -1278,6 +1390,26 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
     }
 
     apply_default_response_headers(&mut response, &router.config.response_default_headers);
+    response
+}
+
+/// Issue #134 — render a guard-rejected `DslExecutionResult` as an
+/// axum Response for the proxy-dispatch path. Guards short-circuit
+/// with status >= 400; this helper reuses the status, body value, and
+/// headers directly (no wrapper, no raw_body — guards traditionally
+/// emit a terminal response shape).
+fn build_guard_short_circuit(result: DslExecutionResult) -> Response {
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::FORBIDDEN);
+    let body = result.value.unwrap_or_else(|| json!({}));
+    let mut response = (status, Json(body)).into_response();
+    for (k, v) in &result.headers {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(v),
+        ) {
+            response.headers_mut().insert(name, value);
+        }
+    }
     response
 }
 

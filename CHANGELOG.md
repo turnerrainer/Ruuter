@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #134 — pass-through binary proxy for `multipart/related` /
+  AS4 / eDelivery traffic.** A new route-level declaration shape
+  `declaration.proxy: { upstream, max_body_bytes, ... }` turns a DSL
+  into a streaming byte-identical HTTP proxy. The request body is
+  forwarded to the upstream unchanged (no buffering, no parsing, no
+  Content-Type reinterpretation); the upstream's status, headers,
+  and body are returned to the client unchanged. The DSL body is
+  intentionally empty — the router dispatches to the proxy handler
+  before StepEngine runs. Motivated by the Estonian eFTI Gate
+  retiring its Klite multiplexer and needing Ruuter as the mandatory
+  AS4 entry point in front of the national eDelivery access point
+  (kemit-ee/efti-gate-ee#186, #191).
+
+  Pre-fix behaviour (verified against v0.10.1-rc,
+  `src/router/mod.rs:900–1001`): any request whose Content-Type was
+  not JSON / `application/x-www-form-urlencoded` / `multipart/form-data`
+  / `text/*` reached the DSL with an empty `incoming.body`. The
+  outbound `http` step serialised bodies per `content_type:`
+  (json / plaintext / formdata) — no path existed to send caller-
+  supplied bytes with the caller's Content-Type including the
+  multipart boundary. Ruuter was therefore unusable as the mandatory
+  entry point for AS4 traffic — the body was dropped, and even if
+  it reached the DSL it could not be re-emitted byte-identically.
+
+  Post-fix shape:
+
+  ```yaml
+  declaration:
+    proxy:
+      upstream: "[#EDELIVERY_URL]/ws/ap"
+      preserve_headers: true
+      max_body_bytes: 67108864
+      max_in_flight: 32
+      inbound_progress_timeout_ms: 10000
+      allowed_encodings: ["identity"]
+      request_timeout_ms: 60000
+  ```
+
+  Design envelope locked with the operator before coding:
+  - **Streaming end-to-end** (hyper inbound → `futures::Stream<Bytes>`
+    → `reqwest::Body::wrap_stream`). No "buffer first then forward"
+    MVP — a byte-identical proxy for AS4 messages with large
+    attachments must stream to keep per-request memory bounded.
+  - **No decompression on the proxy client**
+    (`.no_gzip().no_brotli().no_deflate()`). Byte-identical means
+    the compressed bytes land at the upstream exactly as the client
+    sent them. `allowed_encodings` is the operator's lever on which
+    encodings to accept at all.
+  - **Hop-by-hop stripping** on both legs (RFC 7230 §6.1): request
+    leg strips `Connection`, `Keep-Alive`, `Proxy-Authenticate`,
+    `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`,
+    `Upgrade`, `Host`, `Expect`, plus any header named in the
+    client's `Connection:` list (dynamic hop-by-hop). Response leg
+    strips the same set minus `Host` and `Expect`.
+  - **`traceparent` forwarded** end-to-end (not hop-by-hop).
+  - **Guards still run** against a header-only `ExecutionContext`
+    (empty `incoming.body`). Guards that reference
+    `${incoming.body…}` on a proxy route see an empty object — use
+    headers / params for authentication (typically a mTLS DN
+    forwarded by the TLS terminator in a header).
+  - **Security floor** preserved: SSRF check (`internal_requests`
+    allowlist / block_private_networks / DNS pinning), per-route
+    Content-Length preflight against `max_body_bytes`, mid-stream
+    size cap on both legs, Content-Encoding allowlist, per-route
+    Semaphore cap on in-flight concurrency (503 + `Retry-After: 1`
+    on overflow), inbound idle-frame timeout, overall
+    request-timeout deadline.
+  - **Dedicated reqwest client pool** sized by a new top-level
+    `pass_through_proxy:` config block (`pool_max_idle_per_host`
+    default 32, `pool_idle_timeout_ms` 90000, `connect_timeout_ms`
+    10000). Independent of the `http.*` step's pool so a saturated
+    proxy workload cannot starve normal outbound traffic.
+  - **Transport errors** mapped via the existing
+    `classify_transport_error` helper (same `kind` strings as #89
+    stubs) and surfaced as `502 + {error: "proxy_transport_error",
+    kind: "..."}`.
+
+  Parse-time errors (rejected at DSL load time):
+  - `declaration.proxy:` + `declaration.allowlist.body:` →
+    mutually exclusive (same posture as `strict:` + `additive:`
+    from #75). Proxying is byte-identical; a body allowlist would
+    require parsing the body (defeats the contract and introduces
+    a parser attack surface).
+  - `declaration.proxy:` + `declaration.allowed_body:` (legacy
+    flat form) → same error.
+  - `declaration.proxy:` + any action step in the DSL body → error.
+  - `declaration.proxy.upstream` empty → error.
+  - `declaration.proxy.max_body_bytes: 0` → error.
+  - `declaration.proxy.allowed_encodings` containing an unknown
+    encoding → error (known: `identity`, `gzip`, `deflate`, `br`,
+    `zstd`).
+
+  New top-level config block in `AppConfig`:
+  - `pass_through_proxy.pool_max_idle_per_host` (default 32)
+  - `pass_through_proxy.pool_idle_timeout_ms` (default 90000)
+  - `pass_through_proxy.connect_timeout_ms` (default 10000)
+
+  OpenAPI emits a minimal `application/octet-stream` request/response
+  shape for proxy routes. dsl-lint recognises proxy declarations
+  (both the explicit `declaration: { proxy: {...} }` nested shape
+  and the implicit shape where `proxy:` appears alongside other
+  declaration-only fields) and suppresses the empty-executable-steps
+  error for proxy routes.
+
+  Known caveats shipped (documented in `book/src/dsl/proxy.md`):
+  - `Expect: 100-continue` is auto-ack'd by hyper on inbound; a
+    full forward-and-relay would require a custom hyper server
+    integration and the AS4 use case does not exercise it.
+  - HTTP/1.1 trailers are not forwarded (reqwest and axum body
+    streams carry data frames only).
+  Both tracked as follow-up work.
+
+  Migration: no caller-facing migration needed. The feature is
+  additive — routes that previously had empty `incoming.body` for
+  `multipart/related` (and therefore couldn't do anything meaningful
+  with the request) can now be rewritten as `declaration.proxy:`
+  routes to forward byte-identically. Existing routes are untouched.
+
+  New config `pass_through_proxy:` is additive; absent-block
+  defaults match the recommended values. The sample DSL
+  `DSL/samples/POST/proxy/forward.yml` demonstrates the shape;
+  `book/src/dsl/proxy.md` is the authoritative contract (hop-by-
+  hop list, Content-Encoding defaults, error-response shapes,
+  caveats).
+
+  Regression tests: `tests/issue_134_proxy_pass_through.rs` — 17
+  active scenarios + 1 `#[ignore]`'d concurrency-cap test. Covers
+  byte-identical SHA-256 round-trip of a multipart/related body
+  with a binary attachment, guard-rejection-before-upstream, 413
+  Content-Length preflight, Content-Encoding allowlist (default
+  `identity` + opt-in `gzip` passthrough), hop-by-hop stripping
+  including dynamic `Connection:`-named headers, `traceparent`
+  forwarding, 4xx / 5xx verbatim passthrough, transport error →
+  502 mapping, SSRF block for private upstream, OpenAPI entry
+  shape, and six parse-time error paths.
+
+### Changed (behavior)
+
+- **Issue #134 — routes declared with `declaration.proxy:` bypass
+  the global 16 MiB inbound Content-Length preflight**
+  (`MAX_INBOUND_BODY_BYTES` in `src/router/mod.rs`) — their own
+  `max_body_bytes` cap applies instead. The global cap remains in
+  force for every non-proxy route. Operators who need the previous
+  cap on a proxy route set `max_body_bytes: 16777216` explicitly.
+
 ## [0.10.1-rc] - 2026-09-18
 
 Six h2ck.me v1 batch-2 backlog items shipped in one round (T-23,

@@ -31,6 +31,7 @@
 - [Path parameters](./dsl/path-params.md)
 - [Guards](./dsl/guards.md)
 - [Idempotency pattern](./dsl/idempotency-pattern.md)
+- [Pass-through proxy routes](./dsl/proxy.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
 - [YAML gotchas](./dsl/yaml-gotchas.md)
 

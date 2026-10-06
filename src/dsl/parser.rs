@@ -48,6 +48,36 @@ impl DslParser {
         if let Some(decl) = &dsl.declaration {
             decl.validate_posture()
                 .map_err(|msg| RuuterError::DslParse(format!("declaration: {}", msg)))?;
+            // Issue #134 — a proxy route may not declare action steps.
+            // The body is forwarded by the router before StepEngine
+            // runs; any action step on the route would be unreachable
+            // and almost certainly a mistake (operator thought the DSL
+            // would run post-forward). Fail loudly at parse time.
+            if decl.proxy.is_some() {
+                let action_steps: Vec<&String> = dsl
+                    .steps
+                    .iter()
+                    .filter_map(|(name, step)| match step {
+                        DslStep::Declaration(_) => None,
+                        _ => Some(name),
+                    })
+                    .collect();
+                if !action_steps.is_empty() {
+                    let joined = action_steps
+                        .iter()
+                        .map(|s| format!("`{}`", s))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(RuuterError::DslParse(format!(
+                        "declaration.proxy routes may not declare action steps \
+                         (found {}). The body is forwarded to the upstream before \
+                         StepEngine runs; any action step would be unreachable. \
+                         Move the forwarding logic to a non-proxy route if you need \
+                         a step pipeline.",
+                        joined
+                    )));
+                }
+            }
         }
         Ok(dsl)
     }
@@ -191,6 +221,10 @@ impl DslParser {
             "override_ancestors",
             "allowlist",
             "strict",
+            // Issue #134 — `proxy:` is a declaration field, not an
+            // action. Routes with `proxy:` are header-only; the body
+            // is forwarded by the router before StepEngine is reached.
+            "proxy",
         ]
         .iter()
         .any(|k| key_present(k))

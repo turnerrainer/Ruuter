@@ -153,6 +153,15 @@ impl StepEngine {
         }
     }
 
+    /// Issue #134 — the pass-through proxy handler needs a reference
+    /// to the same `HttpClient` the engine holds so SSRF / allowlist
+    /// / block-private-networks apply uniformly across `http.*` steps
+    /// and proxy routes. Exposed as a borrow; `HttpClient` is `Clone`,
+    /// so callers who need an owned handle clone the return value.
+    pub fn http_client(&self) -> &HttpClient {
+        &self.http_client
+    }
+
     /// Return `(key, guard)` pairs for every guard that gates
     /// `(project, dsl_key)`, outermost first, using the same helper
     /// `DslRouter` uses on the HTTP path (`guard_audit::guard_keys_for_dsl`)

@@ -279,6 +279,13 @@ struct ParsedFile {
     raw: String,
     /// Template targets referenced by the DSL (raw string).
     template_targets: Vec<String>,
+    /// Issue #134 — true when any step carries a `proxy:` key under
+    /// its declaration (either as `declaration: { proxy: {...} }` or
+    /// via the implicit-declaration shape where `proxy:` appears
+    /// alongside other declaration-only fields on a bare step). Proxy
+    /// routes legitimately have zero action steps, so the empty-
+    /// executable-steps error is suppressed when this is true.
+    has_proxy_declaration: bool,
 }
 
 struct ParsedStep {
@@ -306,6 +313,7 @@ fn parse_file(
     let mut steps = Vec::new();
     let mut entry_step: Option<String> = None;
     let mut template_targets = Vec::new();
+    let mut has_proxy_declaration = false;
 
     for (idx, (name, value)) in map.iter().enumerate() {
         let YamlValue::Mapping(m) = value else {
@@ -356,6 +364,21 @@ fn parse_file(
             }
         }
 
+        // Issue #134 — detect `proxy:` in either shape:
+        //   nested:   step_name: { declaration: { proxy: {...} } }
+        //   implicit: step_name: { proxy: {...}, version: "..." }
+        // Both parse to the same `DeclarationStep::proxy` field.
+        if m.contains_key(YamlValue::String("proxy".to_string())) {
+            has_proxy_declaration = true;
+        }
+        if let Some(YamlValue::Mapping(decl_map)) =
+            m.get(YamlValue::String("declaration".to_string()))
+        {
+            if decl_map.contains_key(YamlValue::String("proxy".to_string())) {
+                has_proxy_declaration = true;
+            }
+        }
+
         if idx == 0 {
             entry_step = Some(name.clone());
         }
@@ -377,6 +400,7 @@ fn parse_file(
         steps,
         raw,
         template_targets,
+        has_proxy_declaration,
     })
 }
 
@@ -443,10 +467,15 @@ fn check_dsl(
         .iter()
         .filter(|s| s.kind != "declaration")
         .collect();
-    if real_steps.is_empty() && pf.template_targets.is_empty() {
+    if real_steps.is_empty() && pf.template_targets.is_empty() && !pf.has_proxy_declaration {
         // A guard-file that only says `declaration: { override_ancestors: true }`
         // and a `deny:` step is real. The check is: at least one non-declaration
         // step must exist. If not, error.
+        //
+        // Issue #134 — pass-through proxy routes (`declaration.proxy:
+        // {...}`) are legitimately empty: the router forwards bytes
+        // without running any step pipeline. Skip the empty-executable
+        // check when a proxy declaration is detected.
         report.file_error(path, "DSL has no executable steps".into());
         return;
     }

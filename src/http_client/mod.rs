@@ -293,7 +293,12 @@ impl HttpClient {
         &self.uds_pool
     }
 
-    async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
+    /// Issue #134 — pass-through proxy routes reuse the same SSRF
+    /// posture as the `http.*` step (allowlists, private-network
+    /// block, DNS-rebinding close). Exposed `pub(crate)` so
+    /// `router::proxy` can call it without going through
+    /// `request_with_ct` (which assumes JSON-oriented body handling).
+    pub(crate) async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
         if self.outbound_disabled {
             return Err(RuuterError::HttpRequest(
                 "outbound HTTP is disabled by internal_requests.disabled".into(),
