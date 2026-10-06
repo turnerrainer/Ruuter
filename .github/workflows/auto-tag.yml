@@ -114,10 +114,13 @@ jobs:
           # of truth for what shipped.
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Ruuter-on-Rust $VERSION
-
-Auto-tagged by .github/workflows/auto-tag.yml on merge of the
-chore(release) commit for this version. See CHANGELOG.md for the
-detailed list of items shipped." "${{ github.sha }}"
+          # Multi-line tag message assembled via $'...' so each
+          # continuation line stays inside the YAML `run: |` block's
+          # indent column — bare un-indented lines in a block scalar
+          # terminate the scalar early and GitHub Actions rejects the
+          # workflow at parse time (observed on every run since this
+          # workflow was added; see note at the top of this file).
+          msg=$'Ruuter-on-Rust '"$VERSION"$'\n\nAuto-tagged by .github/workflows/auto-tag.yml on merge of the\nchore(release) commit for this version. See CHANGELOG.md for the\ndetailed list of items shipped.'
+          git tag -a "$TAG" -m "$msg" "${{ github.sha }}"
           git push origin "$TAG"
           echo "Pushed $TAG; publish.yml will pick it up on the tag trigger"
