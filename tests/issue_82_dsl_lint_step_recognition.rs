@@ -41,6 +41,7 @@ fn fixture_for(step: &str) -> &'static str {
         "assign" => "s: { assign: { x: 1 } }\nr: { return: ok, next: end }\n",
         "call" => "s: { call: http.get, args: { url: 'http://localhost:1', body: null, query: null, headers: null } }\nr: { return: ok, next: end }\n",
         "declaration" => "declaration: { description: 'sample' }\nr: { return: ok, next: end }\n",
+        "detach" => "s:\n  detach:\n    do:\n      - assign:\n          x: 1\n  next: r\nr: { return: ok, next: end }\n",
         "iterate" => "s: { iterate: { over: '${[]}', as: item, do: r } }\nr: { return: ok, next: end }\n",
         "log" => "s: { log: 'hello', next: r }\nr: { return: ok, next: end }\n",
         "return" => "r: { return: ok }\n",

@@ -109,6 +109,13 @@ pub struct AppConfig {
     #[serde(default)]
     pub state: StateConfig,
 
+    /// Issue #137 — process-wide `detach` step registry bounds.
+    /// Caps the number of concurrently in-flight detached tasks
+    /// across the whole process. Defaults are tuned for a modest-
+    /// footprint edge instance; raise under load.
+    #[serde(default)]
+    pub detach: DetachConfig,
+
     /// Task 043 — outbound Unix-domain-socket transport aliases.
     ///
     /// Maps `http://<host>/...` URLs whose host matches a key to a
@@ -725,6 +732,45 @@ pub struct ProxyConfig {
     pub trusted: Vec<String>,
 }
 
+/// Issue #137 — process-wide bounds for the `detach` step. One
+/// `tokio::sync::Semaphore` controls how many detached tasks may be
+/// in flight at any moment across the whole process. Overflow fails
+/// the step with `RuuterError::DslExecution` so the DSL can either
+/// route to `error:` or fall through.
+///
+/// `max_inflight: null` disables the cap (every `detach` call spawns
+/// unconditionally). Safe only on locked-down deployments with a
+/// known-bounded workload; `warn_on_detach_defaults` fires a boot
+/// WARN when `null` is paired with a non-loopback listener.
+///
+/// `shutdown_grace_secs` bounds how long the SIGTERM drain waits for
+/// in-flight detached tasks before `abort_all()` cuts them.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DetachConfig {
+    #[serde(default = "default_detach_max_inflight")]
+    pub max_inflight: Option<u32>,
+
+    #[serde(default = "default_detach_shutdown_grace_secs")]
+    pub shutdown_grace_secs: u64,
+}
+
+fn default_detach_max_inflight() -> Option<u32> {
+    Some(256)
+}
+
+fn default_detach_shutdown_grace_secs() -> u64 {
+    15
+}
+
+impl Default for DetachConfig {
+    fn default() -> Self {
+        Self {
+            max_inflight: default_detach_max_inflight(),
+            shutdown_grace_secs: default_detach_shutdown_grace_secs(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InternalRequestsConfig {
     #[serde(default)]
@@ -863,6 +909,7 @@ impl Default for AppConfig {
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
             state: StateConfig::default(),
+            detach: DetachConfig::default(),
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),
@@ -1068,6 +1115,10 @@ pub fn warn_on_stale_config_fields(config: &AppConfig) {
     // any listener is non-loopback.
     warn_on_missing_owasp_baseline_headers(config);
 
+    // Issue #137 — detach cap null on a non-loopback listener is a
+    // DoS footgun; one WARN names the mitigation.
+    warn_on_detach_defaults(config);
+
     // h2ck.me v1 T-13 — CSRF `allowed_origins` empty means the
     // Origin/Referer check is silently OFF for state-changing
     // methods. Documented at `book/src/framework/csrf.md` but no
@@ -1171,6 +1222,29 @@ pub fn missing_owasp_baseline_headers(config: &AppConfig) -> Vec<&'static str> {
 /// non-loopback listener AND there IS at least one missing baseline
 /// header. Loopback-only deployments (dev laptops, test harnesses,
 /// sidecar-only listeners on UDS) never see the WARN.
+/// Issue #137 — WARN at boot when the `detach:` concurrency cap is
+/// explicitly disabled (`detach.max_inflight: null`) AND the process
+/// binds a non-loopback listener. Null-opt-out is a legitimate choice
+/// on locked-down internal deployments, but on a public listener it
+/// means one inbound request can spawn an unbounded detach fan-out,
+/// which is a DoS vector. The WARN names the mitigation (set a cap
+/// or restrict to loopback).
+fn warn_on_detach_defaults(config: &AppConfig) {
+    if config.detach.max_inflight.is_some() {
+        return;
+    }
+    if !has_non_loopback_listener(config) {
+        return;
+    }
+    tracing::warn!(
+        "config: detach.max_inflight=null explicitly disables the per-process \
+         cap on in-flight detached tasks. On a non-loopback listener this means \
+         one inbound request can spawn an unbounded number of detach tasks. \
+         Set detach.max_inflight to a numeric value (default 256) unless this \
+         opt-in is deliberate. See book/src/dsl/steps/detach.md."
+    );
+}
+
 fn warn_on_missing_owasp_baseline_headers(config: &AppConfig) {
     if !has_non_loopback_listener(config) {
         return;

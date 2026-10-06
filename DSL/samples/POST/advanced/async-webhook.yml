@@ -1,0 +1,26 @@
+declaration:
+  description: >
+    Issue #137 — detach step pattern. Respond 202 Accepted
+    immediately; forward the webhook body to a downstream audit
+    sink in the background. Caller never waits on the audit sink.
+    Compose with parallel_http (issue #135/#136) for fan-out to
+    multiple sinks.
+
+fire:
+  detach:
+    do:
+      - call: http.post
+        args:
+          url: "[#DOMAIN_URL]/audit/sink"
+          body: "${incoming.body}"
+          headers:
+            Content-Type: application/json
+        result: _audit
+    timeout_ms: 15000
+  next: reply
+
+reply:
+  return:
+    accepted: true
+    request_id: "${incoming.headers['x-request-id']}"
+  status: 202
