@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod assign;
+pub mod detach;
 pub mod engine;
 pub mod http;
 pub mod http_mock;
@@ -43,6 +44,7 @@ pub const STEP_KEYS: &[&str] = &[
     "assign",
     "call",
     "declaration",
+    "detach",
     "iterate",
     "log",
     "return",
@@ -60,6 +62,7 @@ pub const STEP_KEYS: &[&str] = &[
 pub const ACTION_STEP_KEYS: &[&str] = &[
     "assign",
     "call",
+    "detach",
     "iterate",
     "log",
     "return",
@@ -128,6 +131,11 @@ pub enum DslStep {
     Template(TemplateStep),
     State(StateStep),
     Iterate(IterateStep),
+    /// Issue #137 — background execution. The step's `do:` block runs
+    /// in a detached task; the parent DSL continues immediately. Used
+    /// by the eFTI K4 pattern (kemit-ee/efti-gate-ee#252) to answer
+    /// the caller fast while a long-running fan-out writes to Postgres.
+    Detach(DetachStep),
     WsSend(WsSendStep),
     WsTag(WsTagStep),
     SingleFlight(SingleFlightStep),
@@ -149,6 +157,7 @@ impl DslStep {
             DslStep::Template(s) => Some(&s.base),
             DslStep::State(s) => Some(&s.base),
             DslStep::Iterate(s) => Some(&s.base),
+            DslStep::Detach(s) => Some(&s.base),
             DslStep::WsSend(s) => Some(&s.base),
             DslStep::WsTag(s) => Some(&s.base),
             DslStep::SingleFlight(s) => Some(&s.base),
@@ -170,6 +179,7 @@ impl DslStep {
             DslStep::Template(_) => "template",
             DslStep::State(_) => "state",
             DslStep::Iterate(_) => "iterate",
+            DslStep::Detach(_) => "detach",
             DslStep::WsSend(_) => "ws_send",
             DslStep::WsTag(_) => "ws_tag",
             DslStep::SingleFlight(_) => "single_flight",
@@ -191,6 +201,7 @@ impl DslStep {
             DslStep::Template(s) => s.next.as_deref(),
             DslStep::State(s) => s.next.as_deref(),
             DslStep::Iterate(s) => s.next.as_deref(),
+            DslStep::Detach(s) => s.next.as_deref(),
             DslStep::WsSend(s) => s.next.as_deref(),
             DslStep::WsTag(s) => s.next.as_deref(),
             DslStep::SingleFlight(s) => s.next.as_deref(),
@@ -268,6 +279,53 @@ pub struct IterateBody {
     /// executor — set lower for tight bounds, higher for known-large lists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_items: Option<usize>,
+}
+
+/// Issue #137 — background execution. The parent DSL fires `detach`,
+/// the `do:` block runs in a detached `tokio::spawn` task, and the
+/// parent continues immediately to `next:`. Composes with
+/// `parallel_http` (#135/#136) for the eFTI K4 pattern: fan out to
+/// peers in the background, write the aggregated result to Postgres,
+/// caller polls back.
+///
+/// Semantics:
+/// - `do:` sub-steps run **sequentially in source order** (same
+///   contract as `iterate.do:` / `single_flight.do:`). Each sub-step's
+///   `next:` is ignored; the block completes when the last sub-step
+///   finishes.
+/// - The detached task owns a **snapshot clone** of the parent
+///   context — writes made inside `do:` do not propagate back.
+/// - Errors inside `do:` are logged with the parent's `traceparent`
+///   and never affect the parent's already-sent response.
+/// - Process-wide concurrency is bounded by `AppConfig.detach.max_inflight`
+///   (default 256). Overflow fails the step so the DSL can route to
+///   `error:` or fall through.
+/// - On SIGTERM the drain window (`AppConfig.detach.shutdown_grace_secs`,
+///   default 15) waits for in-flight detached tasks before `abort_all`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DetachStep {
+    pub detach: DetachBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DetachBody {
+    /// Sub-steps that run inside the detached task. Executed
+    /// sequentially via `engine.execute_single_step`. A sub-step's
+    /// `next:` directive is ignored (consistent with
+    /// `iterate.do` / `single_flight.do`).
+    #[serde(rename = "do")]
+    pub body: Vec<DslStep>,
+    /// Optional end-to-end deadline for the whole detached block in
+    /// milliseconds. On timeout the current sub-step is cancelled and
+    /// a WARN is logged with the parent's traceparent. `None` =
+    /// unbounded (bounded in practice by SIGTERM grace + whatever
+    /// per-sub-step timeouts are set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

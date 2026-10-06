@@ -46,3 +46,29 @@ Review before every partner-facing deploy.
 - [ ] Every guard returns explicit 4xx status on reject (not a bare `return: { error: ... }` that would 200).
 - [ ] No DSL uses `${incoming.body.url}` (or similar) as an `http` step URL without an SSRF allow-list.
 - [ ] Idempotency-Key semantics understood by clients writing to POST/PUT/PATCH/DELETE routes.
+
+## Background execution — `detach:` (issue #137)
+
+Reviewed if any DSL uses the [`detach:` step](../dsl/steps/detach.md).
+
+- [ ] **`detach.max_inflight` set** to a numeric value on any
+  non-loopback deployment. `null` disables the per-process cap on
+  concurrent detached tasks — one inbound request can spawn an
+  unbounded number of them. Default `256`; raise under load but set
+  a real number.
+- [ ] **`detach.shutdown_grace_secs` matches your deploy pattern.**
+  Default `15` s. On a rolling deploy, detached tasks that take
+  longer than this get `abort_all()`'d — any Postgres writes they
+  were about to make are lost. If your eFTI-shaped fan-out routinely
+  takes 60 s, raise this (and accept the longer drain window).
+- [ ] **No `incoming.*` dereference in a detached task assumes
+  per-request state writes.** The detached task has a snapshot of
+  the parent's context — writes made inside `do:` do NOT propagate
+  back to the parent. If you need the parent to see a detached
+  task's result, write to the state store or Postgres, not to a
+  DSL variable.
+- [ ] **No long-held upstream requests inside `detach.do:` that
+  would survive the SIGTERM grace window.** Those are the ones that
+  get aborted mid-flight on redeploy. If "survive restart" is a
+  requirement, use a work-queue decoupling (NATS JetStream, Kafka,
+  Postgres LISTEN+NOTIFY) instead of `detach:`.

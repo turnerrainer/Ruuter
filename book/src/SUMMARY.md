@@ -22,6 +22,7 @@
   - [http](./dsl/steps/http.md)
   - [state](./dsl/steps/state.md)
   - [iterate](./dsl/steps/iterate.md)
+  - [detach](./dsl/steps/detach.md)
   - [template](./dsl/steps/template.md)
   - [ws_send](./dsl/steps/ws_send.md)
   - [single_flight](./dsl/steps/single_flight.md)

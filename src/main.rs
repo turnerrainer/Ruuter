@@ -250,6 +250,10 @@ async fn main() {
     // the HTTP entry path runs. Pre-T-4, `with_guards` was a
     // builder — any caller that forgot to invoke it silently
     // reopened the H1 bypass.
+    // Issue #137 — process-wide registry for the `detach:` step.
+    // Shared by cloning (Arcs inside); main.rs retains a handle for
+    // the SIGTERM drain below.
+    let detach_registry = ruuter_on_rust::steps::detach::DetachRegistry::new(&config.detach);
     let mut engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
         .with_ws_registry(ws_registry.clone())
         // `with_dsls_shared` (not `with_dsls`) so the engine and the
@@ -258,7 +262,8 @@ async fn main() {
         // template-lookup handle pointing at the stale tree.
         .with_dsls_shared(shared_http_dsls.clone())
         .with_expr_registry(expr_registry)
-        .with_logging(logging_arc.clone());
+        .with_logging(logging_arc.clone())
+        .with_detach_registry(detach_registry.clone());
     if let Some(n) = config.max_step_recursions {
         engine = engine.with_max_iterations(n);
     }
@@ -584,6 +589,24 @@ async fn main() {
         // listener panics we still want to exit; select_all covers
         // that seam via the panic reflowing to a JoinError.
         futures::future::join_all(handles).await;
+    }
+
+    // Issue #137 — drain any `detach:` step tasks that are still
+    // running. Runs AFTER axum/UDS listeners have drained because a
+    // just-completed inbound request may have fired detach as its
+    // last step; the registry owns the task, not the request path,
+    // so we wait on it separately. Grace window is sized by
+    // `AppConfig.detach.shutdown_grace_secs` (default 15).
+    let (starting, aborted) = detach_registry.drain().await;
+    if starting > 0 {
+        if aborted > 0 {
+            warn!(
+                starting,
+                aborted, "detach drain: some tasks exceeded the grace window"
+            );
+        } else {
+            info!(starting, "detach drain: all tasks finished within grace");
+        }
     }
 
     observability::shutdown(tracer_provider);
