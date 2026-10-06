@@ -91,6 +91,16 @@ Response:
 {"count":0,"totals":[]}
 ```
 
+## When to use `parallel_http` instead
+
+`iterate` runs its body **sequentially** — if the loop body contains
+an `http` step, the N peer calls serialise. For fan-out patterns
+where latency matters (asking N peer services the same question
+concurrently), use the [`parallel_http` step](parallel_http.md),
+which fires one HTTP call per peer under a bounded Semaphore and
+aggregates results with three structured modes
+(`collect_ok` / `collect_all` / `first_n`).
+
 ## When to use `detach` instead
 
 `iterate` runs its body in the request's foreground — the caller

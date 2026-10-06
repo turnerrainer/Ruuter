@@ -13,8 +13,8 @@ use crate::scripting::ExpressionRegistry;
 use crate::steps::detach::DetachRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
-    assign, detach, http, http_mock, iterate, log, return_step, single_flight, state, switch,
-    template, ws_send, ws_tag, DslStep, StepExecutor,
+    assign, detach, http, http_mock, iterate, log, parallel_http, return_step, single_flight,
+    state, switch, template, ws_send, ws_tag, DslStep, StepExecutor,
 };
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
@@ -158,6 +158,16 @@ impl StepEngine {
             guards_mode,
             detach_registry: None,
         }
+    }
+
+    /// Issue #135 — the `parallel_http` step dispatches outbound
+    /// calls through the engine's shared `HttpClient` so SSRF checks,
+    /// pinned-DNS resolution, and the `#89` transport-error contract
+    /// apply identically to every peer. Exposed as a borrow;
+    /// `HttpClient` is `Clone`, so callers that need an owned handle
+    /// clone the return value.
+    pub fn http_client(&self) -> &HttpClient {
+        &self.http_client
     }
 
     /// Issue #137 — attach the process-wide `DetachRegistry` built at
@@ -724,6 +734,11 @@ impl StepEngine {
             }
             DslStep::Iterate(s) => {
                 iterate::IterateStepExecutor::new(s.clone(), self.clone())
+                    .execute(context)
+                    .await
+            }
+            DslStep::ParallelHttp(s) => {
+                parallel_http::ParallelHttpStepExecutor::new(s.clone(), self.clone())
                     .execute(context)
                     .await
             }

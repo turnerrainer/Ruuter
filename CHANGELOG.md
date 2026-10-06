@@ -9,6 +9,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Issues #135 + #136 — `parallel_http` step with three
+  structured-aggregation modes.** New DSL primitive for bounded
+  concurrent fan-out to N peer services. Replaces the DIY
+  "iterate + http step" pattern (which serialises) and the Klite-
+  multiplexer primitive retired by K4 (kemit-ee/efti-gate-ee#252).
+
+  ```yaml
+  fan:
+    parallel_http:
+      peers: "${gates}"              # expression → array
+      call: http.post                # default: http.get
+      args:
+        url: "${peer.baseUrl}/v1/send"
+        body: "${incoming.body}"
+      timeout: 2000                  # per-peer deadline (ms)
+      max_concurrency: 8             # bounded fan-out
+      aggregate: first_n             # collect_ok | collect_all | first_n
+      first_n: 1                     # required under first_n
+      early_exit_on:                 # only under first_n
+        status_range: [200, 299]
+        body_predicate: "${response.body.found === true}"
+      remaining_peers_after: cancel  # cancel | drain_bg (only under first_n)
+      result: peer_responses
+  ```
+
+  Behaviour:
+  - Each peer dispatches via the engine's shared `HttpClient`, so
+    SSRF checks, pinned-DNS resolution, and the #89 transport-error
+    contract (`status: 0, error: "..."`) apply identically to each
+    peer. `traceparent` is auto-forwarded per peer unless the DSL
+    sets one explicitly (same rule as the `http.*` step).
+  - `tokio::task::JoinSet` + `Arc<tokio::sync::Semaphore>` bound
+    the concurrent in-flight count. `max_concurrency: null` means
+    "no explicit cap" (bounded by `peers.len()`); operators serving
+    public traffic should always set a modest value.
+  - Three aggregation modes:
+    - **`collect_ok`** — wait for all; drop peers whose response is
+      a transport error. Result array shape: `[{peer, response}, ...]`
+      with `response.error` always null.
+    - **`collect_all`** — wait for all; keep errors. Transport
+      failures surface with `response.status == 0` and
+      `response.error` populated. **This is the mode K4 names as
+      the replacement for Klite's ad-hoc string-join**: a stable
+      structured per-peer record.
+    - **`first_n`** — return when `first_n:` peers satisfy
+      `early_exit_on:` (default: 2xx responses). Remaining in-flight
+      peers are disposed per `remaining_peers_after:`:
+      - `cancel` — abort tasks, lowest tail latency.
+      - `drain_bg` — detach into a background task; eventual
+        responses logged via `tracing::info!` / `warn!` on the
+        parent span. Caller returns immediately with just the N
+        matches.
+  - Result array ordered by input position (sorted after collection;
+    completion order is deliberately lost — DSL authors expect
+    "results in the order I asked").
+  - Empty `peers:` array binds the result variable to `[]` and
+    advances. `null` is treated as empty. Any other type is a
+    runtime error.
+  - `${peer}` binding leaks after the step (parity with
+    `iterate.as`'s `item_var`). `${response}` similarly leaks when
+    `early_exit_on.body_predicate` is set.
+
+  Parse-time errors (caught by `DslParser::parse_content`):
+  - `aggregate: first_n` without `first_n: N` (N >= 1).
+  - `first_n:` / `early_exit_on:` / `remaining_peers_after:` under
+    `collect_ok` / `collect_all` (undefined fields).
+  - `call:` outside `http.{get,post,put,patch,delete}`.
+  - `early_exit_on.status_range: [hi, lo]` where `hi > lo`.
+
+  Composes with the planned `detach` step (issue #137) for the
+  eFTI K4 pattern: write results to Postgres from inside
+  `detach { parallel_http { ... } ; call: http.post resql_write }`,
+  caller polls back.
+
+  Non-breaking additions:
+  - `parallel_http` added to `STEP_KEYS` + `ACTION_STEP_KEYS` (both
+    lists stay in sync via the pinned invariant test).
+  - New `DslStep::ParallelHttp` variant.
+  - New Rust public API: `src/steps/parallel_http.rs`
+    (`ParallelHttpStepExecutor`), `src/steps/mod.rs`
+    (`ParallelHttpStep`, `ParallelHttpBody`, `AggregateMode`,
+    `EarlyExitOn`, `RemainingPeersAfter`).
+  - New `StepEngine::http_client()` accessor so the step can reuse
+    the engine's shared `HttpClient` without the field being made
+    `pub`.
+  - OpenAPI generation: no new emit for `parallel_http` routes
+    (it's a backend fan-out primitive; the route's OpenAPI shape
+    comes from its `return:` step and `declaration:` block as
+    usual).
+  - `dsl-lint`: `parallel_http` recognised automatically via the
+    shared `STEP_KEYS` constant (no linter edits needed; the
+    invariant test pins the alignment).
+
+  Regression tests: `tests/issue_135_parallel_http.rs` — 13
+  scenarios covering `collect_ok` drops transport errors,
+  `collect_all` keeps errors with stable shape, `first_n` quota
+  met, `first_n` with `body_predicate` filtering, empty `peers:`
+  array, `traceparent` forwarded per peer, and seven parse-time
+  error paths.
+
+  Documentation: new `book/src/dsl/steps/parallel_http.md` (full
+  contract, result shape, composition with `detach`, caveats).
+  Cross-referenced from `iterate.md` ("sequential alternative"),
+  `http.md` ("fan-out alternative"), and the SUMMARY tree.
+  Sample DSL `DSL/samples/POST/advanced/parallel-fanout.yml`
+  demonstrates the shape.
+
+  Migration: additive — existing DSLs are untouched. No Rust
+  public-API break (field accessor on `StepEngine` is a new
+  method, not a changed signature). Minor-bump target.
+
 - **Issue #137 — `detach` step: continue DSL work after the HTTP
   response is sent.** New DSL primitive for background execution.
   Composes with `parallel_http` (#135 + #136) for the eFTI K4

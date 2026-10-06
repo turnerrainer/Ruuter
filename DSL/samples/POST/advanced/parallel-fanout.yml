@@ -1,0 +1,35 @@
+declaration:
+  description: >
+    Issue #135 / #136 — bounded concurrent fan-out to a dynamic list
+    of peer services with structured aggregation. The caller submits
+    an identifier; the DSL asks every registered peer "do you have
+    it?" in parallel and returns the full result array.
+
+init:
+  assign:
+    peers:
+      - { id: "alpha", url: "[#DOMAIN_URL]/alpha/lookup" }
+      - { id: "beta",  url: "[#DOMAIN_URL]/beta/lookup" }
+      - { id: "gamma", url: "[#DOMAIN_URL]/gamma/lookup" }
+  next: fanout
+
+fanout:
+  parallel_http:
+    peers: "${peers}"
+    call: http.post
+    args:
+      url: "${peer.url}"
+      body: "${incoming.body}"
+      headers:
+        Content-Type: application/json
+    timeout: 2000
+    max_concurrency: 8
+    aggregate: collect_all
+    result: peer_responses
+  next: reply
+
+reply:
+  return:
+    peers_asked: "${peers.length}"
+    responses: "${peer_responses}"
+  status: 200

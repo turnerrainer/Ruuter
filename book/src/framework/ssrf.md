@@ -72,3 +72,4 @@ Response:
 - UDS transports (`unix://` scheme, `unix_socket_map` aliases) also bypass `check_ssrf` because there is no IP to check. The top-level `disabled` gate still applies.
 - Outbound HTTP redirects are NOT followed transparently — the reqwest client is built with `redirect(Policy::none())`. A DSL that needs to chase a `Location` header issues a fresh `http.<verb>` call, which re-runs `check_ssrf` on the new target.
 - No IP-CIDR support in `allowed_ips` / `allowed_urls`. Exact string / origin match only.
+- [`parallel_http` step](../dsl/steps/parallel_http.md) (issues #135 + #136) runs `check_ssrf` **per peer** — the allowlist, private-network block, and DNS pinning apply to every peer URL in the fan-out independently. A single peer with a disallowed URL fails just that peer (shown as `response.status: 0` with `response.error` populated in `collect_all`); the other peers proceed normally.

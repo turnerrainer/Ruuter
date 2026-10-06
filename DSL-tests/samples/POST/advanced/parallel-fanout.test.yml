@@ -1,0 +1,114 @@
+# Issue #135 / #136 — parallel_http: shape check for the fan-out
+# sample. Concurrency / cancellation / predicate semantics are
+# pinned by tests/issue_135_parallel_http.rs — this file verifies
+# the DSL's wire shape when every peer responds and when some error.
+mode: mock-http
+
+# Rewrite the baked-in [#DOMAIN_URL] (= https://example.com) to the
+# per-test mock server so each peer's URL resolves to the mock.
+http_rewrite:
+  "https://example.com": "{MOCK}"
+
+tests:
+  - name: all three peers reply 200 — collect_all keeps everything
+    setup:
+      mocks:
+        - url_matches: "/alpha/lookup"
+          method: POST
+          status: 200
+          body: { found: true, who: "alpha" }
+        - url_matches: "/beta/lookup"
+          method: POST
+          status: 200
+          body: { found: false }
+        - url_matches: "/gamma/lookup"
+          method: POST
+          status: 200
+          body: { found: true, who: "gamma" }
+    request:
+      method: POST
+      path: /samples/advanced/parallel-fanout
+      headers:
+        content-type: "application/json"
+      body: { id: "test-123" }
+    expect:
+      status: 200
+      body_matches:
+        response:
+          peers_asked: 3
+          responses:
+            - peer: { id: "alpha" }
+              response: { status: 200, body: { found: true, who: "alpha" }, error: null }
+            - peer: { id: "beta" }
+              response: { status: 200, body: { found: false },               error: null }
+            - peer: { id: "gamma" }
+              response: { status: 200, body: { found: true, who: "gamma" }, error: null }
+
+  - name: one peer returns 500 — collect_all keeps the record
+    setup:
+      mocks:
+        - url_matches: "/alpha/lookup"
+          method: POST
+          status: 200
+          body: { found: true }
+        - url_matches: "/beta/lookup"
+          method: POST
+          status: 500
+          body: "upstream crashed"
+        - url_matches: "/gamma/lookup"
+          method: POST
+          status: 200
+          body: { found: false }
+    request:
+      method: POST
+      path: /samples/advanced/parallel-fanout
+      headers:
+        content-type: "application/json"
+      body: { id: "test-500" }
+    expect:
+      status: 200
+      body_matches:
+        response:
+          peers_asked: 3
+          responses:
+            - peer: { id: "alpha" }
+              response: { status: 200, body: { found: true }, error: null }
+            - peer: { id: "beta" }
+              response: { status: 500 }
+            - peer: { id: "gamma" }
+              response: { status: 200, body: { found: false }, error: null }
+
+  - name: traceparent is auto-forwarded to every peer
+    # Each mock asserts the exact traceparent header shape. If
+    # parallel_http failed to forward, the mocks would 501 and
+    # the assertion on the overall shape would fail.
+    setup:
+      mocks:
+        - url_matches: "/alpha/lookup"
+          method: POST
+          status: 200
+          body: { peer: "alpha" }
+        - url_matches: "/beta/lookup"
+          method: POST
+          status: 200
+          body: { peer: "beta" }
+        - url_matches: "/gamma/lookup"
+          method: POST
+          status: 200
+          body: { peer: "gamma" }
+    request:
+      method: POST
+      path: /samples/advanced/parallel-fanout
+      headers:
+        content-type: "application/json"
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+      body: { id: "trace-abc" }
+    expect:
+      status: 200
+      body_matches:
+        response:
+          peers_asked: 3
+    verify_mocks:
+      - { url_matches: "/alpha/lookup", count: 1 }
+      - { url_matches: "/beta/lookup",  count: 1 }
+      - { url_matches: "/gamma/lookup", count: 1 }
