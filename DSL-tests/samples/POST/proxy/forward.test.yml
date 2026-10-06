@@ -1,0 +1,49 @@
+# Issue #134 — pass-through proxy: shape check for the forward
+# sample. Full streaming / hop-by-hop / size-cap / concurrency
+# semantics are pinned by tests/issue_134_proxy_pass_through.rs —
+# this file verifies the DSL loads, the proxy dispatch fires in the
+# router pipeline, and the parent response reflects the upstream.
+mode: mock-http
+
+# Rewrite the baked-in [#PROXY_UPSTREAM] (= http://127.0.0.1:9100)
+# to the per-test mockito server so the proxy routes to it.
+http_rewrite:
+  "http://127.0.0.1:9100": "{MOCK}"
+
+tests:
+  - name: upstream 200 — body echoed back verbatim
+    setup:
+      mocks:
+        - url_matches: "/"
+          method: POST
+          status: 200
+          body: { echoed: true, from: "upstream" }
+    request:
+      method: POST
+      path: /samples/proxy/forward
+      headers:
+        content-type: "application/octet-stream"
+      body: "hello, raw bytes"
+    expect:
+      status: 200
+      body:
+        echoed: true
+        from: "upstream"
+
+  - name: upstream 500 — forwarded verbatim (no re-mapping)
+    setup:
+      mocks:
+        - url_matches: "/"
+          method: POST
+          status: 500
+          body: { error: "upstream crashed" }
+    request:
+      method: POST
+      path: /samples/proxy/forward
+      headers:
+        content-type: "application/octet-stream"
+      body: "trigger-crash"
+    expect:
+      status: 500
+      body:
+        error: "upstream crashed"

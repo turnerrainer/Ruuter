@@ -18,6 +18,15 @@ Requests without `Content-Type: application/json` produce an empty `incoming.bod
 
 WebSocket text frames are parsed as JSON when possible. Non-JSON text arrives as `{ "value": "<text>" }`.
 
+## Pass-through proxy routes (issue #134)
+
+Routes that declare [`declaration.proxy:`](proxy.md) forward the
+client's request body to an upstream byte-identically. `incoming.body`
+is **always empty** on such routes — the body is streamed through
+the router without ever materialising as a parsed JSON / form / text
+value. Guards and declarations on proxy routes authenticate against
+headers and query params only.
+
 ## Query-parameter shape (last-wins)
 
 `incoming.params` is a **flat map**: one string value per key. When a client sends the same key more than once —

@@ -47,6 +47,43 @@ Review before every partner-facing deploy.
 - [ ] No DSL uses `${incoming.body.url}` (or similar) as an `http` step URL without an SSRF allow-list.
 - [ ] Idempotency-Key semantics understood by clients writing to POST/PUT/PATCH/DELETE routes.
 
+## Pass-through proxy routes (issue #134)
+
+Reviewed if any route in the loaded tree uses `declaration.proxy:`.
+See [Pass-through proxy routes](../dsl/proxy.md) for the full
+contract.
+
+- [ ] **16 MiB global cap bypassed on proxy routes.** The framework-wide
+  Content-Length preflight does not apply to proxy routes — the
+  per-route `declaration.proxy.max_body_bytes` is authoritative.
+  Set it explicitly to the maximum message size you expect
+  (typically 64–128 MiB for AS4 / eDelivery). An unset value is a
+  parse-time error, so this is enforced at boot.
+- [ ] **`max_in_flight` set** on every proxy route exposed on a
+  non-loopback listener. Default 32; raise or lower per deployment.
+  `null` disables the cap and risks resource exhaustion under
+  flood.
+- [ ] **`allowed_encodings`** reviewed. Default `["identity"]` —
+  compressed bodies get 415. Operators who need to pass gzip
+  bodies to the upstream opt in explicitly per route (compressed
+  bytes pass through unchanged — Ruuter never decompresses).
+- [ ] **`inbound_progress_timeout_ms`** set. Default 10 000 (10 s)
+  idle-frame timeout. Mitigates slowloris on long bodies.
+- [ ] **`request_timeout_ms`** set. Default 60 000 (matches AS4
+  budgets).
+- [ ] **Guard authenticates on headers, not body.** `incoming.body`
+  is always empty on proxy routes. The guard must check an mTLS
+  DN header set by the TLS terminator, an API key, or similar.
+- [ ] **TLS termination is in front of Ruuter.** Ruuter is HTTP-
+  only; mTLS peer identity is forwarded as a header set by the
+  terminator (envoy / nginx / k8s ingress). The upstream service
+  does AS4 content validation; Ruuter does HTTP-layer sanity
+  only.
+- [ ] **Pool tuning reviewed in `pass_through_proxy:`.** Separate
+  from the `http.*` client pool so a saturated proxy workload
+  cannot starve normal outbound traffic. See
+  [Pass-through proxy config](../config/pass-through-proxy.md).
+
 ## Fan-out — `parallel_http:` (issues #135 + #136)
 
 Reviewed if any DSL uses the [`parallel_http` step](../dsl/steps/parallel_http.md).

@@ -293,7 +293,12 @@ impl HttpClient {
         &self.uds_pool
     }
 
-    async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
+    /// Issue #134 — pass-through proxy routes reuse the same SSRF
+    /// posture as the `http.*` step (allowlists, private-network
+    /// block, DNS-rebinding close). Exposed `pub(crate)` so
+    /// `router::proxy` can call it without going through
+    /// `request_with_ct` (which assumes JSON-oriented body handling).
+    pub(crate) async fn check_ssrf(&self, url: &str) -> Result<SsrfResolution> {
         if self.outbound_disabled {
             return Err(RuuterError::HttpRequest(
                 "outbound HTTP is disabled by internal_requests.disabled".into(),
@@ -1472,7 +1477,7 @@ pub fn rewrite_env_is_active_in_release() -> bool {
 /// debug builds or when the `dev-http-rewrite` feature is on. See
 /// `RUUTER_HTTP_REWRITE_ENV` for the env-var syntax.
 #[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
-fn rewrite_url_for_tests(url: &str) -> Option<String> {
+pub(crate) fn rewrite_url_for_tests(url: &str) -> Option<String> {
     let raw = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok()?;
     if raw.is_empty() {
         return None;
@@ -1497,7 +1502,7 @@ fn rewrite_url_for_tests(url: &str) -> Option<String> {
 /// the URL as-provided, and no env-var-driven bypass can affect
 /// SSRF checks.
 #[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
-fn rewrite_url_for_tests(_url: &str) -> Option<String> {
+pub(crate) fn rewrite_url_for_tests(_url: &str) -> Option<String> {
     None
 }
 

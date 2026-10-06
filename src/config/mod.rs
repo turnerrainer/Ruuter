@@ -95,6 +95,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub proxy: ProxyConfig,
 
+    /// Issue #134 — process-wide tuning for pass-through proxy routes
+    /// (routes declared with `declaration.proxy:`). Independent of the
+    /// `http.*` step's reqwest client pool so a proxy workload can't
+    /// starve normal outbound traffic. Absent-block defaults are tuned
+    /// for AS4/eDelivery edge usage: 60 s outbound budget, modest
+    /// per-host pool, aggressive connect timeout.
+    #[serde(default)]
+    pub pass_through_proxy: PassThroughProxyConfig,
+
     #[serde(default)]
     pub scripting: ScriptingConfig,
 
@@ -732,6 +741,53 @@ pub struct ProxyConfig {
     pub trusted: Vec<String>,
 }
 
+/// Issue #134 — process-wide pass-through proxy config. These knobs
+/// shape the dedicated reqwest client used by `declaration.proxy:`
+/// routes; they do not affect the `http.*` step's client. Keeping two
+/// pools separate means a saturated proxy workload cannot exhaust the
+/// outbound connection budget normal DSL steps rely on.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PassThroughProxyConfig {
+    /// Idle connections kept per upstream host in the proxy client's
+    /// pool. Separate from the `http.*` step's pool.
+    #[serde(default = "default_proxy_pool_max_idle_per_host")]
+    pub pool_max_idle_per_host: usize,
+
+    /// How long an idle connection may remain in the pool before it is
+    /// closed, in milliseconds.
+    #[serde(default = "default_proxy_pool_idle_timeout_ms")]
+    pub pool_idle_timeout_ms: u64,
+
+    /// TCP connect timeout for the upstream, in milliseconds. Shorter
+    /// than the end-to-end `request_timeout_ms` so a dead upstream
+    /// fails fast and surfaces as a 502 rather than tying up a
+    /// Semaphore slot for a minute.
+    #[serde(default = "default_proxy_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+}
+
+fn default_proxy_pool_max_idle_per_host() -> usize {
+    32
+}
+
+fn default_proxy_pool_idle_timeout_ms() -> u64 {
+    90_000
+}
+
+fn default_proxy_connect_timeout_ms() -> u64 {
+    10_000
+}
+
+impl Default for PassThroughProxyConfig {
+    fn default() -> Self {
+        Self {
+            pool_max_idle_per_host: default_proxy_pool_max_idle_per_host(),
+            pool_idle_timeout_ms: default_proxy_pool_idle_timeout_ms(),
+            connect_timeout_ms: default_proxy_connect_timeout_ms(),
+        }
+    }
+}
+
 /// Issue #137 — process-wide bounds for the `detach` step. One
 /// `tokio::sync::Semaphore` controls how many detached tasks may be
 /// in flight at any moment across the whole process. Overflow fails
@@ -906,6 +962,7 @@ impl Default for AppConfig {
             internal_requests: InternalRequestsConfig::default(),
             csrf: CsrfConfig::default(),
             proxy: ProxyConfig::default(),
+            pass_through_proxy: PassThroughProxyConfig::default(),
             scripting: ScriptingConfig::default(),
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
             state: StateConfig::default(),

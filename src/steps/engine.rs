@@ -160,10 +160,12 @@ impl StepEngine {
         }
     }
 
-    /// Issue #135 — the `parallel_http` step dispatches outbound
-    /// calls through the engine's shared `HttpClient` so SSRF checks,
-    /// pinned-DNS resolution, and the `#89` transport-error contract
-    /// apply identically to every peer. Exposed as a borrow;
+    /// Issue #134 / #135 — exposed so the pass-through proxy handler
+    /// and the `parallel_http` step can dispatch outbound calls
+    /// through the engine's shared `HttpClient`. Guarantees that
+    /// SSRF checks, pinned-DNS resolution, and the `#89` transport-
+    /// error contract apply identically across `http.*` steps, proxy
+    /// routes, and `parallel_http` peers. Exposed as a borrow;
     /// `HttpClient` is `Clone`, so callers that need an owned handle
     /// clone the return value.
     pub fn http_client(&self) -> &HttpClient {

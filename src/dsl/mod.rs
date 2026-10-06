@@ -67,12 +67,111 @@ pub struct DeclarationStep {
     /// stricter admin gate that shouldn't be additive to a folder-wide
     /// "authenticated" check.
     pub override_ancestors: Option<bool>,
+    /// Issue #134 — pass-through proxy declaration. When set, the
+    /// route becomes a streaming byte-identical HTTP proxy to the
+    /// configured upstream. The DSL body MUST be empty (no action
+    /// steps); the request is handled by `router::proxy` which
+    /// bypasses `StepEngine` entirely. Guards still run against a
+    /// header-only context (empty `incoming.body`) before any upstream
+    /// connection is opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyDeclaration>,
     /// Audit finding 01 — Declaration steps also carry the base
     /// fields so a bare `{ reload_dsl: true, next: end }` step can
     /// trigger a reload (see parser's control-flow-only fallback).
     #[serde(flatten)]
     pub base: crate::steps::BaseStepFields,
 }
+
+/// Issue #134 — per-route pass-through proxy configuration. Attached
+/// to a `DeclarationStep` via `proxy:`. All timeouts are in
+/// milliseconds; `max_body_bytes` is required so proxy routes never
+/// inherit an implicit cap (the global 16 MiB inbound cap applies to
+/// non-proxy routes only). Defaults are tuned for AS4/eDelivery edge
+/// usage; adjust per deployment.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProxyDeclaration {
+    /// Absolute upstream URL to which every request on this route is
+    /// forwarded. Interpolation (`[#CONST]`, `#{CONST}`) runs at DSL
+    /// parse time via `DslParser::replace_constants` — the value at
+    /// runtime is a plain URL. SSRF checks apply to this URL on every
+    /// request so a compromised constants file cannot smuggle traffic
+    /// to private origins.
+    pub upstream: String,
+
+    /// Whether to forward the client's request headers to the upstream
+    /// (minus hop-by-hop headers per RFC 7230 §6.1). Default `true`.
+    /// Set `false` to send only a minimal header set (Host rewritten
+    /// to upstream, Content-Type and Content-Length preserved,
+    /// everything else dropped).
+    #[serde(default = "default_proxy_preserve_headers")]
+    pub preserve_headers: bool,
+
+    /// Per-route inbound body cap in bytes. Required field (no
+    /// implicit cap for proxy routes). A declared Content-Length over
+    /// the cap is rejected with 413 before any body is read; chunked
+    /// requests are counted mid-stream and aborted on breach.
+    pub max_body_bytes: u64,
+
+    /// Maximum concurrent in-flight proxied requests on this route.
+    /// 33rd request on a cap of 32 receives 503 + `Retry-After: 1`.
+    /// `None` disables the cap (not recommended on public listeners;
+    /// `warn_on_pass_through_proxy_defaults` fires a boot WARN).
+    #[serde(default = "default_proxy_max_in_flight")]
+    pub max_in_flight: Option<u32>,
+
+    /// Idle-frame timeout on the inbound body stream, in milliseconds.
+    /// Resets every time a body frame is received. Mitigates slowloris
+    /// without penalising legitimate slow uploaders — a 1 Gbps upload
+    /// of a 100 GiB body never trips this as long as frames keep
+    /// arriving.
+    #[serde(default = "default_proxy_inbound_progress_timeout_ms")]
+    pub inbound_progress_timeout_ms: Option<u64>,
+
+    /// Allowed values for the inbound `Content-Encoding` header.
+    /// Default `["identity"]` — operators opt into `gzip`/`br`/`zstd`
+    /// per route. A byte-identical proxy never decompresses; the
+    /// allowlist exists to control which compression bombs are allowed
+    /// to flow through to the upstream.
+    #[serde(default = "default_proxy_allowed_encodings")]
+    pub allowed_encodings: Vec<String>,
+
+    /// End-to-end deadline for the proxied request, in milliseconds.
+    /// Covers connect + request send + response receive. Default
+    /// 60 000 (matches the eFTI Gate AS4 budget). Does NOT include
+    /// time spent waiting for a Semaphore slot — concurrency-cap
+    /// backpressure surfaces as 503 before the timeout starts.
+    #[serde(default = "default_proxy_request_timeout_ms")]
+    pub request_timeout_ms: Option<u64>,
+}
+
+fn default_proxy_preserve_headers() -> bool {
+    true
+}
+
+fn default_proxy_max_in_flight() -> Option<u32> {
+    Some(32)
+}
+
+fn default_proxy_inbound_progress_timeout_ms() -> Option<u64> {
+    Some(10_000)
+}
+
+fn default_proxy_allowed_encodings() -> Vec<String> {
+    vec!["identity".to_string()]
+}
+
+fn default_proxy_request_timeout_ms() -> Option<u64> {
+    Some(60_000)
+}
+
+/// Issue #134 — RFC-vocabulary encoding names a proxy route is willing
+/// to pass through. `identity` is special (equivalent to no
+/// `Content-Encoding` header on the wire); the others are the only
+/// IANA-registered HTTP content codings in common use. Unknown values
+/// are a parse-time error — a typo'd `allowed_encodings: [gzipp]`
+/// would otherwise silently accept nothing.
+pub const KNOWN_CONTENT_ENCODINGS: &[&str] = &["identity", "gzip", "deflate", "br", "zstd"];
 
 /// Audit finding 10 — Java's structured `allowlist:` block. Each
 /// entry is a `DslField` (either a bare `{field: <name>}` map or a
@@ -242,6 +341,59 @@ impl DeclarationStep {
                  (strict rejects unknown fields; additive permits them). Pick one."
                     .to_string(),
             );
+        }
+        // Issue #134 — a pass-through proxy route cannot also declare
+        // a body allowlist. The body is opaque bytes forwarded to the
+        // upstream; parsing it to apply an allowlist would defeat the
+        // byte-identical contract (and the parse itself is where
+        // compression bombs land). Same posture as
+        // strict+additive: parse-time error, pick one.
+        if let Some(proxy) = &self.proxy {
+            if let Some(allowlist) = &self.allowlist {
+                if allowlist.body.is_some() {
+                    return Err(
+                        "declaration.proxy and declaration.allowlist.body are mutually \
+                         exclusive. A proxy route forwards the body byte-identically to \
+                         the upstream; declaring a body allowlist would require parsing \
+                         the body (defeats the contract and introduces a parser attack \
+                         surface). Drop allowlist.body — upstream validates content shape."
+                            .to_string(),
+                    );
+                }
+            }
+            if self.allowed_body.is_some() {
+                return Err(
+                    "declaration.proxy and declaration.allowed_body are mutually exclusive. \
+                     Drop allowed_body; a proxy route does not parse the body."
+                        .to_string(),
+                );
+            }
+            if proxy.upstream.trim().is_empty() {
+                return Err(
+                    "declaration.proxy.upstream must be a non-empty absolute URL.".to_string(),
+                );
+            }
+            if proxy.max_body_bytes == 0 {
+                return Err("declaration.proxy.max_body_bytes must be > 0.".to_string());
+            }
+            for enc in &proxy.allowed_encodings {
+                let normal = enc.trim().to_ascii_lowercase();
+                if normal.is_empty() {
+                    return Err(
+                        "declaration.proxy.allowed_encodings contains an empty entry; drop it or replace with `identity`.".to_string(),
+                    );
+                }
+                if !crate::dsl::KNOWN_CONTENT_ENCODINGS
+                    .iter()
+                    .any(|k| *k == normal)
+                {
+                    return Err(format!(
+                        "declaration.proxy.allowed_encodings: unknown encoding '{}' (known: {}).",
+                        enc,
+                        crate::dsl::KNOWN_CONTENT_ENCODINGS.join(", ")
+                    ));
+                }
+            }
         }
         Ok(())
     }

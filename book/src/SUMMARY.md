@@ -33,6 +33,7 @@
 - [Path parameters](./dsl/path-params.md)
 - [Guards](./dsl/guards.md)
 - [Idempotency pattern](./dsl/idempotency-pattern.md)
+- [Pass-through proxy routes](./dsl/proxy.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
 - [YAML gotchas](./dsl/yaml-gotchas.md)
 
@@ -43,6 +44,7 @@
 - [Guards mode](./config/guards-mode.md)
 - [Default exception DSL](./config/default-exception-dsl.md)
 - [Internal-requests (SSRF)](./config/internal-requests.md)
+- [Pass-through proxy](./config/pass-through-proxy.md)
 - [Reverse-proxy trust](./config/proxy-trust.md)
 - [Listeners](./config/listeners.md)
 - [Unix-socket aliases](./config/unix-sockets.md)

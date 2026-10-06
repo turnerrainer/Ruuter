@@ -159,6 +159,39 @@ fn build_operation(project: &str, method: &str, dsl_key: &str, dsl: &Dsl) -> Val
     if let Some(params) = build_parameters(decl) {
         op.insert("parameters".to_string(), params);
     }
+    // Issue #134 — a pass-through proxy route forwards opaque bytes;
+    // the OpenAPI spec emits application/octet-stream for the request
+    // body and a `default` response with the same shape. No schema
+    // introspection: the DSL has no view of the body on either leg.
+    // Downstream OpenAPI consumers see "any bytes in, any bytes out,
+    // proxied to <upstream>".
+    if let Some(proxy) = decl.and_then(|d| d.proxy.as_ref()) {
+        op.insert(
+            "requestBody".to_string(),
+            json!({
+                "required": false,
+                "content": {
+                    "application/octet-stream": {
+                        "schema": { "type": "string", "format": "binary" }
+                    }
+                }
+            }),
+        );
+        op.insert(
+            "responses".to_string(),
+            json!({
+                "default": {
+                    "description": format!("Proxied upstream response from {}", proxy.upstream),
+                    "content": {
+                        "application/octet-stream": {
+                            "schema": { "type": "string", "format": "binary" }
+                        }
+                    }
+                }
+            }),
+        );
+        return Value::Object(op);
+    }
     if let Some(body) = build_request_body(method, decl) {
         op.insert("requestBody".to_string(), body);
     }
