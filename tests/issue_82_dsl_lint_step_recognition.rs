@@ -43,6 +43,7 @@ fn fixture_for(step: &str) -> &'static str {
         "declaration" => "declaration: { description: 'sample' }\nr: { return: ok, next: end }\n",
         "iterate" => "s: { iterate: { over: '${[]}', as: item, do: r } }\nr: { return: ok, next: end }\n",
         "log" => "s: { log: 'hello', next: r }\nr: { return: ok, next: end }\n",
+        "parallel_http" => "s: { parallel_http: { peers: '${[]}', args: { url: 'http://x/' }, aggregate: collect_ok, result: results }, next: r }\nr: { return: ok, next: end }\n",
         "return" => "r: { return: ok }\n",
         "single_flight" => "s: { single_flight: { key: 'k', do: r } }\nr: { return: ok, next: end }\n",
         "state" => "s: { state: { set: { key: k, value: 1 } }, next: r }\nr: { return: ok, next: end }\n",

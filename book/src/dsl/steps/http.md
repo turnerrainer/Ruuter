@@ -206,3 +206,14 @@ Response:
 
 Requires outbound internet + the target host on the SSRF allow-list
 if you've enabled the allow-list.
+
+## See also — `parallel_http` for fan-out
+
+The `http` step calls a single upstream. For fan-out to N peer
+services concurrently with structured aggregation, use the
+[`parallel_http` step](parallel_http.md). It composes per-peer
+`HttpClient::request_with_ct` calls under a `tokio::Semaphore`
+bound and emits a `[{peer, response}, ...]` array in one of three
+aggregation modes (`collect_ok` / `collect_all` / `first_n`).
+SSRF / allowlist / `#89` transport-error contract apply identically
+to every peer.

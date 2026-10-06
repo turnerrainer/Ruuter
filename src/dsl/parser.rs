@@ -166,6 +166,8 @@ impl DslParser {
             "state"
         } else if key_present("iterate") {
             "iterate"
+        } else if key_present("parallel_http") {
+            "parallel_http"
         } else if key_present("ws_send") {
             "ws_send"
         } else if key_present("ws_tag") {
@@ -223,7 +225,8 @@ impl DslParser {
             return Err(RuuterError::DslParse(format!(
                 "step '{}': no recognised step discriminator (expected one of \
                  call:, template:, assign:, return:, switch:, log:, state:, \
-                 iterate:, ws_send:, single_flight:, or a declaration field)",
+                 iterate:, parallel_http:, ws_send:, ws_tag:, single_flight:, \
+                 or a declaration field)",
                 name
             )));
         };
@@ -268,6 +271,16 @@ impl DslParser {
             "iterate" => serde_json::from_value::<crate::steps::IterateStep>(json_value)
                 .map(DslStep::Iterate)
                 .map_err(|e| Self::parse_err_json(name, e))?,
+            "parallel_http" => {
+                let step = serde_json::from_value::<crate::steps::ParallelHttpStep>(json_value)
+                    .map(DslStep::ParallelHttp)
+                    .map_err(|e| Self::parse_err_json(name, e))?;
+                // Parse-time validation of aggregate-mode constraints.
+                if let DslStep::ParallelHttp(ref p) = step {
+                    validate_parallel_http(name, &p.parallel_http)?;
+                }
+                step
+            }
             "ws_send" => serde_json::from_value::<crate::steps::WsSendStep>(json_value)
                 .map(DslStep::WsSend)
                 .map_err(|e| Self::parse_err_json(name, e))?,
@@ -291,4 +304,76 @@ impl DslParser {
     fn parse_err_json(name: &str, e: serde_json::Error) -> RuuterError {
         RuuterError::DslParse(format!("Failed to parse step '{}': {}", name, e))
     }
+}
+
+/// Issue #136 — parse-time validation of `parallel_http` aggregate-
+/// mode constraints. Catches misconfiguration at DSL load time rather
+/// than silently ignoring stray fields at request time:
+///
+/// - `aggregate: first_n` requires `first_n: <N>` where N >= 1.
+/// - `aggregate: first_n` is the only mode permitting `early_exit_on:`
+///   and `remaining_peers_after:` — those fields are undefined for
+///   `collect_ok` / `collect_all` and almost certainly a mistake.
+/// - `first_n` under `collect_ok` / `collect_all` is a mistake —
+///   the field is only meaningful for first_n aggregation.
+fn validate_parallel_http(step_name: &str, body: &crate::steps::ParallelHttpBody) -> Result<()> {
+    use crate::steps::AggregateMode;
+    match body.aggregate {
+        AggregateMode::FirstN => {
+            if body.first_n.is_none() || body.first_n == Some(0) {
+                return Err(RuuterError::DslParse(format!(
+                    "step '{}': parallel_http.aggregate=first_n requires `first_n: <N>` with N >= 1",
+                    step_name
+                )));
+            }
+        }
+        AggregateMode::CollectOk | AggregateMode::CollectAll => {
+            if body.first_n.is_some() {
+                return Err(RuuterError::DslParse(format!(
+                    "step '{}': parallel_http.first_n is only valid under aggregate=first_n (saw aggregate={}). \
+                     Drop first_n or switch aggregate.",
+                    step_name,
+                    match body.aggregate {
+                        AggregateMode::CollectOk => "collect_ok",
+                        AggregateMode::CollectAll => "collect_all",
+                        AggregateMode::FirstN => unreachable!(),
+                    }
+                )));
+            }
+            if body.early_exit_on.is_some() {
+                return Err(RuuterError::DslParse(format!(
+                    "step '{}': parallel_http.early_exit_on is only valid under aggregate=first_n",
+                    step_name
+                )));
+            }
+            if body.remaining_peers_after.is_some() {
+                return Err(RuuterError::DslParse(format!(
+                    "step '{}': parallel_http.remaining_peers_after is only valid under aggregate=first_n",
+                    step_name
+                )));
+            }
+        }
+    }
+    // Validate `status_range: [lo, hi]` ordering.
+    if let Some(predicate) = &body.early_exit_on {
+        if let Some([lo, hi]) = predicate.status_range {
+            if lo > hi {
+                return Err(RuuterError::DslParse(format!(
+                    "step '{}': parallel_http.early_exit_on.status_range [{}, {}] must have lo <= hi",
+                    step_name, lo, hi
+                )));
+            }
+        }
+    }
+    // Validate method early so a typo in `call:` surfaces at load time.
+    match body.call.as_str() {
+        "http.get" | "http.post" | "http.put" | "http.patch" | "http.delete" => {}
+        other => {
+            return Err(RuuterError::DslParse(format!(
+                "step '{}': parallel_http.call unknown method '{}' (expected http.get / http.post / http.put / http.patch / http.delete)",
+                step_name, other
+            )));
+        }
+    }
+    Ok(())
 }

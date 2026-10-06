@@ -22,6 +22,7 @@
   - [http](./dsl/steps/http.md)
   - [state](./dsl/steps/state.md)
   - [iterate](./dsl/steps/iterate.md)
+  - [parallel_http](./dsl/steps/parallel_http.md)
   - [template](./dsl/steps/template.md)
   - [ws_send](./dsl/steps/ws_send.md)
   - [single_flight](./dsl/steps/single_flight.md)
