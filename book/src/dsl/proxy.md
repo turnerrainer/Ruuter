@@ -217,4 +217,23 @@ pass_through_proxy:
 
 Defaults as shown. Independent of the `http.*` step's reqwest client
 pool so a saturated proxy workload cannot starve normal outbound
-traffic.
+traffic. Full field reference in
+[Pass-through proxy config](../config/pass-through-proxy.md).
+
+## Cross-links
+
+- [`declaration` step](steps/declaration.md) — the `proxy:` field
+  reference alongside the other declaration-level posture flags.
+- [Context bindings](context.md) — why `incoming.body` is always
+  empty on proxy routes.
+- [Guards](guards.md) — writing guards that authenticate against
+  headers / params on proxy-adjacent routes.
+- [Request pipeline](../framework/pipeline.md) — where the proxy
+  early-dispatch happens relative to other framework checks.
+- [SSRF allow-list](../framework/ssrf.md) — SSRF gate on the
+  upstream URL (same as `http.*` steps).
+- [Pass-through proxy config](../config/pass-through-proxy.md) —
+  process-wide reqwest client pool tuning.
+- [Security hardening checklist](../ops/security-checklist.md) —
+  operator review items for proxy routes (16 MiB cap bypass,
+  encodings, in-flight caps, upstream TLS termination).

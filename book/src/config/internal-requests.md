@@ -85,3 +85,5 @@ internal_requests:
 - [Framework — Inter-service transport (UDS)](../framework/inter-service-transport.md)
 - [Unix-socket aliases](./unix-sockets.md)
 - [http step](../dsl/steps/http.md)
+- [Pass-through proxy](./pass-through-proxy.md) — the SSRF gates
+  here apply to `declaration.proxy.upstream` on every request.

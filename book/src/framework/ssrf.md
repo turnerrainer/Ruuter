@@ -72,3 +72,9 @@ Response:
 - UDS transports (`unix://` scheme, `unix_socket_map` aliases) also bypass `check_ssrf` because there is no IP to check. The top-level `disabled` gate still applies.
 - Outbound HTTP redirects are NOT followed transparently — the reqwest client is built with `redirect(Policy::none())`. A DSL that needs to chase a `Location` header issues a fresh `http.<verb>` call, which re-runs `check_ssrf` on the new target.
 - No IP-CIDR support in `allowed_ips` / `allowed_urls`. Exact string / origin match only.
+- [Pass-through proxy routes](../dsl/proxy.md) (issue #134) go
+  through the same `check_ssrf` gate on `declaration.proxy.upstream`
+  before any upstream connection is opened. The gate runs
+  per-request (the upstream URL is substituted once at parse time via
+  constants, but SSRF is re-checked every request so a compromised
+  constants file cannot smuggle traffic to private origins).

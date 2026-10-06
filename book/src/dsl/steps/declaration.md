@@ -47,6 +47,12 @@ declaration:
   strict: true                    # reject unknown body/query/header keys with 400
   override_ancestors: false       # only meaningful on guard DSLs
 
+  # === Pass-through proxy route (issue #134) ===
+  # proxy:
+  #   upstream: "[#EDELIVERY_URL]/ws/ap"
+  #   max_body_bytes: 67108864
+  # see book/src/dsl/proxy.md for the full contract.
+
   # === Legacy flat allowlist (still supported) ===
   # allowed_body: [userName, age]
   # allowed_params: [correlation_id]
@@ -261,6 +267,29 @@ Only meaningful on guard DSLs. `true` = this guard REPLACES ancestor
 guards for its subtree; `false` (default) = guards stack. See
 [Guards](../guards.md).
 
+### `proxy` (issue #134)
+
+Turns the route into a streaming byte-identical HTTP proxy to a
+configured upstream. The DSL body MUST be empty — the router
+forwards the client's bytes to the upstream without parsing. Guards
+still run, but against a header-only `ExecutionContext` (empty
+`incoming.body`).
+
+```yaml
+declaration:
+  proxy:
+    upstream: "[#EDELIVERY_URL]/ws/ap"
+    max_body_bytes: 67108864
+```
+
+Mutually exclusive with `allowlist.body` and `allowed_body` (parse-
+time error — a proxy route cannot parse the body it is forwarding).
+
+Full field reference, hop-by-hop header handling, Content-Encoding
+allowlist, error-response shapes, and the known caveats
+(`Expect: 100-continue` auto-ack, HTTP/1.1 trailers not forwarded)
+live in [Pass-through proxy routes](../proxy.md).
+
 ## Effects at request time
 
 1. **Guard chain runs first.** Guards see the RAW wire request
@@ -450,6 +479,9 @@ See [Guards](../guards.md) for the full override-vs-stacking rules.
 - [Guards](../guards.md) — `override_ancestors` semantics.
 - [OpenAPI generation](../../framework/openapi.md) — how declaration
   fields shape the spec.
+- [Pass-through proxy routes](../proxy.md) — the `proxy:` field in
+  depth: hop-by-hop handling, Content-Encoding allowlist, process-
+  wide `pass_through_proxy:` config, error shapes, caveats.
 - [Configuration](../../ops/configuration.md) — the
   `dsl.warn_on_missing_declaration` toggle.
 - [Logging: errors](../../logging/errors.md) — how the 400 from

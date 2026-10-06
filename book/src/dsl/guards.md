@@ -101,6 +101,48 @@ deny:
   next: end
 ```
 
+## Guards on pass-through proxy routes (issue #134)
+
+Guards on routes that declare `declaration.proxy:` run against a
+**header-only `ExecutionContext`** — `incoming.body` is an empty
+object even when the client sent a body. A proxy route forwards
+bytes to the upstream unparsed; the guard must therefore
+authenticate using headers / query params (typically an mTLS DN
+header set by the TLS terminator, or an API-key header), not body
+content.
+
+```yaml
+# svc/POST/forward.guard.yml — authenticates the peer gate before
+# the AS4 body is streamed to the upstream.
+declaration:
+  description: "Peer must present an mTLS DN we recognise."
+  allowlist:
+    headers:
+      - field: x-client-cert-dn
+    required_one_of:
+      headers:
+        - [x-client-cert-dn]
+
+check:
+  switch:
+    - condition: "${incoming.headers['x-client-cert-dn'] === undefined}"
+      next: deny
+  next: end
+
+deny:
+  return: { "error": "peer not authenticated" }
+  status: 401
+  wrapper: false
+
+end:
+  return: {}
+```
+
+See [Pass-through proxy routes](proxy.md) for the full contract. A
+guard that references `${incoming.body…}` on a proxy route will see
+`{}` and almost certainly fire the deny branch — write guards
+against headers / params on proxy-adjacent routes.
+
 ## Runnable example — project-level guard (issue #39)
 
 Three files ship under `DSL/guarded-demo/`. One `.guard.yml` at the

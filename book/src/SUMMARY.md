@@ -42,6 +42,7 @@
 - [Guards mode](./config/guards-mode.md)
 - [Default exception DSL](./config/default-exception-dsl.md)
 - [Internal-requests (SSRF)](./config/internal-requests.md)
+- [Pass-through proxy](./config/pass-through-proxy.md)
 - [Reverse-proxy trust](./config/proxy-trust.md)
 - [Listeners](./config/listeners.md)
 - [Unix-socket aliases](./config/unix-sockets.md)
