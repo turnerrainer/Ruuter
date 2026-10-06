@@ -196,11 +196,21 @@ impl ProxyClient {
             }
         }
 
+        // Issue #134 — honour the `RUUTER_HTTP_REWRITE` test-only
+        // rewriter (same hook the `http.*` step uses at
+        // src/http_client/mod.rs:520). Lets the dsl-test harness in
+        // mock-http mode redirect the baked-in upstream URL to a
+        // mockito server at runtime. Compiled out of release builds
+        // unless the `dev-http-rewrite` feature is enabled (same
+        // posture as T-6).
+        let rewritten_upstream = crate::http_client::rewrite_url_for_tests(&decl.upstream);
+        let effective_upstream = rewritten_upstream.as_deref().unwrap_or(&decl.upstream);
+
         // (3) SSRF — same gate as `http.*` steps (allowlist, private-
         // network block, DNS-rebinding close). An operator who put the
         // upstream host in `allowed_ips` / `allowed_urls` opts into
         // this origin explicitly.
-        let ssrf = match self.http_client.check_ssrf(&decl.upstream).await {
+        let ssrf = match self.http_client.check_ssrf(effective_upstream).await {
             Ok(r) => r,
             Err(e) => return proxy_upstream_rejected(&e.to_string()),
         };
@@ -222,7 +232,7 @@ impl ProxyClient {
         // string (if any) to the declaration's `upstream`. Transparent
         // proxy semantics: `?x=1&x=2` reaches the upstream verbatim —
         // last-wins resolution (§ T-32) is a DSL concern, not ours.
-        let upstream_url = match merge_query(&decl.upstream, parts.uri.query()) {
+        let upstream_url = match merge_query(effective_upstream, parts.uri.query()) {
             Ok(u) => u,
             Err(e) => return proxy_upstream_rejected(&format!("invalid upstream URL: {}", e)),
         };

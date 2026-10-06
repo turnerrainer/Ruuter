@@ -1477,7 +1477,7 @@ pub fn rewrite_env_is_active_in_release() -> bool {
 /// debug builds or when the `dev-http-rewrite` feature is on. See
 /// `RUUTER_HTTP_REWRITE_ENV` for the env-var syntax.
 #[cfg(any(debug_assertions, feature = "dev-http-rewrite"))]
-fn rewrite_url_for_tests(url: &str) -> Option<String> {
+pub(crate) fn rewrite_url_for_tests(url: &str) -> Option<String> {
     let raw = std::env::var(RUUTER_HTTP_REWRITE_ENV).ok()?;
     if raw.is_empty() {
         return None;
@@ -1502,7 +1502,7 @@ fn rewrite_url_for_tests(url: &str) -> Option<String> {
 /// the URL as-provided, and no env-var-driven bypass can affect
 /// SSRF checks.
 #[cfg(not(any(debug_assertions, feature = "dev-http-rewrite")))]
-fn rewrite_url_for_tests(_url: &str) -> Option<String> {
+pub(crate) fn rewrite_url_for_tests(_url: &str) -> Option<String> {
     None
 }
 

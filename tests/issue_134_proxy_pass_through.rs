@@ -856,3 +856,255 @@ declaration:
         err
     );
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Hop-by-hop stripping on the RESPONSE leg
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn hop_by_hop_response_headers_stripped() {
+    let mut upstream = mockito::Server::new_async().await;
+    let m = upstream
+        .mock("POST", "/f")
+        .with_status(200)
+        .with_header("keep-alive", "timeout=5")
+        .with_header("x-upstream-id", "u-123") // end-to-end — must forward
+        .with_body("ok")
+        .create_async()
+        .await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/f.yml",
+        &format!(
+            r#"
+declaration:
+  proxy:
+    upstream: "{}/f"
+    max_body_bytes: 1024
+"#,
+            upstream.url()
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, _body, headers) = send(
+        router,
+        "POST",
+        "/svc/f",
+        &[("content-type", "application/octet-stream")],
+        b"q".to_vec(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(
+        !headers.keys().any(|k| k.eq_ignore_ascii_case("keep-alive")),
+        "response leg should strip Keep-Alive: {:?}",
+        headers
+    );
+    assert_eq!(
+        headers.get("x-upstream-id").map(String::as_str),
+        Some("u-123"),
+        "end-to-end headers must forward: {:?}",
+        headers
+    );
+    m.assert_async().await;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Dynamic hop-by-hop via Connection: list
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn dynamic_connection_listed_headers_also_stripped_on_response_leg() {
+    let mut upstream = mockito::Server::new_async().await;
+    let m = upstream
+        .mock("POST", "/f")
+        .with_status(200)
+        .with_header("connection", "x-upstream-private")
+        .with_header("x-upstream-private", "do-not-forward")
+        .with_header("x-public", "yes")
+        .with_body("ok")
+        .create_async()
+        .await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/f.yml",
+        &format!(
+            r#"
+declaration:
+  proxy:
+    upstream: "{}/f"
+    max_body_bytes: 1024
+"#,
+            upstream.url()
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, _body, headers) = send(
+        router,
+        "POST",
+        "/svc/f",
+        &[("content-type", "application/octet-stream")],
+        b"q".to_vec(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(
+        !headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("x-upstream-private")),
+        "dynamic hop-by-hop (listed in Connection:) must be stripped: {:?}",
+        headers
+    );
+    assert_eq!(
+        headers.get("x-public").map(String::as_str),
+        Some("yes"),
+        "unlisted end-to-end header must forward: {:?}",
+        headers
+    );
+    m.assert_async().await;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// preserve_headers: false → only Content-Type + Content-Length
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn preserve_headers_false_forwards_minimal_set() {
+    let mut upstream = mockito::Server::new_async().await;
+    let m = upstream
+        .mock("POST", "/f")
+        .match_header("content-type", "application/custom")
+        .match_header("x-should-not-forward", mockito::Matcher::Missing)
+        .match_header("authorization", mockito::Matcher::Missing)
+        .with_status(204)
+        .create_async()
+        .await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/f.yml",
+        &format!(
+            r#"
+declaration:
+  proxy:
+    upstream: "{}/f"
+    preserve_headers: false
+    max_body_bytes: 1024
+"#,
+            upstream.url()
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, _body, _h) = send(
+        router,
+        "POST",
+        "/svc/f",
+        &[
+            ("content-type", "application/custom"),
+            ("authorization", "Bearer snoop"),
+            ("x-should-not-forward", "yes"),
+        ],
+        b"body".to_vec(),
+    )
+    .await;
+    assert_eq!(status, 204);
+    m.assert_async().await;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Multiple Content-Encoding values (comma-separated)
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn comma_separated_content_encoding_each_entry_checked() {
+    let mut upstream = mockito::Server::new_async().await;
+    let _m = upstream.mock("POST", "/f").expect(0).create_async().await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/f.yml",
+        &format!(
+            r#"
+declaration:
+  proxy:
+    upstream: "{}/f"
+    max_body_bytes: 1024
+    allowed_encodings: ["identity", "gzip"]
+"#,
+            upstream.url()
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    // gzip is allowed, br is not. Comma list "gzip, br" must be
+    // rejected because `br` isn't in the allowlist.
+    let (status, body_bytes, _h) = send(
+        router,
+        "POST",
+        "/svc/f",
+        &[
+            ("content-type", "application/octet-stream"),
+            ("content-encoding", "gzip, br"),
+        ],
+        b"q".to_vec(),
+    )
+    .await;
+    assert_eq!(status, 415);
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "proxy_unsupported_encoding");
+    // The specific entry that tripped the check should be the one
+    // outside the allowlist (br).
+    assert_eq!(body["seen"], "br");
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Response status + body shape pass through unchanged
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn upstream_custom_headers_forward_to_client() {
+    let mut upstream = mockito::Server::new_async().await;
+    let m = upstream
+        .mock("POST", "/f")
+        .with_status(201)
+        .with_header("content-type", "application/vnd.api+json")
+        .with_header("x-request-id", "upstream-rid-42")
+        .with_body(r#"{"id":"42"}"#)
+        .create_async()
+        .await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/f.yml",
+        &format!(
+            r#"
+declaration:
+  proxy:
+    upstream: "{}/f"
+    max_body_bytes: 1024
+"#,
+            upstream.url()
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, body, headers) = send(
+        router,
+        "POST",
+        "/svc/f",
+        &[("content-type", "application/octet-stream")],
+        b"q".to_vec(),
+    )
+    .await;
+    assert_eq!(status, 201, "upstream status preserved");
+    assert_eq!(
+        headers.get("content-type").map(String::as_str),
+        Some("application/vnd.api+json")
+    );
+    assert_eq!(
+        headers.get("x-request-id").map(String::as_str),
+        Some("upstream-rid-42")
+    );
+    assert_eq!(&body, b"{\"id\":\"42\"}");
+    m.assert_async().await;
+}
