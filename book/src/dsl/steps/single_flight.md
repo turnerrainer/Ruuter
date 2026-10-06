@@ -151,3 +151,18 @@ Response:
 (Timestamps and counter value differ per invocation; the important
 thing is that all five parallel responses share the same
 `computed_at` and `execution_count`.)
+
+## `single_flight` vs `parallel_http`
+
+Both involve concurrency but solve different problems:
+
+- **`single_flight`** collapses N concurrent **duplicate** requests
+  into one execution — same input, same output, cheaper. Followers
+  wait on the leader.
+- **[`parallel_http`](parallel_http.md)** fans out N concurrent
+  **distinct** requests to N peer services and aggregates the
+  N responses — different inputs, structured result array.
+
+They compose: a `single_flight` leader whose `do:` runs a
+`parallel_http` gives you "coalesce concurrent duplicates of a
+fan-out query."

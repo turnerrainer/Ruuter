@@ -646,3 +646,425 @@ fan:
         .to_string();
     assert!(err.contains("lo <= hi"), "unexpected error: {}", err);
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Result array preserves input peer order (not completion order)
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn result_array_preserves_input_order_not_completion_order() {
+    // Three mocks all reply 200 at the same wall clock, so completion
+    // order is undefined. Input order (A, B, C) must be preserved
+    // in the result array regardless.
+    let (_g, urls) = upstreams(&[200, 200, 200]).await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/fanout.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "AAA", url: "{a}" }}
+      - {{ id: "BBB", url: "{b}" }}
+      - {{ id: "CCC", url: "{c}" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    args:
+      url: "${{peer.url}}"
+    aggregate: collect_all
+    timeout: 3000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+            b = urls[1],
+            c = urls[2],
+        ),
+    );
+    // Run 10 times — if the ordering were by completion, we'd expect
+    // a mix of permutations across runs. The input-order guarantee
+    // must hold on every run.
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    for _ in 0..10 {
+        let body = send_json(router.clone(), "GET", "/svc/fanout").await;
+        let arr = body.as_array().expect("array result");
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["peer"]["id"], "AAA");
+        assert_eq!(arr[1]["peer"]["id"], "BBB");
+        assert_eq!(arr[2]["peer"]["id"], "CCC");
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Per-peer templating: ${peer.*} resolves in url, body, headers
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn per_peer_templating_resolves_in_body_and_headers() {
+    // Each mock matches on a peer-specific header + body field.
+    let mut servers: Vec<mockito::ServerGuard> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
+    for peer_id in ["red", "green", "blue"] {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/x")
+            .match_header("x-peer-id", peer_id)
+            .match_body(mockito::Matcher::PartialJsonString(format!(
+                r#"{{"from":"{}"}}"#,
+                peer_id
+            )))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(r#"{{"saw":"{}"}}"#, peer_id))
+            .create_async()
+            .await;
+        urls.push(format!("{}/x", server.url()));
+        servers.push(server);
+    }
+
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/template.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "red",   url: "{a}" }}
+      - {{ id: "green", url: "{b}" }}
+      - {{ id: "blue",  url: "{c}" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    call: http.post
+    args:
+      url: "${{peer.url}}"
+      headers:
+        X-Peer-Id: "${{peer.id}}"
+      body:
+        from: "${{peer.id}}"
+    aggregate: collect_all
+    timeout: 3000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+            b = urls[1],
+            c = urls[2],
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let body = send_json(router, "POST", "/svc/template").await;
+    let arr = body.as_array().expect("array result");
+    assert_eq!(arr.len(), 3);
+    for (idx, expected) in ["red", "green", "blue"].iter().enumerate() {
+        assert_eq!(
+            arr[idx]["response"]["status"].as_u64(),
+            Some(200),
+            "mock would have 501'd if the X-Peer-Id header / body.from \
+             didn't resolve to {} for peer {}",
+            expected,
+            idx
+        );
+        assert_eq!(arr[idx]["response"]["body"]["saw"], *expected);
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// first_n with status_range (no body predicate)
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn first_n_counts_only_status_range_hits() {
+    // Three peers: 200, 404, 200. status_range [200,299] — only
+    // the two 200s count. first_n:2 returns when both are collected;
+    // the 404 is discarded.
+    let (_g, urls) = upstreams(&[200, 404, 200]).await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/fanout.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "A", url: "{a}" }}
+      - {{ id: "B", url: "{b}" }}
+      - {{ id: "C", url: "{c}" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    args:
+      url: "${{peer.url}}"
+    aggregate: first_n
+    first_n: 2
+    early_exit_on:
+      status_range: [200, 299]
+    remaining_peers_after: cancel
+    timeout: 3000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+            b = urls[1],
+            c = urls[2],
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let body = send_json(router, "GET", "/svc/fanout").await;
+    let arr = body.as_array().expect("array result");
+    assert_eq!(arr.len(), 2, "exactly the 2 peers with 2xx match");
+    for entry in arr {
+        assert!(
+            (200..300).contains(&entry["response"]["status"].as_u64().unwrap_or(0)),
+            "every match must be in status_range: {:?}",
+            entry
+        );
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// first_n returns short when quota is never met
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn first_n_returns_fewer_than_quota_when_predicate_matches_nothing() {
+    // All three peers 200 but body_predicate requires found===true.
+    // Only one peer returns found:true; first_n:3 can only collect 1.
+    // Step returns the single match (result.length < first_n is the
+    // signal the DSL author uses to detect quota-miss).
+    let mut servers: Vec<mockito::ServerGuard> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
+    for found in [false, true, false] {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/check")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(r#"{{"found":{}}}"#, found))
+            .create_async()
+            .await;
+        urls.push(format!("{}/check", server.url()));
+        servers.push(server);
+    }
+
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/lookup.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "A", url: "{a}" }}
+      - {{ id: "B", url: "{b}" }}
+      - {{ id: "C", url: "{c}" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    args:
+      url: "${{peer.url}}"
+    aggregate: first_n
+    first_n: 3
+    early_exit_on:
+      body_predicate: "${{response.body.found === true}}"
+    timeout: 3000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+            b = urls[1],
+            c = urls[2],
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let body = send_json(router, "GET", "/svc/lookup").await;
+    let arr = body.as_array().expect("array result");
+    assert_eq!(arr.len(), 1, "only B matches the predicate");
+    assert_eq!(arr[0]["peer"]["id"], "B");
+}
+
+// ────────────────────────────────────────────────────────────────────
+// SSRF applies per peer (private-network URL blocked)
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ssrf_applies_per_peer_private_network_blocked() {
+    // One peer is reachable, one is on a private range. With
+    // block_private_networks: true, the private peer's call errors
+    // via the #89 stub; it still appears in collect_all's result
+    // array with status 0 + an error class.
+    let (_g, urls) = upstreams(&[200]).await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/fanout.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "public",  url: "{a}" }}
+      - {{ id: "private", url: "http://192.168.42.42/forbidden" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    args:
+      url: "${{peer.url}}"
+    aggregate: collect_all
+    timeout: 3000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |c| {
+        // Flip the gate ON for THIS test only. Our upstreams() helper
+        // uses mockito on 127.0.0.1 which must be allowlisted — add
+        // its origin so that peer succeeds.
+        c.internal_requests.block_private_networks = true;
+        let origin = urls[0].trim_end_matches("/probe").to_string();
+        c.internal_requests.allowed_urls = vec![origin];
+    });
+    let body = send_json(router, "GET", "/svc/fanout").await;
+    let arr = body.as_array().expect("array result");
+    assert_eq!(arr.len(), 2);
+    // Public peer: 200.
+    assert_eq!(arr[0]["response"]["status"].as_u64(), Some(200));
+    // Private peer: transport error with a kind (SSRF rejection
+    // raises as RuuterError::HttpRequest which maps to the "unknown"
+    // class in the parallel_http executor; the shape is status 0 +
+    // error populated).
+    assert_eq!(arr[1]["response"]["status"].as_u64(), Some(0));
+    assert!(
+        arr[1]["response"]["error"].is_string()
+            && !arr[1]["response"]["error"].as_str().unwrap().is_empty(),
+        "SSRF rejection should populate response.error on the private peer: {:?}",
+        arr[1]
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// max_concurrency bounds in-flight count
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn max_concurrency_bounds_in_flight_count() {
+    // Use a shared counter + atomic max-observed. Each mock
+    // increments on arrival, sleeps briefly, decrements. If
+    // max_concurrency works, the observed max is <= cap.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let max_observed = Arc::new(AtomicUsize::new(0));
+
+    let mut servers: Vec<mockito::ServerGuard> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
+    for _ in 0..6 {
+        let mut server = mockito::Server::new_async().await;
+        let in_flight_c = in_flight.clone();
+        let max_c = max_observed.clone();
+        server
+            .mock("GET", "/sleep")
+            .with_body_from_request(move |_req| {
+                let cur = in_flight_c.fetch_add(1, Ordering::SeqCst) + 1;
+                max_c.fetch_max(cur, Ordering::SeqCst);
+                // sleep a bit so overlap is observable
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                in_flight_c.fetch_sub(1, Ordering::SeqCst);
+                b"ok".to_vec()
+            })
+            .with_status(200)
+            .create_async()
+            .await;
+        urls.push(format!("{}/sleep", server.url()));
+        servers.push(server);
+    }
+
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/GET/bounded.yml",
+        &format!(
+            r#"
+init:
+  assign:
+    peers:
+      - {{ id: "p1", url: "{a}" }}
+      - {{ id: "p2", url: "{b}" }}
+      - {{ id: "p3", url: "{c}" }}
+      - {{ id: "p4", url: "{d}" }}
+      - {{ id: "p5", url: "{e}" }}
+      - {{ id: "p6", url: "{f}" }}
+  next: fan
+
+fan:
+  parallel_http:
+    peers: "${{peers}}"
+    args:
+      url: "${{peer.url}}"
+    aggregate: collect_all
+    max_concurrency: 2
+    timeout: 5000
+    result: results
+  next: reply
+
+reply:
+  return: "${{results}}"
+  wrapper: false
+"#,
+            a = urls[0],
+            b = urls[1],
+            c = urls[2],
+            d = urls[3],
+            e = urls[4],
+            f = urls[5],
+        ),
+    );
+    let router = build_router_with_cfg(tmp.path(), |_| {});
+    let body = send_json(router, "GET", "/svc/bounded").await;
+    let arr = body.as_array().expect("array result");
+    assert_eq!(arr.len(), 6, "all peers finish");
+    let peak = max_observed.load(Ordering::SeqCst);
+    assert!(
+        peak <= 2,
+        "max_concurrency=2 should bound in-flight; saw peak={}",
+        peak
+    );
+}

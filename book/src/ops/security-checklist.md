@@ -46,3 +46,27 @@ Review before every partner-facing deploy.
 - [ ] Every guard returns explicit 4xx status on reject (not a bare `return: { error: ... }` that would 200).
 - [ ] No DSL uses `${incoming.body.url}` (or similar) as an `http` step URL without an SSRF allow-list.
 - [ ] Idempotency-Key semantics understood by clients writing to POST/PUT/PATCH/DELETE routes.
+
+## Fan-out — `parallel_http:` (issues #135 + #136)
+
+Reviewed if any DSL uses the [`parallel_http` step](../dsl/steps/parallel_http.md).
+
+- [ ] **`max_concurrency` set** on every proxy fan-out that serves
+  public traffic. The default (unbounded) is fine for internal
+  admin DSLs but a public route that fires `parallel_http` to a 60-
+  peer registry without a cap turns one inbound request into 60
+  outbound sockets. Pick a modest value (8 — 32) and raise under
+  load.
+- [ ] **`timeout` set per peer.** Default inherits
+  `http_request_timeout` (15 s). For peer-gate workloads where
+  stragglers are expected, choose a tighter value — the step's
+  tail latency is bounded by the slowest peer under `collect_ok` /
+  `collect_all`.
+- [ ] **Peer URLs validated.** Peers often come from a Postgres
+  table or config file; if the DSL doesn't own the source, treat
+  `${peer.url}` as user-controlled and keep `block_private_networks:
+  true` + an SSRF allowlist on at least one of the peer origins.
+- [ ] **`first_n.body_predicate` is defence-in-depth, not a
+  security control.** A compromised peer can return any body it
+  wants; the predicate just picks "which 2xx counts." Don't rely
+  on it to authenticate peers.
