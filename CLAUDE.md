@@ -35,17 +35,17 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-09-18 on `1b12150`):
+Expected on a clean `dev` (verified 2026-10-07 on `bdd8d0f`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 798 passed / 0 failed / 3 ignored across 95 test binaries |
+| `cargo test --no-fail-fast` | 852 passed / 0 failed / 4 ignored across 100 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
-| `dsl-lint DSL/samples` | 64 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
-| `dsl-test DSL/DSL-tests` | 100 scenarios, 100 passed |
+| `dsl-lint DSL/samples` | 67 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
+| `dsl-test DSL/DSL-tests` | 107 scenarios, 107 passed |
 | `mdbook build` | html backend, no warnings |
 
 `scripting-boa` and `scripting-quickjs` are mutually exclusive features;
@@ -241,6 +241,114 @@ the recovery shape if it slips.
 For a new breaking change, copy the shape of the closest analog
 above — same CHANGELOG structure, same test-file naming, same
 PR-body template.
+
+## Behaviour-change surface as of v0.11.0-rc (eFTI batch: #134, #135, #136, #137)
+
+Three new DSL primitives shipped in one minor-bump batch (PRs
+#138–#140), driven by the Estonian eFTI Gate retiring its Klite
+multiplexer and adopting Ruuter as the mandatory AS4 entry point.
+No Rust public-API breaks; one wire-level behaviour change (proxy
+routes bypass the global 16 MiB preflight). Full detail in
+[CHANGELOG.md § 0.11.0-rc](CHANGELOG.md#0110-rc---2026-10-07).
+
+### 1. `parallel_http` step (issues #135 + #136, PR #139)
+
+**Additive DSL primitive, no breaking change.** Bounded concurrent
+fan-out to N peer services with three aggregation modes
+(`collect_ok`, `collect_all`, `first_n`). Uses
+`tokio::task::JoinSet` + `Arc<tokio::sync::Semaphore>` for a
+bounded in-flight count. Each peer dispatches through the engine's
+shared `HttpClient` so SSRF, pinned-DNS, and the #89 transport-
+error contract (`status: 0`, `error: "..."`) apply identically.
+Result array is ordered by input position (completion order is
+deliberately lost). Composes with `detach` for the eFTI K4 pattern:
+fan out to peer gates in a detached task, write the result array to
+Postgres, caller polls back.
+
+New Rust API: `StepEngine::http_client() -> &HttpClient` (new
+accessor; no existing signature changed). New `DslStep::ParallelHttp`
+variant on the untagged step enum (parse-dispatched on
+`parallel_http:` discriminator, no caller breakage).
+
+### 2. `detach` step (issue #137, PR #138)
+
+**Additive DSL primitive + new config block, no breaking change.**
+Continue DSL work after the HTTP response is sent. Parent continues
+immediately to `next:`; sub-steps inside `do:` run sequentially in
+source order on a snapshotted `ExecutionContext` (fresh variables
+map; readonly fields shared). New top-level config:
+
+- `detach.max_inflight` (default `256`) — process-wide
+  `tokio::sync::Semaphore` cap on concurrent detached tasks.
+  Overflow fails the step with `RuuterError::DslExecution` so the
+  DSL can route to `error:` or fall through. `null` disables the
+  cap; boot WARN fires when `null` + non-loopback listener.
+- `detach.shutdown_grace_secs` (default `15`) — SIGTERM-drain
+  window. The registry drains AFTER axum / UDS listeners stop
+  accepting (same ordering as T-30), so inbound requests that fire
+  detach as their last step don't lose work on a rolling deploy.
+
+New Rust API: `ExecutionContext::snapshot(&self) -> Self`,
+`StepEngine::with_detach_registry(DetachRegistry) -> Self`,
+`StepEngine::detach_registry() -> Option<&DetachRegistry>`.
+Boot WARN helper `config::warn_on_detach_defaults`.
+
+### 3. Pass-through binary proxy routes (issue #134, PR #140)
+
+**Additive new declaration shape + one wire behaviour change.**
+`declaration.proxy: { upstream, max_body_bytes, ... }` turns a DSL
+into a streaming byte-identical HTTP proxy for AS4 / eDelivery
+traffic. The request body is forwarded to the upstream unchanged
+(no buffering, no parsing, no Content-Type reinterpretation); the
+upstream's status, headers, and body are returned unchanged. DSL
+body is intentionally empty — the router dispatches to the proxy
+handler before StepEngine runs.
+
+- **Streaming end-to-end** (hyper inbound → `futures::Stream<Bytes>`
+  → `reqwest::Body::wrap_stream`). No decompression on the proxy
+  client (`.no_gzip().no_brotli().no_deflate()`).
+- **Hop-by-hop stripping on both legs** (RFC 7230 §6.1) including
+  dynamic hop-by-hop headers named in the client's `Connection:`
+  list. `traceparent` is forwarded (not hop-by-hop).
+- **Guards still run** against a header-only `ExecutionContext`
+  (empty `incoming.body`). Guards that read `incoming.body` on a
+  proxy route see `{}` — use headers / params.
+- **Security floor preserved**: SSRF, DNS pinning, Content-Length
+  preflight, mid-stream size cap on both legs, Content-Encoding
+  allowlist, per-route in-flight Semaphore, inbound idle-frame
+  timeout, overall request-timeout.
+- **Dedicated reqwest client pool** sized by new top-level
+  `pass_through_proxy:` config
+  (`pool_max_idle_per_host` 32, `pool_idle_timeout_ms` 90000,
+  `connect_timeout_ms` 10000). Separate from `http.*`'s pool so a
+  saturated proxy workload cannot starve normal outbound traffic.
+- **Transport errors** mapped via `classify_transport_error` → `502
+  + {error: "proxy_transport_error", kind: "..."}` (same `kind`
+  strings as #89 stubs).
+
+**Wire behaviour change:** proxy routes bypass the framework-wide
+16 MiB inbound Content-Length preflight (`MAX_INBOUND_BODY_BYTES`
+in `src/router/mod.rs`). Their own `declaration.proxy.max_body_bytes`
+cap applies instead. Non-proxy routes unchanged. Operators who need
+the previous cap on a proxy route set `max_body_bytes: 16777216`
+explicitly.
+
+Parse-time errors (rejected at DSL load time):
+- `declaration.proxy:` + any body allowlist (`allowlist.body:` or
+  the legacy flat `allowed_body:`) — mutually exclusive;
+  byte-identical proxying would be defeated by body parsing.
+- `declaration.proxy:` + any action step in the DSL body — error.
+- `declaration.proxy.upstream` empty / `max_body_bytes: 0` /
+  unknown entries in `allowed_encodings` (known: `identity`, `gzip`,
+  `deflate`, `br`, `zstd`) — errors.
+
+Known caveats shipped (documented in `book/src/dsl/proxy.md`):
+- `Expect: 100-continue` is auto-ack'd by hyper on inbound (no
+  forward-and-relay path yet).
+- HTTP/1.1 trailers are not forwarded (reqwest and axum body
+  streams carry data frames only).
+
+Both tracked as follow-up work.
 
 ## Behaviour-change surface as of v0.10.1-rc (h2ck.me v1 batch-2: T-23, T-24, T-28, T-30, T-31, T-32)
 

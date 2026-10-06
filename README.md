@@ -3,47 +3,35 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.10.1-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.11.0-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.10.0-rc?** Patch RC — six h2ck.me v1
-> backlog items shipped as one batch (T-23, T-24, T-28, T-30,
-> T-31, T-32; PRs #126–#131).
+> **Upgrading from v0.10.1-rc?** Minor RC — three new DSL primitives
+> motivated by the Estonian eFTI Gate retiring its Klite multiplexer
+> and adopting Ruuter as the mandatory AS4 entry point (PRs #138–#140):
 >
-> **One client-facing wire behaviour change** for HTTP clients
-> uploading multipart:
-> - A `multipart/form-data` body carrying more than
->   `incoming_requests.multipart_max_parts` (default `100`) or a
->   single part larger than `incoming_requests.multipart_max_part_size`
->   (default `4 MiB`) now returns `413 Payload Too Large` with a
->   structured JSON body naming the violated limit. Set either
->   cap to `null` in ruuter.yaml to preserve pre-fix unbounded
->   behaviour. Clients that hard-coded "400 == any multipart
->   problem" need a 413 branch.
+> - **`parallel_http` step (issues #135 + #136).** Bounded concurrent
+>   fan-out to N peer services with three structured-aggregation modes
+>   (`collect_ok`, `collect_all`, `first_n`). Replaces the DIY
+>   "iterate + http step" serialisation and K4's retired Klite
+>   multiplexer. Per-peer SSRF, pinned-DNS resolution, and the #89
+>   transport-error contract apply identically.
+> - **`detach` step (issue #137).** Continue DSL work after the HTTP
+>   response is sent. Snapshotted context, SIGTERM-aware drain
+>   (`detach.shutdown_grace_secs`), process-wide `detach.max_inflight`
+>   cap (default `256`).
+> - **Pass-through binary proxy routes (issue #134).** New
+>   `declaration.proxy: { upstream, max_body_bytes, ... }` turns a DSL
+>   into a streaming byte-identical HTTP proxy for AS4 / eDelivery
+>   traffic. No decompression, hop-by-hop stripping on both legs,
+>   dedicated reqwest client pool via new `pass_through_proxy:` config.
 >
-> **Operator-facing surface**: graceful shutdown on SIGTERM /
-> SIGINT — inbound requests drain up to 15 s before the process
-> exits, so Kubernetes rolling deploys / `docker stop` no longer
-> tear in-flight responses. Two new multipart caps
-> (`multipart_max_parts`, `multipart_max_part_size`) under
-> `incoming_requests`; both default-on with sensible values, both
-> opt-out via `null`.
+> **No API breaks.** All three additions are new DSL primitives, new
+> config blocks, and new Rust public API — existing DSLs run unchanged.
+> One behaviour change: `declaration.proxy:` routes bypass the global
+> 16 MiB inbound Content-Length preflight; their own `max_body_bytes`
+> applies instead.
 >
-> **Under the hood** (concurrency + fuzz surface): `StateStore::set`
-> TOCTOU on same-key contention closed via DashMap `Entry` API
-> — the per-project entry counter no longer over-reports under
-> load. New `fuzz/` crate scaffolding + nightly CI workflow for
-> the DSL loader and JSON body deserialiser; scaffolding only, no
-> production code touch.
->
-> **Docs + tests**: `book/src/dsl/context.md` documents the
-> `incoming.params` last-wins semantics for duplicate query
-> keys, and fixes a stale table entry that claimed
-> `incoming.query` existed (it doesn't — only `incoming.params`
-> is bound in the JS runtime). Positive-control regression pin
-> for `serde_json`'s implicit ~128-layer JSON depth limit — if a
-> future dep bump changes the ceiling, the pin fails loudly.
->
-> Full detail in [CHANGELOG.md § 0.10.1-rc](CHANGELOG.md#0101-rc---2026-09-18).
+> Full detail in [CHANGELOG.md § 0.11.0-rc](CHANGELOG.md#0110-rc---2026-10-07).
 
 ## Try it in one command
 
@@ -51,7 +39,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.10.1-rc
+    turnerrainer/ruuter:0.11.0-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -65,7 +53,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.10.1-rc
+    turnerrainer/ruuter:0.11.0-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -88,12 +76,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.10.1-rc \
+    turnerrainer/ruuter:0.11.0-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.10.1-rc \
+    turnerrainer/ruuter:0.11.0-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 

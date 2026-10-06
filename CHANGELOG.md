@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0-rc] - 2026-10-07
+
+Three new DSL primitives shipped as one minor-bump batch (PRs
+#138–#140), motivated by the Estonian eFTI Gate retiring its Klite
+multiplexer and adopting Ruuter as the mandatory AS4 entry point in
+front of the national eDelivery access point (kemit-ee/efti-gate-ee
+#186, #191, #252, #255). No Rust public-API breaks; one wire-level
+behaviour change (proxy routes bypass the global 16 MiB preflight in
+favour of their own `max_body_bytes`). Baseline on `dev` 2026-10-07
+at `923971c`: 852 tests passed / 0 failed / 4 ignored; `dsl-lint
+DSL/samples` 67 files, 0 errors, 3 pre-existing warnings; `dsl-test
+DSL/DSL-tests` 107 scenarios all passing; mdbook clean; `cargo audit
+--deny warnings` clean.
+
 ### Added
 
 - **Issues #135 + #136 — `parallel_http` step with three
