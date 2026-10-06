@@ -100,3 +100,12 @@ concurrently), use the [`parallel_http` step](parallel_http.md),
 which fires one HTTP call per peer under a bounded Semaphore and
 aggregates results with three structured modes
 (`collect_ok` / `collect_all` / `first_n`).
+
+## When to use `detach` instead
+
+`iterate` runs its body in the request's foreground — the caller
+waits for every iteration. For "respond fast, process in the
+background" patterns (webhook ack, async fan-out writing to a state
+store, fire-and-forget audit), use the
+[`detach` step](detach.md) which spawns the body in a `tokio::spawn`
+task and lets the parent return immediately.

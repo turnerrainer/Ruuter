@@ -168,6 +168,8 @@ impl DslParser {
             "iterate"
         } else if key_present("parallel_http") {
             "parallel_http"
+        } else if key_present("detach") {
+            "detach"
         } else if key_present("ws_send") {
             "ws_send"
         } else if key_present("ws_tag") {
@@ -225,8 +227,8 @@ impl DslParser {
             return Err(RuuterError::DslParse(format!(
                 "step '{}': no recognised step discriminator (expected one of \
                  call:, template:, assign:, return:, switch:, log:, state:, \
-                 iterate:, parallel_http:, ws_send:, ws_tag:, single_flight:, \
-                 or a declaration field)",
+                 iterate:, parallel_http:, detach:, ws_send:, ws_tag:, \
+                 single_flight:, or a declaration field)",
                 name
             )));
         };
@@ -278,6 +280,15 @@ impl DslParser {
                 // Parse-time validation of aggregate-mode constraints.
                 if let DslStep::ParallelHttp(ref p) = step {
                     validate_parallel_http(name, &p.parallel_http)?;
+                }
+                step
+            }
+            "detach" => {
+                let step = serde_json::from_value::<crate::steps::DetachStep>(json_value)
+                    .map(DslStep::Detach)
+                    .map_err(|e| Self::parse_err_json(name, e))?;
+                if let DslStep::Detach(ref d) = step {
+                    validate_detach(name, &d.detach)?;
                 }
                 step
             }
@@ -372,6 +383,45 @@ fn validate_parallel_http(step_name: &str, body: &crate::steps::ParallelHttpBody
             return Err(RuuterError::DslParse(format!(
                 "step '{}': parallel_http.call unknown method '{}' (expected http.get / http.post / http.put / http.patch / http.delete)",
                 step_name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Issue #137 — parse-time validation of a detach step.
+///
+/// - `do:` must contain at least one sub-step. An empty block is
+///   almost certainly a mistake; failing at load time keeps the DSL
+///   authoritative.
+/// - `return:` inside `do:` is a parse-time error. The parent DSL's
+///   response has already been sent by the time the detached task
+///   runs; a `return:` would try to render a response that nobody is
+///   listening for. Operators who want early exit should wrap in a
+///   `switch:` that terminates the block naturally.
+/// - `timeout_ms: 0` is a parse-time error. Zero is never a sensible
+///   deadline — operators who want "no timeout" leave the field unset.
+fn validate_detach(step_name: &str, body: &crate::steps::DetachBody) -> Result<()> {
+    if body.body.is_empty() {
+        return Err(RuuterError::DslParse(format!(
+            "step '{}': detach.do must contain at least one sub-step",
+            step_name
+        )));
+    }
+    if let Some(0) = body.timeout_ms {
+        return Err(RuuterError::DslParse(format!(
+            "step '{}': detach.timeout_ms must be > 0 (unset the field for no timeout)",
+            step_name
+        )));
+    }
+    for sub in &body.body {
+        if let DslStep::Return(_) = sub {
+            return Err(RuuterError::DslParse(format!(
+                "step '{}': detach.do may not contain a `return:` sub-step — \
+                 the parent response has already been sent by the time the \
+                 detached task runs. Use a `switch:` that terminates naturally \
+                 if you need early exit.",
+                step_name
             )));
         }
     }

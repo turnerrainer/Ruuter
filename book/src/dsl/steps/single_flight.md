@@ -166,3 +166,14 @@ Both involve concurrency but solve different problems:
 They compose: a `single_flight` leader whose `do:` runs a
 `parallel_http` gives you "coalesce concurrent duplicates of a
 fan-out query."
+
+## When to use `detach` instead
+
+`single_flight` runs the leader's `do:` block **synchronously** —
+every caller waits for the leader to finish. For "respond fast, do
+the work in the background" patterns (webhook ack, async fan-out
+writing to a state store, fire-and-forget audit), use the
+[`detach` step](detach.md) which spawns the body in a
+`tokio::spawn` task and lets the parent return immediately. Both
+steps use the same "sub-steps run sequentially inside `do:`"
+contract.

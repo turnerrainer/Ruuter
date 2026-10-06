@@ -10,10 +10,11 @@ use crate::dsl::Dsl;
 use crate::http_client::HttpClient;
 use crate::logging::{duration_ms, error_chain};
 use crate::scripting::ExpressionRegistry;
+use crate::steps::detach::DetachRegistry;
 use crate::steps::single_flight::Registry as SingleFlightRegistry;
 use crate::steps::{
-    assign, http, http_mock, iterate, log, parallel_http, return_step, single_flight, state,
-    switch, template, ws_send, ws_tag, DslStep, StepExecutor,
+    assign, detach, http, http_mock, iterate, log, parallel_http, return_step, single_flight,
+    state, switch, template, ws_send, ws_tag, DslStep, StepExecutor,
 };
 use crate::ws::WsRegistry;
 use crate::{Result, RuuterError};
@@ -97,6 +98,11 @@ pub struct StepEngine {
     /// at the call site.
     guards: SharedGuards,
     guards_mode: GuardMode,
+    /// Issue #137 — process-wide detach-task registry. `None` means
+    /// the `detach:` step will fail with a diagnostic — call
+    /// `with_detach_registry` during boot. Shared via `Clone` (Arc
+    /// inside) so main.rs can hold a copy for the SIGTERM drain.
+    detach_registry: Option<DetachRegistry>,
 }
 
 /// h2ck.me v1 T-4 — an empty `SharedGuards` handle. Used by
@@ -150,6 +156,7 @@ impl StepEngine {
             logging: Arc::new(LoggingConfig::default()),
             guards,
             guards_mode,
+            detach_registry: None,
         }
     }
 
@@ -161,6 +168,22 @@ impl StepEngine {
     /// clone the return value.
     pub fn http_client(&self) -> &HttpClient {
         &self.http_client
+    }
+
+    /// Issue #137 — attach the process-wide `DetachRegistry` built at
+    /// boot from `AppConfig.detach`. Required before any `detach:`
+    /// step executes; main.rs retains a clone to drive the SIGTERM
+    /// drain.
+    pub fn with_detach_registry(mut self, registry: DetachRegistry) -> Self {
+        self.detach_registry = Some(registry);
+        self
+    }
+
+    /// Issue #137 — exposed so the step executor can call
+    /// `try_spawn` and so main.rs can retain a drain handle without
+    /// a second parameter down every constructor.
+    pub fn detach_registry(&self) -> Option<&DetachRegistry> {
+        self.detach_registry.as_ref()
     }
 
     /// Return `(key, guard)` pairs for every guard that gates
@@ -716,6 +739,11 @@ impl StepEngine {
             }
             DslStep::ParallelHttp(s) => {
                 parallel_http::ParallelHttpStepExecutor::new(s.clone(), self.clone())
+                    .execute(context)
+                    .await
+            }
+            DslStep::Detach(s) => {
+                detach::DetachStepExecutor::new(s.clone(), self.clone())
                     .execute(context)
                     .await
             }

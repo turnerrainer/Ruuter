@@ -120,6 +120,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public-API break (field accessor on `StepEngine` is a new
   method, not a changed signature). Minor-bump target.
 
+- **Issue #137 — `detach` step: continue DSL work after the HTTP
+  response is sent.** New DSL primitive for background execution.
+  Composes with `parallel_http` (#135 + #136) for the eFTI K4
+  pattern (kemit-ee/efti-gate-ee#252): fan out to peer gates in a
+  detached task, write the structured result array to Postgres via
+  Resql, caller polls back later.
+
+  Semantics:
+  - **Parent continues immediately** to `next:` as soon as the step
+    accepts the work. Caller's HTTP response is already on the wire
+    before `do:` starts.
+  - **Sub-steps inside `do:` run sequentially**, in source order —
+    same contract as `iterate.do:` / `single_flight.do:`. Each
+    sub-step's `next:` directive is ignored; the block completes
+    when the last sub-step finishes, when `timeout_ms` fires, or
+    when a sub-step errors.
+  - **Context is snapshotted** at spawn time
+    (`ExecutionContext::snapshot`). The detached task has a fresh
+    variables map pre-filled with the parent's bindings; writes
+    inside `do:` do **not** propagate back. Readonly fields
+    (`incoming.*`, `project`, `traceparent`, `state`) are shared.
+  - **Errors inside `do:` are logged** with the parent's
+    `traceparent` and never affect the parent's already-sent
+    response. Each sub-step can still route its own error via its
+    own `error:` handler.
+  - **Guards still run** on `template:` sub-steps (parity with
+    v0.9.11-rc H1). Guard stack is fresh per detached task.
+
+  New top-level config block in `AppConfig`:
+  - `detach.max_inflight` (default `256`) — process-wide Semaphore
+    cap on concurrent detached tasks. Overflow fails the step with
+    `RuuterError::DslExecution` so the DSL can route to `error:` or
+    fall through. `null` disables the cap; boot WARN fires when
+    `null` + non-loopback listener.
+  - `detach.shutdown_grace_secs` (default `15`) — SIGTERM-drain
+    window. In-flight detached tasks get this long to finish
+    before `abort_all()`.
+
+  SIGTERM drain integrated with the existing T-30 shutdown signal:
+  the detach registry drains AFTER axum / UDS listeners stop
+  accepting, so inbound requests that fire detach as their last
+  step don't lose work on a rolling deploy.
+
+  Parse-time errors (caught by `DslParser::parse_content`):
+  - Empty `do:` array.
+  - `return:` sub-step inside `do:` — unreachable (parent response
+    already sent); use a `switch:` for early exit instead.
+  - `timeout_ms: 0` — zero is never a sensible deadline; leave the
+    field unset for "no timeout".
+
+  Known caveats shipped (documented in `book/src/dsl/steps/detach.md`):
+  - No cross-replica state. Ruuter restart mid-detach loses
+    in-flight work (SIGTERM drain mitigates but doesn't eliminate).
+    Operators who need "survive restart" semantics use a work-queue
+    decoupling (NATS JetStream, Kafka, Postgres LISTEN+NOTIFY) —
+    out of scope.
+  - Context clone cost is linear in the parent's variables-map
+    size. Keep pre-detach context small.
+  - `template:` sub-steps start with an empty guard stack
+    (semantically correct — detached task is a new execution).
+
+  Non-breaking additions:
+  - `detach` added to `STEP_KEYS` + `ACTION_STEP_KEYS`.
+  - New `DslStep::Detach` variant.
+  - New Rust public API: `src/steps/detach.rs` (`DetachRegistry`,
+    `DetachStepExecutor`), `src/steps/mod.rs` (`DetachStep`,
+    `DetachBody`).
+  - New `ExecutionContext::snapshot()` method for isolated clones.
+  - New `StepEngine::with_detach_registry()` /
+    `StepEngine::detach_registry()`.
+  - New `config/mod.rs::warn_on_detach_defaults` boot WARN.
+
+  Documentation: new `book/src/dsl/steps/detach.md` with full
+  contract AND five worked examples (eFTI K4 composition, fire-and-
+  forget audit, async webhook fan-out, overflow error-handling,
+  nested parallel_http). Cross-referenced from `iterate.md` and
+  `framework/pipeline.md`. SUMMARY wired. Sample DSL
+  `DSL/samples/POST/advanced/async-webhook.yml` demonstrates the
+  fire-and-forget audit pattern.
+
+  Regression tests: `tests/issue_137_detach.rs` — 9 scenarios
+  covering parent-returns-before-detached-task-finishes, variable
+  isolation, error-in-do-doesn't-affect-parent, registry overflow,
+  registry drain, and four parse-time error paths.
+
+  Migration: no caller-facing migration needed. Additive new step +
+  additive new config block + additive new Rust public API. New
+  `detach:` field in `AppConfig` has safe defaults; existing
+  deployments pick them up on next restart.
+
+  Minor-bump target.
+
 ## [0.10.1-rc] - 2026-09-18
 
 Six h2ck.me v1 batch-2 backlog items shipped in one round (T-23,

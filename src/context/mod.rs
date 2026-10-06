@@ -264,6 +264,50 @@ impl ExecutionContext {
         }
     }
 
+    /// Issue #137 — produce an isolated snapshot of this context for
+    /// a detached task. The snapshot:
+    ///
+    /// - Owns a **fresh** `Arc<RwLock<HashMap>>` for variables,
+    ///   pre-filled with the parent's current bindings. Writes made
+    ///   inside the detached task do not propagate back to the
+    ///   parent, and vice-versa.
+    /// - Owns a **fresh** `guard_stack` so a `template:` step inside
+    ///   the detached block does not share the parent's recursion-
+    ///   detection stack. Semantically correct: the detached task is
+    ///   a separate execution.
+    /// - Shares the readonly request fields (`request_body`,
+    ///   `request_query`, `request_headers`, `request_origin`,
+    ///   `project`, `traceparent`, `expr_registry`, `state`) — these
+    ///   are the parent's immutable context and the detached task
+    ///   consumes them read-only.
+    /// - For QuickJS: gives the detached task its own `OnceLock` so a
+    ///   session is initialised freshly on first script eval. Keeps
+    ///   runtimes isolated per detached task; one extra JS runtime
+    ///   per detach is the right trade for correctness.
+    pub fn snapshot(&self) -> Self {
+        let vars_snapshot: HashMap<String, Value> = self
+            .variables
+            .read()
+            .ok()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        Self {
+            variables: Arc::new(RwLock::new(vars_snapshot)),
+            request_body: self.request_body.clone(),
+            request_query: self.request_query.clone(),
+            request_headers: self.request_headers.clone(),
+            request_origin: self.request_origin.clone(),
+            project: self.project.clone(),
+            state: self.state.clone(),
+            connection_id: self.connection_id.clone(),
+            traceparent: self.traceparent.clone(),
+            #[cfg(feature = "scripting-quickjs")]
+            quickjs_session: Arc::new(std::sync::OnceLock::new()),
+            expr_registry: self.expr_registry.clone(),
+            guard_stack: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     pub fn get_variable(&self, key: &str) -> Option<Value> {
         self.variables.read().ok()?.get(key).cloned()
     }

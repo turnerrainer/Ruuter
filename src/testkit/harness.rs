@@ -71,9 +71,15 @@ impl Harness {
         // so the engine sees the same shape it would on a real boot.
         let shared_guards: crate::dsl::loader::SharedGuards =
             Arc::new(arc_swap::ArcSwap::from_pointee(loaded.guards.clone()));
+        // Issue #137 — wire a DetachRegistry so DSLs under test that
+        // use the `detach:` step execute in-process. Defaults mirror
+        // AppConfig::default(); overflow / drain semantics are pinned
+        // by the direct-registry tests in tests/issue_137_detach.rs.
+        let detach_registry = crate::steps::detach::DetachRegistry::new(&config.detach);
         let mut engine = StepEngine::new(http_client, shared_guards.clone(), config.guards.mode)
             .with_ws_registry(ws_registry.clone())
-            .with_dsls(shared_http_dsls.clone());
+            .with_dsls(shared_http_dsls.clone())
+            .with_detach_registry(detach_registry);
         if let Some(n) = config.max_step_recursions {
             engine = engine.with_max_iterations(n);
         }
