@@ -193,6 +193,291 @@ What happens to the peers still in flight when `first_n` is met.
   Use for audit-while-serving: answer the user fast, keep the full
   picture in the log stream.
 
+## Worked examples
+
+### Example 1 — `collect_ok` broadcast
+
+Fan out a cache invalidation to every known cache node. Give the
+DSL a count of how many acknowledged; log the rest asynchronously
+via `tracing::warn!` from the caller.
+
+```yaml
+# POST /svc/invalidate — body: { key: "..." }
+
+init:
+  assign:
+    caches:
+      - { id: "cache-a", url: "http://cache-a.internal:9000/invalidate" }
+      - { id: "cache-b", url: "http://cache-b.internal:9000/invalidate" }
+      - { id: "cache-c", url: "http://cache-c.internal:9000/invalidate" }
+  next: broadcast
+
+broadcast:
+  parallel_http:
+    peers: "${caches}"
+    call: http.post
+    args:
+      url: "${peer.url}"
+      body: "${incoming.body}"
+    aggregate: collect_ok
+    max_concurrency: 8
+    timeout: 500
+    result: acknowledged
+  next: reply
+
+reply:
+  return:
+    ok: true
+    acknowledged: "${acknowledged.length}"
+    total: "${caches.length}"
+  status: 200
+```
+
+Response shape when all three ack:
+
+```json
+{"ok": true, "acknowledged": 3, "total": 3}
+```
+
+When `cache-b` was down (transport-errored peer dropped silently):
+
+```json
+{"ok": true, "acknowledged": 2, "total": 3}
+```
+
+### Example 2 — `collect_all` audit fan-out
+
+Audit every peer's reply, including the ones that failed. Write the
+full array to a Postgres audit table via Resql so operators can
+reconcile later.
+
+```yaml
+# POST /svc/notify-and-audit
+
+init:
+  assign:
+    gates:
+      - { id: "ee", url: "https://gate.ee/notify" }
+      - { id: "lv", url: "https://gate.lv/notify" }
+      - { id: "lt", url: "https://gate.lt/notify" }
+  next: notify
+
+notify:
+  parallel_http:
+    peers: "${gates}"
+    call: http.post
+    args:
+      url: "${peer.url}"
+      body: "${incoming.body}"
+      headers: { Content-Type: application/json }
+    aggregate: collect_all
+    max_concurrency: 16
+    timeout: 5000
+    result: peer_replies
+  next: audit
+
+audit:
+  call: http.post
+  args:
+    url: "[#RESQL_URL]/efti/write_notify_audit"
+    body:
+      notice_id: "${incoming.body.id}"
+      replies: "${peer_replies}"
+  result: _audit
+  next: reply
+
+reply:
+  return:
+    notice_id: "${incoming.body.id}"
+    replies: "${peer_replies}"
+  status: 200
+```
+
+The `peer_replies` variable binds to the full `[{peer, response}]`
+array for every gate — successes AND transport-errored. The audit
+sink sees it verbatim. This is the shape K4
+(kemit-ee/efti-gate-ee#252) names as the structured replacement for
+Klite's ad-hoc string-join aggregation.
+
+### Example 3 — `first_n` lookup with `cancel`
+
+Ask every registry whether an identifier is known. Return the first
+affirmative; cancel the rest the moment one says yes.
+
+```yaml
+# GET /svc/lookup/:id
+
+init:
+  assign:
+    registries:
+      - { id: "primary",   url: "https://reg-primary.example/lookup" }
+      - { id: "secondary", url: "https://reg-secondary.example/lookup" }
+      - { id: "tertiary",  url: "https://reg-tertiary.example/lookup" }
+      - { id: "mirror",    url: "https://reg-mirror.example/lookup" }
+  next: lookup
+
+lookup:
+  parallel_http:
+    peers: "${registries}"
+    args:
+      url: "${peer.url}?id=${incoming.params.id}"
+    aggregate: first_n
+    first_n: 1
+    early_exit_on:
+      status_range: [200, 299]
+      body_predicate: "${response.body.found === true}"
+    remaining_peers_after: cancel
+    max_concurrency: 8
+    timeout: 2000
+    result: hits
+  next: branch
+
+branch:
+  switch:
+    - condition: "${hits.length === 0}"
+      next: not_found
+  next: found
+
+found:
+  return:
+    id: "${incoming.params.id}"
+    where: "${hits[0].peer.id}"
+    record: "${hits[0].response.body}"
+  status: 200
+
+not_found:
+  return: { error: "not found in any registry" }
+  status: 404
+```
+
+Any registry responding `{found: true}` wins; the DSL returns in the
+latency of the fastest match, not the slowest. If none match, the
+step returns an empty `hits` array and the DSL emits 404.
+
+### Example 4 — `first_n` with `drain_bg` for audit-while-serving
+
+Same lookup pattern, but keep every registry's eventual reply in the
+log stream so operators can later audit who was slow or who returned
+inconsistent data. Caller never waits for the stragglers.
+
+```yaml
+lookup_audited:
+  parallel_http:
+    peers: "${registries}"
+    args:
+      url: "${peer.url}?id=${incoming.params.id}"
+    aggregate: first_n
+    first_n: 1
+    early_exit_on:
+      status_range: [200, 299]
+      body_predicate: "${response.body.found === true}"
+    remaining_peers_after: drain_bg
+    max_concurrency: 8
+    timeout: 2000
+    result: hits
+  next: reply_fast
+
+reply_fast:
+  return:
+    where: "${hits[0]?.peer?.id ?? null}"
+    found: "${hits.length > 0}"
+```
+
+The DSL responds in ~5-50 ms (fastest matching registry). The other
+registries continue completing in the background; their eventual
+responses are logged:
+
+```
+INFO parallel_http drain_bg: peer completed peer=... status=200
+WARN parallel_http drain_bg: peer failed peer=... error="timeout"
+```
+
+### Example 5 — reading the result array
+
+The result shape is the same across all three modes, so DSL authors
+branch on it uniformly. Separate transport failures from upstream
+rejections:
+
+```yaml
+# After a parallel_http step with aggregate: collect_all
+# and result: replies.
+
+categorize:
+  iterate:
+    over: "${replies}"
+    as: entry
+    do:
+      - classify:
+          switch:
+            - condition: "${entry.response.status === 0}"
+              next: tag_transport_error
+            - condition: "${entry.response.status >= 400}"
+              next: tag_upstream_error
+          next: tag_success
+      - tag_transport_error:
+          assign:
+            category: "transport_error"   # host unreachable, timeout, etc.
+      - tag_upstream_error:
+          assign:
+            category: "upstream_error"    # upstream reachable, but rejected
+      - tag_success:
+          assign:
+            category: "success"
+    collect: "${({ peer: entry.peer.id, status: entry.response.status, category: category })}"
+    into: categorised
+  next: reply
+
+reply:
+  return: "${categorised}"
+```
+
+- `response.status === 0` → transport failure (`response.error`
+  tells you the class: `timeout`, `connect`, `request`, `body`,
+  `decode`, `unknown` — same vocabulary as the [#89 http step
+  contract](http.md)).
+- `response.status >= 400` → upstream reachable; rejected us.
+- `response.status 2xx` → success.
+
+### Example 6 — composing with `iterate` (batched fan-out)
+
+Fan out to peers in batches of 10 to respect a downstream rate
+limit, flattening the per-batch result arrays into one.
+
+```yaml
+init:
+  assign:
+    batches: "${chunk(all_peers, 10)}"   # user-provided helper, out of scope
+    aggregated: []
+  next: run_batches
+
+run_batches:
+  iterate:
+    over: "${batches}"
+    as: batch
+    do:
+      - fan:
+          parallel_http:
+            peers: "${batch}"
+            args:
+              url: "${peer.url}"
+              body: "${incoming.body}"
+            aggregate: collect_all
+            max_concurrency: 10
+            timeout: 3000
+            result: batch_replies
+      - merge:
+          assign:
+            aggregated: "${aggregated.concat(batch_replies)}"
+  next: reply
+
+reply:
+  return: "${aggregated}"
+```
+
+Each `iterate` iteration fires one bounded fan-out; the outer
+sequential loop paces them so no more than 10 requests are in
+flight at any instant, globally.
+
 ## Result shape (stable across all three modes)
 
 ```json
