@@ -6,11 +6,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod assign;
+pub mod detach;
 pub mod engine;
 pub mod http;
 pub mod http_mock;
 pub mod iterate;
 pub mod log;
+pub mod parallel_http;
 pub mod return_step;
 pub mod single_flight;
 pub mod state;
@@ -43,8 +45,10 @@ pub const STEP_KEYS: &[&str] = &[
     "assign",
     "call",
     "declaration",
+    "detach",
     "iterate",
     "log",
+    "parallel_http",
     "return",
     "single_flight",
     "state",
@@ -60,8 +64,10 @@ pub const STEP_KEYS: &[&str] = &[
 pub const ACTION_STEP_KEYS: &[&str] = &[
     "assign",
     "call",
+    "detach",
     "iterate",
     "log",
+    "parallel_http",
     "return",
     "single_flight",
     "state",
@@ -128,6 +134,16 @@ pub enum DslStep {
     Template(TemplateStep),
     State(StateStep),
     Iterate(IterateStep),
+    /// Issues #135 + #136 — bounded fan-out to N peer gates with
+    /// structured aggregation. Composes with the detach step (#137)
+    /// for the eFTI K4 pattern: write results to Postgres via Resql,
+    /// caller polls back.
+    ParallelHttp(ParallelHttpStep),
+    /// Issue #137 — background execution. The step's `do:` block runs
+    /// in a detached task; the parent DSL continues immediately. Used
+    /// by the eFTI K4 pattern (kemit-ee/efti-gate-ee#252) to answer
+    /// the caller fast while a long-running fan-out writes to Postgres.
+    Detach(DetachStep),
     WsSend(WsSendStep),
     WsTag(WsTagStep),
     SingleFlight(SingleFlightStep),
@@ -149,6 +165,8 @@ impl DslStep {
             DslStep::Template(s) => Some(&s.base),
             DslStep::State(s) => Some(&s.base),
             DslStep::Iterate(s) => Some(&s.base),
+            DslStep::ParallelHttp(s) => Some(&s.base),
+            DslStep::Detach(s) => Some(&s.base),
             DslStep::WsSend(s) => Some(&s.base),
             DslStep::WsTag(s) => Some(&s.base),
             DslStep::SingleFlight(s) => Some(&s.base),
@@ -170,6 +188,8 @@ impl DslStep {
             DslStep::Template(_) => "template",
             DslStep::State(_) => "state",
             DslStep::Iterate(_) => "iterate",
+            DslStep::ParallelHttp(_) => "parallel_http",
+            DslStep::Detach(_) => "detach",
             DslStep::WsSend(_) => "ws_send",
             DslStep::WsTag(_) => "ws_tag",
             DslStep::SingleFlight(_) => "single_flight",
@@ -191,6 +211,8 @@ impl DslStep {
             DslStep::Template(s) => s.next.as_deref(),
             DslStep::State(s) => s.next.as_deref(),
             DslStep::Iterate(s) => s.next.as_deref(),
+            DslStep::ParallelHttp(s) => s.next.as_deref(),
+            DslStep::Detach(s) => s.next.as_deref(),
             DslStep::WsSend(s) => s.next.as_deref(),
             DslStep::WsTag(s) => s.next.as_deref(),
             DslStep::SingleFlight(s) => s.next.as_deref(),
@@ -268,6 +290,183 @@ pub struct IterateBody {
     /// executor — set lower for tight bounds, higher for known-large lists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_items: Option<usize>,
+}
+
+/// Issues #135 + #136 — bounded fan-out to N peer gates with
+/// structured aggregation. Replaces the Klite-multiplexer pattern
+/// retired by K4 (kemit-ee/efti-gate-ee#252). Each peer gets its own
+/// outbound HTTP call via the shared `HttpClient` (so SSRF checks,
+/// pinned-DNS resolution, and the `#89` transport-error contract all
+/// apply identically to each peer). The result variable binds to an
+/// array of `{peer, response}` objects — one entry per peer, where
+/// `response` carries `{status, body, headers, error}` in the shape
+/// of `HttpResponse` (status 0 + non-null error = transport failure).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ParallelHttpStep {
+    pub parallel_http: ParallelHttpBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+/// Issue #137 — background execution. The parent DSL fires `detach`,
+/// the `do:` block runs in a detached `tokio::spawn` task, and the
+/// parent continues immediately to `next:`. Composes with
+/// `parallel_http` (#135/#136) for the eFTI K4 pattern: fan out to
+/// peers in the background, write the aggregated result to Postgres,
+/// caller polls back.
+///
+/// Semantics:
+/// - `do:` sub-steps run **sequentially in source order** (same
+///   contract as `iterate.do:` / `single_flight.do:`). Each sub-step's
+///   `next:` is ignored; the block completes when the last sub-step
+///   finishes.
+/// - The detached task owns a **snapshot clone** of the parent
+///   context — writes made inside `do:` do not propagate back.
+/// - Errors inside `do:` are logged with the parent's `traceparent`
+///   and never affect the parent's already-sent response.
+/// - Process-wide concurrency is bounded by `AppConfig.detach.max_inflight`
+///   (default 256). Overflow fails the step so the DSL can route to
+///   `error:` or fall through.
+/// - On SIGTERM the drain window (`AppConfig.detach.shutdown_grace_secs`,
+///   default 15) waits for in-flight detached tasks before `abort_all`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DetachStep {
+    pub detach: DetachBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseStepFields,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ParallelHttpBody {
+    /// Expression evaluating to an array of peer objects. Each element
+    /// is bound to `${peer}` for the duration of the args evaluation
+    /// (same binding model as `iterate.as`). Typical shape:
+    /// `${gates}` where gates is `[{id, baseUrl, bearerToken}, ...]`.
+    pub peers: String,
+
+    /// HTTP method dispatch key, same vocabulary as the `http.*` step
+    /// (`http.get`, `http.post`, `http.put`, `http.patch`,
+    /// `http.delete`). Default `http.get`.
+    #[serde(default = "default_parallel_http_call")]
+    pub call: String,
+
+    /// Per-peer HTTP args. `url`, `body`, `headers`, `query` can
+    /// reference `${peer.*}` to template per-peer values. Resolved
+    /// once per peer in the parent context before the fan-out spawns.
+    pub args: HttpArgs,
+
+    /// Per-peer deadline in milliseconds. Covers the full outbound
+    /// request round-trip (connect + send + first byte). Each peer
+    /// honours this independently; a slow peer times out without
+    /// affecting the others. `None` falls back to `AppConfig.http_request_timeout`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+
+    /// Bounded fan-out concurrency. `None` means "no explicit cap"
+    /// (bounded by `peers.len()` in practice). Operators serving
+    /// public traffic should always set a modest value to prevent one
+    /// request from spawning `len(peers)` outbound connections at
+    /// once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<u32>,
+
+    /// Aggregation mode. `collect_ok` drops errored peers; `collect_all`
+    /// keeps everything; `first_n` returns early when `first_n` peers
+    /// have satisfied `early_exit_on`.
+    pub aggregate: AggregateMode,
+
+    /// Required when `aggregate: first_n`. Target number of successes
+    /// before the step unblocks. Parse-time error if present under
+    /// `collect_ok` / `collect_all`, or absent under `first_n`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_n: Option<u32>,
+
+    /// Only valid under `aggregate: first_n`. Defines which peer
+    /// responses count toward the `first_n` quota. Absent → the
+    /// default is 2xx responses with no body predicate (every 2xx
+    /// counts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub early_exit_on: Option<EarlyExitOn>,
+
+    /// Only valid under `aggregate: first_n`. Disposition for peers
+    /// still in flight once `first_n` is satisfied. Default `cancel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_peers_after: Option<RemainingPeersAfter>,
+
+    /// Name of the variable the aggregated array is bound to in the
+    /// parent context.
+    pub result: String,
+}
+
+/// Issue #135 — aggregation mode for `parallel_http`. See
+/// `book/src/dsl/steps/parallel_http.md` for the full semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregateMode {
+    /// Wait for every peer; keep successes (2xx + transport-OK) only.
+    CollectOk,
+    /// Wait for every peer; keep errors too — array shape stays stable
+    /// and errored peers surface with `response.error` populated.
+    CollectAll,
+    /// Return as soon as `first_n` peers satisfy `early_exit_on`.
+    FirstN,
+}
+
+/// Issue #136 — predicate that decides which responses count toward
+/// `first_n`. Both fields optional; absent fields default to permissive.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EarlyExitOn {
+    /// Inclusive HTTP status range `[low, high]` a response must fall
+    /// into to count toward `first_n`. Default `[200, 299]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_range: Option<[u16; 2]>,
+
+    /// Optional JS expression evaluated per peer response. The response
+    /// is bound to `${response}` (shape: `{status, body, headers,
+    /// error}`). Must return truthy for the response to count toward
+    /// `first_n`. Example: `"${response.body.found === true}"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_predicate: Option<String>,
+}
+
+/// Issue #136 — what to do with peers still in-flight after `first_n`
+/// is satisfied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemainingPeersAfter {
+    /// Abort the remaining tasks (hyper closes the sockets). Lowest
+    /// tail latency. Caller sees only the `first_n` matches.
+    Cancel,
+    /// Detach the remaining tasks — they keep running in a
+    /// `tokio::spawn` and their eventual results are logged (not
+    /// collected). Caller continues immediately with the first_n
+    /// matches. Use for audit-while-serving.
+    DrainBg,
+}
+
+fn default_parallel_http_call() -> String {
+    "http.get".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DetachBody {
+    /// Sub-steps that run inside the detached task. Executed
+    /// sequentially via `engine.execute_single_step`. A sub-step's
+    /// `next:` directive is ignored (consistent with
+    /// `iterate.do` / `single_flight.do`).
+    #[serde(rename = "do")]
+    pub body: Vec<DslStep>,
+    /// Optional end-to-end deadline for the whole detached block in
+    /// milliseconds. On timeout the current sub-step is cancelled and
+    /// a WARN is logged with the parent's traceparent. `None` =
+    /// unbounded (bounded in practice by SIGTERM grace + whatever
+    /// per-sub-step timeouts are set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

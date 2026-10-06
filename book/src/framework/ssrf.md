@@ -78,3 +78,4 @@ Response:
   per-request (the upstream URL is substituted once at parse time via
   constants, but SSRF is re-checked every request so a compromised
   constants file cannot smuggle traffic to private origins).
+- [`parallel_http` step](../dsl/steps/parallel_http.md) (issues #135 + #136) runs `check_ssrf` **per peer** — the allowlist, private-network block, and DNS pinning apply to every peer URL in the fan-out independently. A single peer with a disallowed URL fails just that peer (shown as `response.status: 0` with `response.error` populated in `collect_all`); the other peers proceed normally.

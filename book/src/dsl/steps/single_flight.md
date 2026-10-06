@@ -151,3 +151,29 @@ Response:
 (Timestamps and counter value differ per invocation; the important
 thing is that all five parallel responses share the same
 `computed_at` and `execution_count`.)
+
+## `single_flight` vs `parallel_http`
+
+Both involve concurrency but solve different problems:
+
+- **`single_flight`** collapses N concurrent **duplicate** requests
+  into one execution — same input, same output, cheaper. Followers
+  wait on the leader.
+- **[`parallel_http`](parallel_http.md)** fans out N concurrent
+  **distinct** requests to N peer services and aggregates the
+  N responses — different inputs, structured result array.
+
+They compose: a `single_flight` leader whose `do:` runs a
+`parallel_http` gives you "coalesce concurrent duplicates of a
+fan-out query."
+
+## When to use `detach` instead
+
+`single_flight` runs the leader's `do:` block **synchronously** —
+every caller waits for the leader to finish. For "respond fast, do
+the work in the background" patterns (webhook ack, async fan-out
+writing to a state store, fire-and-forget audit), use the
+[`detach` step](detach.md) which spawns the body in a
+`tokio::spawn` task and lets the parent return immediately. Both
+steps use the same "sub-steps run sequentially inside `do:`"
+contract.

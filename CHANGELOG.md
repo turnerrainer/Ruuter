@@ -9,6 +9,214 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Issues #135 + #136 — `parallel_http` step with three
+  structured-aggregation modes.** New DSL primitive for bounded
+  concurrent fan-out to N peer services. Replaces the DIY
+  "iterate + http step" pattern (which serialises) and the Klite-
+  multiplexer primitive retired by K4 (kemit-ee/efti-gate-ee#252).
+
+  ```yaml
+  fan:
+    parallel_http:
+      peers: "${gates}"              # expression → array
+      call: http.post                # default: http.get
+      args:
+        url: "${peer.baseUrl}/v1/send"
+        body: "${incoming.body}"
+      timeout: 2000                  # per-peer deadline (ms)
+      max_concurrency: 8             # bounded fan-out
+      aggregate: first_n             # collect_ok | collect_all | first_n
+      first_n: 1                     # required under first_n
+      early_exit_on:                 # only under first_n
+        status_range: [200, 299]
+        body_predicate: "${response.body.found === true}"
+      remaining_peers_after: cancel  # cancel | drain_bg (only under first_n)
+      result: peer_responses
+  ```
+
+  Behaviour:
+  - Each peer dispatches via the engine's shared `HttpClient`, so
+    SSRF checks, pinned-DNS resolution, and the #89 transport-error
+    contract (`status: 0, error: "..."`) apply identically to each
+    peer. `traceparent` is auto-forwarded per peer unless the DSL
+    sets one explicitly (same rule as the `http.*` step).
+  - `tokio::task::JoinSet` + `Arc<tokio::sync::Semaphore>` bound
+    the concurrent in-flight count. `max_concurrency: null` means
+    "no explicit cap" (bounded by `peers.len()`); operators serving
+    public traffic should always set a modest value.
+  - Three aggregation modes:
+    - **`collect_ok`** — wait for all; drop peers whose response is
+      a transport error. Result array shape: `[{peer, response}, ...]`
+      with `response.error` always null.
+    - **`collect_all`** — wait for all; keep errors. Transport
+      failures surface with `response.status == 0` and
+      `response.error` populated. **This is the mode K4 names as
+      the replacement for Klite's ad-hoc string-join**: a stable
+      structured per-peer record.
+    - **`first_n`** — return when `first_n:` peers satisfy
+      `early_exit_on:` (default: 2xx responses). Remaining in-flight
+      peers are disposed per `remaining_peers_after:`:
+      - `cancel` — abort tasks, lowest tail latency.
+      - `drain_bg` — detach into a background task; eventual
+        responses logged via `tracing::info!` / `warn!` on the
+        parent span. Caller returns immediately with just the N
+        matches.
+  - Result array ordered by input position (sorted after collection;
+    completion order is deliberately lost — DSL authors expect
+    "results in the order I asked").
+  - Empty `peers:` array binds the result variable to `[]` and
+    advances. `null` is treated as empty. Any other type is a
+    runtime error.
+  - `${peer}` binding leaks after the step (parity with
+    `iterate.as`'s `item_var`). `${response}` similarly leaks when
+    `early_exit_on.body_predicate` is set.
+
+  Parse-time errors (caught by `DslParser::parse_content`):
+  - `aggregate: first_n` without `first_n: N` (N >= 1).
+  - `first_n:` / `early_exit_on:` / `remaining_peers_after:` under
+    `collect_ok` / `collect_all` (undefined fields).
+  - `call:` outside `http.{get,post,put,patch,delete}`.
+  - `early_exit_on.status_range: [hi, lo]` where `hi > lo`.
+
+  Composes with the `detach` step (issue #137) for the eFTI K4
+  pattern: write results to Postgres from inside
+  `detach { parallel_http { ... } ; call: http.post resql_write }`,
+  caller polls back.
+
+  Non-breaking additions:
+  - `parallel_http` added to `STEP_KEYS` + `ACTION_STEP_KEYS` (both
+    lists stay in sync via the pinned invariant test).
+  - New `DslStep::ParallelHttp` variant.
+  - New Rust public API: `src/steps/parallel_http.rs`
+    (`ParallelHttpStepExecutor`), `src/steps/mod.rs`
+    (`ParallelHttpStep`, `ParallelHttpBody`, `AggregateMode`,
+    `EarlyExitOn`, `RemainingPeersAfter`).
+  - New `StepEngine::http_client()` accessor so the step can reuse
+    the engine's shared `HttpClient` without the field being made
+    `pub`.
+  - OpenAPI generation: no new emit for `parallel_http` routes
+    (it's a backend fan-out primitive; the route's OpenAPI shape
+    comes from its `return:` step and `declaration:` block as
+    usual).
+  - `dsl-lint`: `parallel_http` recognised automatically via the
+    shared `STEP_KEYS` constant (no linter edits needed; the
+    invariant test pins the alignment).
+
+  Regression tests: `tests/issue_135_parallel_http.rs` — 19
+  scenarios covering `collect_ok` drops transport errors,
+  `collect_all` keeps errors with stable shape, `first_n` quota
+  met, `first_n` with `body_predicate` filtering, empty `peers:`
+  array, `traceparent` forwarded per peer, result-array ordering
+  preserved under randomised peer latency, per-peer templating in
+  body and headers, per-peer SSRF, max_concurrency bounding
+  verified under load, and seven parse-time error paths.
+
+  Documentation: new `book/src/dsl/steps/parallel_http.md` (full
+  contract, result shape, composition with `detach`, caveats).
+  Cross-referenced from `iterate.md` ("sequential alternative"),
+  `http.md` ("fan-out alternative"), and the SUMMARY tree.
+  Sample DSL `DSL/samples/POST/advanced/parallel-fanout.yml`
+  demonstrates the shape.
+
+  Migration: additive — existing DSLs are untouched. No Rust
+  public-API break (field accessor on `StepEngine` is a new
+  method, not a changed signature). Minor-bump target.
+
+- **Issue #137 — `detach` step: continue DSL work after the HTTP
+  response is sent.** New DSL primitive for background execution.
+  Composes with `parallel_http` (#135 + #136) for the eFTI K4
+  pattern (kemit-ee/efti-gate-ee#252): fan out to peer gates in a
+  detached task, write the structured result array to Postgres via
+  Resql, caller polls back later.
+
+  Semantics:
+  - **Parent continues immediately** to `next:` as soon as the step
+    accepts the work. Caller's HTTP response is already on the wire
+    before `do:` starts.
+  - **Sub-steps inside `do:` run sequentially**, in source order —
+    same contract as `iterate.do:` / `single_flight.do:`. Each
+    sub-step's `next:` directive is ignored; the block completes
+    when the last sub-step finishes, when `timeout_ms` fires, or
+    when a sub-step errors.
+  - **Context is snapshotted** at spawn time
+    (`ExecutionContext::snapshot`). The detached task has a fresh
+    variables map pre-filled with the parent's bindings; writes
+    inside `do:` do **not** propagate back. Readonly fields
+    (`incoming.*`, `project`, `traceparent`, `state`) are shared.
+  - **Errors inside `do:` are logged** with the parent's
+    `traceparent` and never affect the parent's already-sent
+    response. Each sub-step can still route its own error via its
+    own `error:` handler.
+  - **Guards still run** on `template:` sub-steps (parity with
+    v0.9.11-rc H1). Guard stack is fresh per detached task.
+
+  New top-level config block in `AppConfig`:
+  - `detach.max_inflight` (default `256`) — process-wide Semaphore
+    cap on concurrent detached tasks. Overflow fails the step with
+    `RuuterError::DslExecution` so the DSL can route to `error:` or
+    fall through. `null` disables the cap; boot WARN fires when
+    `null` + non-loopback listener.
+  - `detach.shutdown_grace_secs` (default `15`) — SIGTERM-drain
+    window. In-flight detached tasks get this long to finish
+    before `abort_all()`.
+
+  SIGTERM drain integrated with the existing T-30 shutdown signal:
+  the detach registry drains AFTER axum / UDS listeners stop
+  accepting, so inbound requests that fire detach as their last
+  step don't lose work on a rolling deploy.
+
+  Parse-time errors (caught by `DslParser::parse_content`):
+  - Empty `do:` array.
+  - `return:` sub-step inside `do:` — unreachable (parent response
+    already sent); use a `switch:` for early exit instead.
+  - `timeout_ms: 0` — zero is never a sensible deadline; leave the
+    field unset for "no timeout".
+
+  Known caveats shipped (documented in `book/src/dsl/steps/detach.md`):
+  - No cross-replica state. Ruuter restart mid-detach loses
+    in-flight work (SIGTERM drain mitigates but doesn't eliminate).
+    Operators who need "survive restart" semantics use a work-queue
+    decoupling (NATS JetStream, Kafka, Postgres LISTEN+NOTIFY) —
+    out of scope.
+  - Context clone cost is linear in the parent's variables-map
+    size. Keep pre-detach context small.
+  - `template:` sub-steps start with an empty guard stack
+    (semantically correct — detached task is a new execution).
+
+  Non-breaking additions:
+  - `detach` added to `STEP_KEYS` + `ACTION_STEP_KEYS`.
+  - New `DslStep::Detach` variant.
+  - New Rust public API: `src/steps/detach.rs` (`DetachRegistry`,
+    `DetachStepExecutor`), `src/steps/mod.rs` (`DetachStep`,
+    `DetachBody`).
+  - New `ExecutionContext::snapshot()` method for isolated clones.
+  - New `StepEngine::with_detach_registry()` /
+    `StepEngine::detach_registry()`.
+  - New `config/mod.rs::warn_on_detach_defaults` boot WARN.
+
+  Documentation: new `book/src/dsl/steps/detach.md` with full
+  contract AND five worked examples (eFTI K4 composition, fire-and-
+  forget audit, async webhook fan-out, overflow error-handling,
+  nested parallel_http). Cross-referenced from `iterate.md` and
+  `framework/pipeline.md`. SUMMARY wired. Sample DSL
+  `DSL/samples/POST/advanced/async-webhook.yml` demonstrates the
+  fire-and-forget audit pattern.
+
+  Regression tests: `tests/issue_137_detach.rs` — 13 scenarios
+  covering parent-returns-before-detached-task-finishes, variable
+  isolation, error-in-do-doesn't-affect-parent, sub-steps run in
+  source order, error-in-sub-step halts subsequent sub-steps,
+  timeout_ms cancels a long-running block, traceparent preserved in
+  the detached task, registry overflow, registry drain, and four
+  parse-time error paths.
+
+  Migration: no caller-facing migration needed. Additive new step +
+  additive new config block + additive new Rust public API. New
+  `detach:` field in `AppConfig` has safe defaults; existing
+  deployments pick them up on next restart.
+
+  Minor-bump target.
+
 - **Issue #134 — pass-through binary proxy for `multipart/related` /
   AS4 / eDelivery traffic.** A new route-level declaration shape
   `declaration.proxy: { upstream, max_body_bytes, ... }` turns a DSL

@@ -1,0 +1,59 @@
+# Issue #137 — detach step: shape check for the async-webhook
+# sample. Verifies the parent response is 202 + { accepted: true }
+# regardless of what the detached audit sink does. Concurrency and
+# isolation guarantees are covered by tests/issue_137_detach.rs —
+# this file pins the DSL's wire shape.
+mode: inprocess
+
+tests:
+  - name: returns 202 accepted with request_id echo
+    setup:
+      mocks:
+        - url_matches: "/audit/sink"
+          method: POST
+          status: 200
+          body: { ok: true }
+    constants:
+      DOMAIN_URL: "{MOCK}"
+    request:
+      method: POST
+      path: /samples/advanced/async-webhook
+      headers:
+        content-type: "application/json"
+        x-request-id: "req-abc-123"
+      body:
+        event: "payment.processed"
+        amount: 42
+    expect:
+      status: 202
+      body:
+        response:
+          accepted: true
+          request_id: "req-abc-123"
+
+  - name: returns 202 even when the audit sink would fail
+    # The detached task hits a sink that returns 500; the parent
+    # response is still 202 because detach swallows sub-step errors.
+    setup:
+      mocks:
+        - url_matches: "/audit/sink"
+          method: POST
+          status: 500
+          body: { error: "sink down" }
+    constants:
+      DOMAIN_URL: "{MOCK}"
+    request:
+      method: POST
+      path: /samples/advanced/async-webhook
+      headers:
+        content-type: "application/json"
+        x-request-id: "req-def-456"
+      body:
+        event: "payment.failed"
+        amount: 7
+    expect:
+      status: 202
+      body:
+        response:
+          accepted: true
+          request_id: "req-def-456"

@@ -486,3 +486,7 @@ See [Guards](../guards.md) for the full override-vs-stacking rules.
   `dsl.warn_on_missing_declaration` toggle.
 - [Logging: errors](../../logging/errors.md) — how the 400 from
   `strict:` renders in the log stream.
+- [`parallel_http` step](parallel_http.md) — bounded concurrent
+  fan-out that composes with declarations the usual way (the
+  terminal `return:` can emit the aggregated `${peer_responses}`
+  array).

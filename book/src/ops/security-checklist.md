@@ -83,3 +83,53 @@ contract.
   from the `http.*` client pool so a saturated proxy workload
   cannot starve normal outbound traffic. See
   [Pass-through proxy config](../config/pass-through-proxy.md).
+
+## Fan-out — `parallel_http:` (issues #135 + #136)
+
+Reviewed if any DSL uses the [`parallel_http` step](../dsl/steps/parallel_http.md).
+
+- [ ] **`max_concurrency` set** on every proxy fan-out that serves
+  public traffic. The default (unbounded) is fine for internal
+  admin DSLs but a public route that fires `parallel_http` to a 60-
+  peer registry without a cap turns one inbound request into 60
+  outbound sockets. Pick a modest value (8 — 32) and raise under
+  load.
+- [ ] **`timeout` set per peer.** Default inherits
+  `http_request_timeout` (15 s). For peer-gate workloads where
+  stragglers are expected, choose a tighter value — the step's
+  tail latency is bounded by the slowest peer under `collect_ok` /
+  `collect_all`.
+- [ ] **Peer URLs validated.** Peers often come from a Postgres
+  table or config file; if the DSL doesn't own the source, treat
+  `${peer.url}` as user-controlled and keep `block_private_networks:
+  true` + an SSRF allowlist on at least one of the peer origins.
+- [ ] **`first_n.body_predicate` is defence-in-depth, not a
+  security control.** A compromised peer can return any body it
+  wants; the predicate just picks "which 2xx counts." Don't rely
+  on it to authenticate peers.
+
+## Background execution — `detach:` (issue #137)
+
+Reviewed if any DSL uses the [`detach:` step](../dsl/steps/detach.md).
+
+- [ ] **`detach.max_inflight` set** to a numeric value on any
+  non-loopback deployment. `null` disables the per-process cap on
+  concurrent detached tasks — one inbound request can spawn an
+  unbounded number of them. Default `256`; raise under load but set
+  a real number.
+- [ ] **`detach.shutdown_grace_secs` matches your deploy pattern.**
+  Default `15` s. On a rolling deploy, detached tasks that take
+  longer than this get `abort_all()`'d — any Postgres writes they
+  were about to make are lost. If your eFTI-shaped fan-out routinely
+  takes 60 s, raise this (and accept the longer drain window).
+- [ ] **No `incoming.*` dereference in a detached task assumes
+  per-request state writes.** The detached task has a snapshot of
+  the parent's context — writes made inside `do:` do NOT propagate
+  back to the parent. If you need the parent to see a detached
+  task's result, write to the state store or Postgres, not to a
+  DSL variable.
+- [ ] **No long-held upstream requests inside `detach.do:` that
+  would survive the SIGTERM grace window.** Those are the ones that
+  get aborted mid-flight on redeploy. If "survive restart" is a
+  requirement, use a work-queue decoupling (NATS JetStream, Kafka,
+  Postgres LISTEN+NOTIFY) instead of `detach:`.

@@ -22,3 +22,14 @@ Order of framework checks per HTTP request. Each stage can short-circuit with th
 Framework-level `Idempotency-Key` handling was removed in v0.7.0
 (h2ck.me findings S1 + S5). See [Idempotency pattern](../dsl/idempotency-pattern.md)
 for the DSL-authored replacement.
+
+## Background execution (issue #137)
+
+The [`detach` step](../dsl/steps/detach.md) runs its `do:` block in a
+`tokio::spawn` task. After stage 10 (response assembly) emits the
+parent's response, detached tasks continue in the background. The
+SIGTERM drain in `main.rs` waits for them up to
+`detach.shutdown_grace_secs` (default 15 s) before aborting. Each
+detached task owns a context snapshot — writes made inside `do:`
+don't propagate to the parent, and the parent's writes after
+`detach` fires don't propagate into the detached task.
