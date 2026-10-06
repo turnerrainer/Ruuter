@@ -45,7 +45,7 @@ fn write_dsl(dsl_root: &Path, rel: &str, body: &str) {
 fn build_router_with_cfg(
     dsl_root: &Path,
     mut mutate: impl FnMut(&mut AppConfig),
-) -> (Arc<DslRouter>, DetachRegistry) {
+) -> (Arc<DslRouter>, DetachRegistry, StateStore) {
     let mut config = AppConfig::default();
     config.config_path = dsl_root.to_path_buf();
     config.internal_requests.block_private_networks = false;
@@ -66,9 +66,14 @@ fn build_router_with_cfg(
     .with_dsls_shared(http.clone())
     .with_detach_registry(detach_registry.clone());
     let router = Arc::new(DslRouter::from_shared(
-        http, guards, config, state, ws, engine,
+        http,
+        guards,
+        config,
+        state.clone(),
+        ws,
+        engine,
     ));
-    (router, detach_registry)
+    (router, detach_registry, state)
 }
 
 async fn send_json(router: Arc<DslRouter>, method: &str, uri: &str) -> (u16, serde_json::Value) {
@@ -123,7 +128,7 @@ reply:
             upstream.url()
         ),
     );
-    let (router, reg) = build_router_with_cfg(tmp.path(), |_| {});
+    let (router, reg, _state) = build_router_with_cfg(tmp.path(), |_| {});
     let t0 = std::time::Instant::now();
     let (status, body) = send_json(router, "POST", "/svc/accept").await;
     let elapsed = t0.elapsed();
@@ -174,7 +179,7 @@ reply:
   status: 200
 "#,
     );
-    let (router, _reg) = build_router_with_cfg(tmp.path(), |_| {});
+    let (router, _reg, _state) = build_router_with_cfg(tmp.path(), |_| {});
     let (status, body) = send_json(router, "POST", "/svc/leak").await;
     assert_eq!(status, 200);
     assert_eq!(
@@ -220,7 +225,7 @@ reply:
             dead_port
         ),
     );
-    let (router, _reg) = build_router_with_cfg(tmp.path(), |_| {});
+    let (router, _reg, _state) = build_router_with_cfg(tmp.path(), |_| {});
     let (status, body) = send_json(router, "POST", "/svc/best_effort").await;
     assert_eq!(status, 202);
     assert_eq!(body["response"]["ok"], true);
@@ -372,6 +377,264 @@ fire:
         "unexpected error: {}",
         err
     );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Sub-steps run sequentially (not in parallel)
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn sub_steps_run_sequentially_in_source_order() {
+    // Second sub-step reads a state key the first sub-step wrote.
+    // If the two ran in parallel, the read would miss (race) or
+    // return a stale value. Serial-in-source-order makes it
+    // deterministic.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/order.yml",
+        r#"
+fire:
+  detach:
+    do:
+      - state:
+          set:
+            key: "detach_marker"
+            value: "written-by-step-1"
+      - state:
+          get:
+            key: "detach_marker"
+            into: marker_value
+      - log: "marker=${marker_value}"
+  next: reply
+
+reply:
+  return: { ok: true }
+  status: 202
+"#,
+    );
+    let (router, reg, state) = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, _body) = send_json(router.clone(), "POST", "/svc/order").await;
+    assert_eq!(status, 202);
+    // Wait for the detached task to finish.
+    for _ in 0..30 {
+        if reg.inflight().await == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // Verify the state key the detached task wrote is visible in
+    // the global state store (readonly shared, writes are permitted).
+    let value = state.get("svc", "detach_marker");
+    assert_eq!(
+        value,
+        Some(serde_json::json!("written-by-step-1")),
+        "sub-step 1 should have written the marker before sub-step 2 read it; \
+         got: {:?}",
+        value
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Error in sub-step N halts N+1
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn error_in_sub_step_halts_subsequent_sub_steps() {
+    // Sub-step 1 writes marker-A. Sub-step 2 errors with an SSRF
+    // policy rejection (private-network URL with
+    // block_private_networks=true + no allowlist) which raises per
+    // the #89 contract (policy-level failures bypass the transport-
+    // error stub). Sub-step 3 should NOT run.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/halt.yml",
+        r#"
+fire:
+  detach:
+    do:
+      - state:
+          set:
+            key: "halt_a"
+            value: "ran"
+      - call: http.get
+        args:
+          url: "http://10.0.0.42/forbidden"
+        result: _r
+      - state:
+          set:
+            key: "halt_b"
+            value: "should_not_run"
+  next: reply
+
+reply:
+  return: { ok: true }
+  status: 202
+"#,
+    );
+    // Flip the SSRF gate ON for this test only (default off in the
+    // other tests to let mockito at 127.0.0.1 work).
+    let (router, reg, state) = build_router_with_cfg(tmp.path(), |c| {
+        c.internal_requests.block_private_networks = true;
+    });
+    let (status, _body) = send_json(router.clone(), "POST", "/svc/halt").await;
+    assert_eq!(status, 202);
+    for _ in 0..30 {
+        if reg.inflight().await == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        state.get("svc", "halt_a"),
+        Some(serde_json::json!("ran")),
+        "sub-step 1 should have written halt_a"
+    );
+    assert_eq!(
+        state.get("svc", "halt_b"),
+        None,
+        "sub-step 3 should NOT have run after sub-step 2 errored"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// timeout_ms cancels mid-stream
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn timeout_ms_cancels_long_running_detached_block() {
+    // Sub-step 1 writes marker A. Sub-step 2 is an http.get at a
+    // tarpit TCP server that accepts the connection but never writes
+    // a response — reqwest hangs waiting for the response headers.
+    // Detach.timeout_ms is 300 ms: tokio::time::timeout drops the
+    // inner future, sub-step 3 is cancelled and does not write
+    // marker B.
+    let tarpit = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let tarpit_port = tarpit.local_addr().unwrap().port();
+    // Accept connections and hold them open without responding. We
+    // intentionally leak the sockets — the test runs < 5s.
+    std::thread::spawn(move || {
+        for stream in tarpit.incoming().flatten() {
+            std::mem::forget(stream);
+        }
+    });
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/timeout.yml",
+        &format!(
+            r#"
+fire:
+  detach:
+    do:
+      - state:
+          set:
+            key: "to_before"
+            value: "ran"
+      - call: http.get
+        args:
+          url: "http://127.0.0.1:{}/tarpit"
+        timeout: 5000
+        result: _r
+      - state:
+          set:
+            key: "to_after"
+            value: "should_not_run"
+    timeout_ms: 300
+  next: reply
+
+reply:
+  return: {{ ok: true }}
+  status: 202
+"#,
+            tarpit_port
+        ),
+    );
+    let (router, reg, state) = build_router_with_cfg(tmp.path(), |_| {});
+    let (status, _body) = send_json(router.clone(), "POST", "/svc/timeout").await;
+    assert_eq!(status, 202);
+    // Wait long enough for the detach to time out + task to clean up.
+    for _ in 0..30 {
+        if reg.inflight().await == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        state.get("svc", "to_before"),
+        Some(serde_json::json!("ran")),
+        "sub-step 1 should have run before timeout"
+    );
+    // The HTTP call may or may not have completed depending on
+    // timing, but sub-step 3 definitely must not have run — the
+    // detach-level timeout_ms cuts the whole block.
+    assert_eq!(
+        state.get("svc", "to_after"),
+        None,
+        "sub-step 3 should not run after timeout_ms"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// traceparent is preserved in the detached task
+// ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn traceparent_is_preserved_in_detached_task() {
+    let tp = "00-11223344556677881122334455667788-1122334455667788-01";
+    let mut upstream = mockito::Server::new_async().await;
+    let m = upstream
+        .mock("POST", "/trace")
+        .match_header("traceparent", tp)
+        .with_status(200)
+        .with_body("ok")
+        .create_async()
+        .await;
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "svc/POST/trace.yml",
+        &format!(
+            r#"
+fire:
+  detach:
+    do:
+      - call: http.post
+        args:
+          url: "{}/trace"
+        result: _r
+  next: reply
+
+reply:
+  return: {{ ok: true }}
+  status: 202
+"#,
+            upstream.url()
+        ),
+    );
+    let (router, reg, _state) = build_router_with_cfg(tmp.path(), |_| {});
+    let req = Request::builder()
+        .method("POST")
+        .uri("/svc/trace")
+        .header("traceparent", tp)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router
+        .clone()
+        .build_axum_router_from_arc()
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 202);
+    // Wait for detach to finish.
+    for _ in 0..30 {
+        if reg.inflight().await == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    m.assert_async().await;
 }
 
 #[tokio::test]

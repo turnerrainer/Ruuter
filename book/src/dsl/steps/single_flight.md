@@ -151,3 +151,14 @@ Response:
 (Timestamps and counter value differ per invocation; the important
 thing is that all five parallel responses share the same
 `computed_at` and `execution_count`.)
+
+## When to use `detach` instead
+
+`single_flight` runs the leader's `do:` block **synchronously** —
+every caller waits for the leader to finish. For "respond fast, do
+the work in the background" patterns (webhook ack, async fan-out
+writing to a state store, fire-and-forget audit), use the
+[`detach` step](detach.md) which spawns the body in a
+`tokio::spawn` task and lets the parent return immediately. Both
+steps use the same "sub-steps run sequentially inside `do:`"
+contract.

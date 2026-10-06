@@ -132,6 +132,22 @@ listeners:
 Exactly one of `bind` or `unix` must be set per entry. See
 [Listeners](../config/listeners.md).
 
+## Background execution (issue #137)
+
+The [`detach:` step](../dsl/steps/detach.md) runs its `do:` block in
+a background `tokio::spawn` task. Process-wide bounds live under
+`detach:` at the top level of `ruuter.yaml`:
+
+```yaml
+detach:
+  max_inflight: 256              # Semaphore cap; null = unbounded
+  shutdown_grace_secs: 15        # SIGTERM drain window (seconds)
+```
+
+Defaults as shown. `max_inflight: null` on a non-loopback listener
+fires a boot WARN (DoS footgun — one inbound request can spawn an
+unbounded number of detach tasks).
+
 ## Deep-dive tutorials
 
 The "Configuration deep dive" section documents each knob in
