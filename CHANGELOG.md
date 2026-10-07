@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1-rc] - 2026-10-07
+
+Self-audit of DSL production-readiness gaps — new admin endpoint
+`GET /_/audit/dsl`, new `dsl-lint --audit` CLI flag, two parse-
+time error promotions. No wire-level behaviour change on upgrade
+for any DSL that was actually working. Motivated by the pre-pentest
+audit flow that surfaced declaration drift at the ljvis-2 adopter.
+Baseline on `dev` 2026-10-07 at `58ee030`: 877 tests passed / 0
+failed / 4 ignored; `dsl-lint DSL/samples` 67 files, 0 errors, 3
+pre-existing warnings; `dsl-test DSL/DSL-tests` 107 scenarios all
+passing; mdbook clean; `cargo audit --deny warnings` clean.
+
 ### Added
 
 - **Issue #146 — self-audit of production-readiness gaps:
-  `GET /_/audit/dsl` admin endpoint + `dsl-lint --audit` + four
+  `GET /_/audit/dsl` admin endpoint + `dsl-lint --audit` + two
   parse-time error promotions.**
 
   New admin-gated endpoint `GET /_/audit/dsl` reports declaration-
