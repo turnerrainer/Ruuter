@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #143 — `declaration.internal` flag + operator-level default
+  policy for not-HTTP-reachable DSLs.** New per-DSL field
+  `declaration.internal: true | false` and new top-level config block
+  `declarations: { default_internal, missing_internal_policy }`. A DSL
+  that resolves to `effective_internal = true` returns `404` on
+  external HTTP (not `403` — avoids leaking that the route exists);
+  `template:` sub-calls and self-call-shortcircuited `http.*` reach
+  the DSL via `DslRouter::execute_dsl` directly and bypass the gate.
+  Motivated by `kemit-ee/ljvis-2#515` — 36 `ruuter-internal` DSLs
+  externally reachable without authentication.
+
+  Three-level fallback for an absent `declaration.internal`:
+  1. Per-DSL `declaration.internal` if set.
+  2. Else `AppConfig.declarations.default_internal` if set in
+     `ruuter.yaml`.
+  3. Else framework-default `false` (public). Hard-coded fallback so
+     an upgrade without touching `ruuter.yaml` keeps every route
+     public — zero wire change on upgrade.
+
+  `declarations.missing_internal_policy` controls boot-time
+  diagnostics when BOTH the per-DSL field and the operator default
+  are absent:
+  - `silent` (default) — no output. Keeps upgrade logs quiet.
+  - `warn` — one WARN per DSL naming the file path.
+  - `error` — refuse to boot. Fail-fast posture for strict
+    deployments.
+
+  Non-breaking additions:
+  - `declaration.internal: Option<bool>` on `DeclarationStep` (serde
+    `skip_serializing_if = "Option::is_none"`).
+  - `declarations: DeclarationsConfig` on `AppConfig` with
+    `DeclarationsConfig::default()` matching pre-feature behaviour.
+  - `pub enum MissingInternalPolicy { Silent, Warn, Error }` with
+    `Default = Silent`.
+  - `pub fn Dsl::effective_internal(&self, default_internal: bool) -> bool`
+    — resolves the fallback chain for a DSL.
+  - Internal check runs in `handle_request_inner` BEFORE the global
+    16 MiB Content-Length preflight, so a flood of oversized
+    requests to an internal route never read a body byte off the
+    socket.
+  - `/_/openapi.json` emits `x-internal: true` on operations where
+    the DSL explicitly declares `internal: true` (operator-level
+    fallback does not synthesize the extension — only explicit
+    per-DSL `true` is marked, so a flip of `default_internal` doesn't
+    silently relabel every route).
+  - `/_/unguarded` surfaces an `internal: bool` field on every
+    audited route so operators can distinguish "externally reachable
+    without a guard" (the actual risk) from "internal and not
+    reachable at all" (declared private).
+  - `dsl-lint --require-internal-explicit` — strict CI mode that
+    errors on any HTTP DSL omitting `declaration.internal`. Opt-in;
+    non-strict runs are unchanged.
+
+  Regression tests: `tests/issue_143_declaration_internal.rs` — 7
+  scenarios covering 404 on external HTTP, 200 when explicit false,
+  framework-default back-compat, operator-level default flip,
+  per-DSL opt-out of operator default, template-step bypass of the
+  external gate, and direct-external access to a DSL that is also a
+  template target.
+
+  Migration: no caller-facing migration needed. Both the per-DSL
+  field and the config block are additive with safe defaults. Minor
+  bump target.
+
 ## [0.11.0-rc] - 2026-10-07
 
 Three new DSL primitives shipped as one minor-bump batch (PRs

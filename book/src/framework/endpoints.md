@@ -77,19 +77,20 @@ Full runtime audit of guarded vs unguarded HTTP routes across every loaded proje
   "projects": {
     "guarded-demo": {
       "guarded": [
-        { "method": "GET", "path": "status", "guards": ["*"] },
-        { "method": "POST", "path": "echo", "guards": ["*"] }
+        { "method": "GET", "path": "status", "guards": ["*"], "internal": false },
+        { "method": "POST", "path": "echo", "guards": ["*"], "internal": false }
       ],
       "unguarded": []
     },
     "samples": {
       "guarded": [
-        { "method": "GET", "path": "protected/data", "guards": ["GET/protected"] },
-        { "method": "POST", "path": "ops/inject-fault/trigger", "guards": ["POST/ops/inject-fault"] }
+        { "method": "GET", "path": "protected/data", "guards": ["GET/protected"], "internal": false },
+        { "method": "POST", "path": "ops/inject-fault/trigger", "guards": ["POST/ops/inject-fault"], "internal": false }
       ],
       "unguarded": [
-        { "method": "GET", "path": "ping" },
-        { "method": "POST", "path": "state/inc" }
+        { "method": "GET", "path": "ping", "internal": false },
+        { "method": "POST", "path": "state/inc", "internal": false },
+        { "method": "POST", "path": "internal/webhook-callback", "internal": true }
       ]
     }
   }
@@ -97,6 +98,7 @@ Full runtime audit of guarded vs unguarded HTTP routes across every loaded proje
 ```
 
 - **`guards` field** — array of guard keys in outer-first execution order. `*` is the reserved [project-level guard](../dsl/guards.md#project-level--guardyml-at-the-project-root-issue-39) key (issue #39); everything else is a `<METHOD>/<path>` method-scoped key.
+- **`internal` field** (issue #143) — the effective internal classification resolved via the three-level fallback (per-DSL `declaration.internal` → `declarations.default_internal` → framework default `false`). An unguarded route with `internal: true` is NOT externally reachable (dispatcher returns 404) and is NOT a risk surface; the raw `unguarded` count treats it the same as a public route, so filter on `.internal == false` for the audit that actually matters. See [Internal-only DSLs](../dsl/internal-dsls.md).
 - **`unguarded` list** — routes with zero applicable guards. This is what @angryziber's discussion around issue #41 flagged as the "silent unguarded peer" trap — the endpoint enumerates them so a reviewer doesn't have to eyeball the DSL tree.
 - **HTTP routes only** — WS/inbound handlers are excluded from the audit for now; the guard chain doesn't fire on the WS path (see [Guards](../dsl/guards.md)).
 - **Deterministic order** — sorted by `(project, method, path)` so diffs across deploys are meaningful.

@@ -290,6 +290,63 @@ allowlist, error-response shapes, and the known caveats
 (`Expect: 100-continue` auto-ack, HTTP/1.1 trailers not forwarded)
 live in [Pass-through proxy routes](../proxy.md).
 
+### `internal` (issue #143)
+
+Marks the DSL as not reachable via external HTTP. Full contract on
+the [Internal-only DSLs](../internal-dsls.md) page; summary follows.
+
+Three states:
+
+| Value | Meaning |
+|---|---|
+| `true` | External HTTP returns `404` (not `403` — avoids leaking that the route exists). `template:` and self-call-shortcircuit still reach the DSL. |
+| `false` | DSL is publicly routable. Useful as an explicit opt-out when the operator-level `declarations.default_internal` is `true`. |
+| absent (default) | Resolved via the three-level fallback chain. |
+
+**Three-level fallback for absent `internal:`**
+
+1. Per-DSL `declaration.internal` — if set, wins.
+2. Operator-level `declarations.default_internal` in `ruuter.yaml` — if set, wins.
+3. Framework default `false` (public). Hard-coded. An upgrade without
+   `ruuter.yaml` changes keeps every route public — the feature is
+   strictly opt-in.
+
+```yaml
+# ruuter-internal-style instance: everything private unless opted-out.
+# In ruuter.yaml:
+declarations:
+  default_internal: true
+  missing_internal_policy: silent      # silent | warn | error
+
+# Then per-DSL opt-outs for the handful of externally-reachable routes:
+# DSL/foo/POST/public-webhook.yml
+declaration:
+  internal: false
+```
+
+**`missing_internal_policy`** controls what happens when BOTH the
+per-DSL field and the operator default are absent:
+
+- `silent` (default) — no diagnostic. Chosen as the default to keep
+  upgrade logs quiet.
+- `warn` — one WARN per DSL at boot, naming the file path. Opt-in for
+  projects that want to surface the config gap.
+- `error` — refuse to boot. Fail-fast posture for strict deployments.
+
+**CI enforcement.** `dsl-lint --require-internal-explicit` errors on
+any HTTP DSL that omits `declaration.internal`. Opt-in strict mode for
+projects that want every DSL to pin its reachability posture explicitly.
+
+**OpenAPI.** DSLs with `declaration.internal: true` emit an
+`x-internal: true` extension on the operation so admin consumers can
+tell internal routes from external ones. Operator-level fallback does
+not synthesize the extension — only explicit per-DSL `true` is marked.
+
+**`template:` and self-call.** Both reach `internal: true` DSLs
+normally — the gate lives on the external-HTTP dispatch path only
+(`DslRouter::handle_request_inner`). In-process paths route via
+`DslRouter::execute_dsl` directly and are never gated.
+
 ## Effects at request time
 
 1. **Guard chain runs first.** Guards see the RAW wire request

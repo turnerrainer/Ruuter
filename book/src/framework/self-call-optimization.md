@@ -49,6 +49,10 @@ The SSRF allow-list (`internal_requests.allowed_urls`, `internal_requests.allowe
 
 If you specifically want to prevent self-recursion (or prevent one project from cross-calling another project's routes), the answer is guards on the target routes — not SSRF rules on the caller.
 
+## Internal DSL gate interaction (issue #143)
+
+The [internal-DSL gate](../dsl/internal-dsls.md) lives on the external-HTTP dispatch path (`DslRouter::handle_request_inner`). The self-call short-circuit never goes through that handler — it calls `DslRouter::execute_dsl` directly — so a self-call to a DSL declared `internal: true` reaches the target normally. That's the intended semantics: an internal DSL is still invokable in-process, just not from the outside. Guards on the target DSL still run.
+
 ## Failure modes
 
 | Situation | Behaviour |

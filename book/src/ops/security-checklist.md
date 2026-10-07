@@ -47,6 +47,38 @@ Review before every partner-facing deploy.
 - [ ] No DSL uses `${incoming.body.url}` (or similar) as an `http` step URL without an SSRF allow-list.
 - [ ] Idempotency-Key semantics understood by clients writing to POST/PUT/PATCH/DELETE routes.
 
+## Internal-only DSLs (issue #143)
+
+Reviewed if any DSL in the tree is meant to be called only by other
+Ruuter DSLs (cron handlers, admin maintenance, X-Road response
+handlers). See [Internal-only DSLs](../dsl/internal-dsls.md) for the
+full contract.
+
+- [ ] **`declaration.internal: true` on every DSL that should NOT be
+  externally reachable.** The engine returns 404 (not 403 — avoids
+  leaking that the route exists); `template:` and self-call-
+  shortcircuit paths bypass the gate so in-process callers still
+  work. Framework default is `false` (public) — explicit opt-in is
+  required.
+- [ ] **For `ruuter-internal`-shaped instances, flip
+  `declarations.default_internal: true`** in `ruuter.yaml` so every
+  DSL is private unless explicitly opted out with
+  `declaration.internal: false`. Pairs with a short list of explicit
+  public routes.
+- [ ] **CI enforces explicit posture.** Add
+  `dsl-lint --require-internal-explicit` to the lint job so a new DSL
+  landing without `declaration.internal:` fails the build. Pairs
+  with a `missing_internal_policy: silent` runtime posture (default)
+  so upgrades stay quiet.
+- [ ] **Audit via `/_/unguarded`.** The endpoint surfaces an
+  `internal: bool` field on every route. An unguarded route with
+  `internal: true` is not an external risk; filter on `.internal ==
+  false` for the audit that matters.
+- [ ] **Pass-through proxy routes are NOT gated by `internal:`
+  today.** The proxy early-dispatch happens before the internal-DSL
+  gate check. If you need a proxy route to be internal-only, use a
+  parent guard on headers / mTLS DN instead.
+
 ## Pass-through proxy routes (issue #134)
 
 Reviewed if any route in the loaded tree uses `declaration.proxy:`.

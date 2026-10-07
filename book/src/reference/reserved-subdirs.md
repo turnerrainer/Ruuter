@@ -22,6 +22,15 @@ and its files become routes under that method — usually a bug. Keep
 custom directories under `triggers/`, `WS/outbound/`, or move them
 outside the DSL tree entirely.
 
+> **"Routed as HTTP?" nuance (issue #143).** A DSL file under
+> `GET/`, `POST/`, etc. is **loaded and resolvable** regardless of
+> its `declaration.internal` value — the subdirectory controls
+> parsing and routing-table shape, not reachability. A DSL whose
+> effective `internal` is `true` is loaded normally but the
+> dispatcher returns 404 for external HTTP; it stays reachable
+> in-process via `template:` / self-call. See
+> [Internal-only DSLs](../dsl/internal-dsls.md).
+
 ## WS layout — new vs legacy
 
 - **New (preferred):** `WS/inbound/<path>.yml` for handshake DSLs,

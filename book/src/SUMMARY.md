@@ -34,6 +34,7 @@
 - [Guards](./dsl/guards.md)
 - [Idempotency pattern](./dsl/idempotency-pattern.md)
 - [Pass-through proxy routes](./dsl/proxy.md)
+- [Internal-only DSLs](./dsl/internal-dsls.md)
 - [JavaScript gotchas](./dsl/js-gotchas.md)
 - [YAML gotchas](./dsl/yaml-gotchas.md)
 

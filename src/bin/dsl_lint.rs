@@ -114,6 +114,16 @@ fn main() -> ExitCode {
         run_require_guard_audit(&args, &constants, &mut report);
     }
 
+    // Issue #143 — --require-internal-explicit: error on any HTTP DSL
+    // whose declaration omits `internal:`. Opt-in strict mode for CI
+    // pipelines on projects that want every DSL to declare its
+    // reachability posture explicitly (ljvis-2 is the motivating
+    // adopter). Non-breaking by default — absence of the flag keeps
+    // the lint quiet about missing `internal:`.
+    if args.require_internal_explicit {
+        run_require_internal_explicit_audit(&args, &constants, &mut report);
+    }
+
     report.emit();
     if report.errors > 0 {
         ExitCode::from(1)
@@ -169,6 +179,10 @@ struct Args {
     /// endpoints legitimately exist; use in CI on projects with a "no
     /// unguarded routes ever" policy.
     require_guard: bool,
+    /// Issue #143 — error on any HTTP DSL whose declaration omits
+    /// `internal:`. Opt-in strict mode for CI; use on projects that
+    /// want every DSL to explicitly pin its reachability posture.
+    require_internal_explicit: bool,
 }
 
 impl Args {
@@ -178,6 +192,7 @@ impl Args {
         let mut include_disabled = false;
         let mut json = false;
         let mut require_guard = false;
+        let mut require_internal_explicit = false;
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             match a.as_str() {
@@ -194,11 +209,13 @@ impl Args {
                 "--include-disabled" => include_disabled = true,
                 "--json" => json = true,
                 "--require-guard" => require_guard = true,
+                "--require-internal-explicit" => require_internal_explicit = true,
                 "--help" | "-h" => {
                     println!(
                         "dsl-lint — static validator for the Ruuter DSL tree\n\n\
-                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json] [--require-guard]\n\n\
-                         --require-guard   Error on any HTTP route with zero applicable guards (issue #45)."
+                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json] [--require-guard] [--require-internal-explicit]\n\n\
+                         --require-guard                Error on any HTTP route with zero applicable guards (issue #45).\n\
+                         --require-internal-explicit    Error on any HTTP DSL whose declaration omits `internal:` (issue #143)."
                     );
                     std::process::exit(0);
                 }
@@ -214,6 +231,54 @@ impl Args {
             include_disabled,
             json,
             require_guard,
+            require_internal_explicit,
+        }
+    }
+}
+
+fn run_require_internal_explicit_audit(
+    args: &Args,
+    constants: &HashMap<String, String>,
+    report: &mut Report,
+) {
+    use ruuter_on_rust::config::AppConfig;
+    use ruuter_on_rust::dsl::loader::DslLoader;
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = args.dsl_root.clone();
+    let loader = DslLoader::new(cfg, constants.clone());
+    let loaded = match loader.load_everything() {
+        Ok(l) => l,
+        Err(e) => {
+            report.file_error(
+                &args.dsl_root,
+                format!(
+                    "--require-internal-explicit: DSL load failed, cannot audit: {}",
+                    e
+                ),
+            );
+            return;
+        }
+    };
+    for (project, methods) in &loaded.http {
+        for dsls in methods.values() {
+            for (key, dsl) in dsls {
+                let has_explicit = dsl
+                    .declaration
+                    .as_ref()
+                    .map(|d| d.internal.is_some())
+                    .unwrap_or(false);
+                if !has_explicit {
+                    let synthetic = PathBuf::from(format!("{}/{}", project, key));
+                    report.file_error(
+                        &synthetic,
+                        "declaration.internal missing — set to `true` (not externally \
+                         reachable) or `false` (publicly reachable) to pin the posture \
+                         (issue #143)"
+                            .to_string(),
+                    );
+                }
+            }
         }
     }
 }
