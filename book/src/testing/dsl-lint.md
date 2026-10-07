@@ -82,6 +82,27 @@ Combine with `--json` for CI parsing:
 dsl-lint --require-guard --json | jq '.items[] | select(.message | startswith("no applicable guard"))'
 ```
 
+## `--require-internal-explicit` (issue #143)
+
+Opt-in strict mode. Loads the DSL tree via the same loader the
+runtime uses and emits **one error per HTTP DSL that omits
+`declaration.internal`**. Pairs with the runtime
+`declarations.missing_internal_policy` setting: use `silent` (the
+runtime default) + this lint flag to catch the gap at build time
+without emitting any boot WARNs on upgrade.
+
+```bash
+$ dsl-lint --dsl DSL --require-internal-explicit
+error  api/POST/cron/sync: declaration.internal missing — set to `true` (not externally reachable) or `false` (publicly reachable) to pin the posture (issue #143)
+error  api/POST/webhook/callback: declaration.internal missing — set to `true` (not externally reachable) or `false` (publicly reachable) to pin the posture (issue #143)
+
+dsl-lint: 15 file(s) scanned, 15 ok, 2 error(s), 0 warning(s)
+```
+
+- **Default off** — existing projects that haven't adopted the field don't want build failures on day one.
+- **Combine with `--require-guard`** — the two audits are orthogonal (reachability vs authorization) and both are opt-in CI knobs.
+- **Full feature contract** at [Internal-only DSLs](../dsl/internal-dsls.md).
+
 ## When to run
 
 - Pre-commit hook: catches typos in ~100 ms without spinning any harness.

@@ -150,8 +150,8 @@ unbounded number of detach tasks).
 
 ## Internal-only DSLs (issue #143)
 
-The [`declaration.internal` field](../dsl/steps/declaration.md#internal-issue-143)
-marks a DSL as not reachable via external HTTP. Operator-level
+[Internal-only DSLs](../dsl/internal-dsls.md) — DSLs reachable via
+`template:` and self-call only, not via external HTTP. Operator-level
 defaults live under `declarations:` at the top level of `ruuter.yaml`:
 
 ```yaml
@@ -163,8 +163,9 @@ declarations:
 Defaults as shown — existing deployments see zero wire change on
 upgrade. Flip `default_internal: true` on a `ruuter-internal`-shaped
 instance where every DSL should be private unless explicitly opted
-out with `declaration.internal: false`. See the DSL-side docs for
-the three-level fallback semantics and OpenAPI integration.
+out with `declaration.internal: false`. Full three-level fallback,
+OpenAPI integration, and CI enforcement details are on the
+[Internal-only DSLs page](../dsl/internal-dsls.md).
 
 ## Deep-dive tutorials
 

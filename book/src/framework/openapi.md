@@ -44,6 +44,7 @@ Effect on the emitted operation:
 - `allowed_body` becomes an `object` `requestBody` schema (for POST/PUT/PATCH).
 - `allowed_params` becomes query parameters.
 - `allowed_header` becomes header parameters.
+- `internal: true` (issue #143) adds an `x-internal: true` extension on the operation. Only explicit per-DSL `true` is marked — an operator-level `declarations.default_internal: true` fallback does NOT synthesize the extension, so flipping the per-instance default doesn't silently relabel every route as internal. See [Internal-only DSLs](../dsl/internal-dsls.md).
 
 ## Validation
 

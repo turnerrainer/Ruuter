@@ -292,7 +292,10 @@ live in [Pass-through proxy routes](../proxy.md).
 
 ### `internal` (issue #143)
 
-Marks the DSL as not reachable via external HTTP. Three states:
+Marks the DSL as not reachable via external HTTP. Full contract on
+the [Internal-only DSLs](../internal-dsls.md) page; summary follows.
+
+Three states:
 
 | Value | Meaning |
 |---|---|
