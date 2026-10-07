@@ -3,6 +3,8 @@
 Pre-execution DSLs that run before the main route. A guard returning HTTP status ≥ 400 short-circuits — its response becomes the response.
 
 > **Guards vs. internal DSLs.** Guards are an **authorization** control — they run after the route resolves and authenticate / shape the request. [Internal-only DSLs](./internal-dsls.md) (issue #143) are a **reachability** control — the dispatcher returns 404 for external HTTP before the guard chain even runs. The two compose: an internal DSL reached via `template:` or self-call still executes its guard chain.
+>
+> **Auditing.** Guards also get full audit coverage from the Category A–C checks on their own declaration (same engine as [the self-audit endpoint](../framework/audit-dsl.md)). A guard with `declaration.missing` or `declaration.body.under_declared` shows up in `/_/audit/dsl` findings like any other DSL.
 
 ## Three file conventions
 

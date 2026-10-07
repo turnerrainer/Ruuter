@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod audit;
 pub mod guard_audit;
 pub mod hot_reload;
 pub mod interpolate;
@@ -374,6 +375,88 @@ impl DeclarationStep {
                  (strict rejects unknown fields; additive permits them). Pick one."
                     .to_string(),
             );
+        }
+
+        // Issue #146 — strict:true without any allowlist is a no-op
+        // posture (strict rejects fields outside the allowlist, but
+        // with no allowlist the "unknown" set is unbounded, so every
+        // request passes trivially). Operator almost certainly meant
+        // to add an allowlist. Fail loudly at parse time rather than
+        // let a declaration that looks protective but isn't ship to
+        // prod.
+        if self.is_strict() {
+            let has_structured = self
+                .allowlist
+                .as_ref()
+                .map(|a| a.body.is_some() || a.params.is_some() || a.headers.is_some())
+                .unwrap_or(false);
+            let has_legacy = self.allowed_body.is_some()
+                || self.allowed_params.is_some()
+                || self.allowed_header.is_some();
+            if !has_structured && !has_legacy {
+                return Err("declaration.strict is true but no allowlist is declared \
+                     (allowlist.body / allowlist.params / allowlist.headers, or \
+                     the legacy allowed_body / allowed_params / allowed_header). \
+                     strict rejects fields outside the allowlist; with no allowlist \
+                     every request trivially passes, which is almost certainly not \
+                     what the operator intended. Add an allowlist, or drop strict."
+                    .to_string());
+            }
+        }
+
+        // Issue #146 — `required_one_of` groups must reference fields
+        // that exist in THIS DSL's own allowlist. Resolution is purely
+        // local; guards' declarations don't contribute. A reference to
+        // a non-existent field means the OR-group can never match, so
+        // every request on the "wrong" branch 400s silently.
+        if let Some(allowlist) = &self.allowlist {
+            if let Some(groups) = &allowlist.required_one_of {
+                let section_check = |section: &str,
+                                     groups: &Option<Vec<Vec<String>>>,
+                                     declared: &[String]|
+                 -> Result<(), String> {
+                    let Some(groups) = groups else {
+                        return Ok(());
+                    };
+                    for group in groups {
+                        for name in group {
+                            let present = if section == "headers" {
+                                declared.iter().any(|f| f.eq_ignore_ascii_case(name))
+                            } else {
+                                declared.iter().any(|f| f == name)
+                            };
+                            if !present {
+                                return Err(format!(
+                                    "declaration.allowlist.required_one_of.{} references \
+                                     '{}' which is not declared in allowlist.{} of this DSL. \
+                                     Resolution is local — guards do not contribute. \
+                                     Add '{}' to allowlist.{}, or drop it from required_one_of.",
+                                    section, name, section, name, section
+                                ));
+                            }
+                        }
+                    }
+                    Ok(())
+                };
+                let body_fields: Vec<String> = allowlist
+                    .body
+                    .as_ref()
+                    .map(|v| v.iter().map(|f| f.field.clone()).collect())
+                    .unwrap_or_default();
+                let param_fields: Vec<String> = allowlist
+                    .params
+                    .as_ref()
+                    .map(|v| v.iter().map(|f| f.field.clone()).collect())
+                    .unwrap_or_default();
+                let header_fields: Vec<String> = allowlist
+                    .headers
+                    .as_ref()
+                    .map(|v| v.iter().map(|f| f.field.clone()).collect())
+                    .unwrap_or_default();
+                section_check("body", &groups.body, &body_fields)?;
+                section_check("params", &groups.params, &param_fields)?;
+                section_check("headers", &groups.headers, &header_fields)?;
+            }
         }
         // Issue #134 — a pass-through proxy route cannot also declare
         // a body allowlist. The body is opaque bytes forwarded to the

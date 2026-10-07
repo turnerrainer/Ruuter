@@ -124,6 +124,16 @@ fn main() -> ExitCode {
         run_require_internal_explicit_audit(&args, &constants, &mut report);
     }
 
+    // Issue #146 — --audit: run the shared declaration-correctness
+    // audit (categories A, B, C-simple, E from issue #146) against
+    // the loaded tree. Findings land in the same report as per-file
+    // checks; `error` severity flips the exit code, `warning` / `info`
+    // print but don't fail. Hot-reload-aware equivalent is the admin
+    // endpoint `GET /_/audit/dsl`.
+    if args.audit {
+        run_audit(&args, &constants, &mut report);
+    }
+
     report.emit();
     if report.errors > 0 {
         ExitCode::from(1)
@@ -183,6 +193,10 @@ struct Args {
     /// `internal:`. Opt-in strict mode for CI; use on projects that
     /// want every DSL to explicitly pin its reachability posture.
     require_internal_explicit: bool,
+    /// Issue #146 — run the shared declaration-correctness audit.
+    /// Reports findings for drift, missing fields, security-posture
+    /// gaps. Same engine as the admin endpoint `GET /_/audit/dsl`.
+    audit: bool,
 }
 
 impl Args {
@@ -193,6 +207,7 @@ impl Args {
         let mut json = false;
         let mut require_guard = false;
         let mut require_internal_explicit = false;
+        let mut audit = false;
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             match a.as_str() {
@@ -210,12 +225,14 @@ impl Args {
                 "--json" => json = true,
                 "--require-guard" => require_guard = true,
                 "--require-internal-explicit" => require_internal_explicit = true,
+                "--audit" => audit = true,
                 "--help" | "-h" => {
                     println!(
                         "dsl-lint — static validator for the Ruuter DSL tree\n\n\
-                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json] [--require-guard] [--require-internal-explicit]\n\n\
+                         Usage: dsl-lint [--dsl DSL] [--constants constants.ini] [--include-disabled] [--json] [--require-guard] [--require-internal-explicit] [--audit]\n\n\
                          --require-guard                Error on any HTTP route with zero applicable guards (issue #45).\n\
-                         --require-internal-explicit    Error on any HTTP DSL whose declaration omits `internal:` (issue #143)."
+                         --require-internal-explicit    Error on any HTTP DSL whose declaration omits `internal:` (issue #143).\n\
+                         --audit                        Run declaration-correctness audit — drift, missing fields, posture gaps (issue #146)."
                     );
                     std::process::exit(0);
                 }
@@ -232,6 +249,42 @@ impl Args {
             json,
             require_guard,
             require_internal_explicit,
+            audit,
+        }
+    }
+}
+
+fn run_audit(args: &Args, constants: &HashMap<String, String>, report: &mut Report) {
+    use ruuter_on_rust::config::AppConfig;
+    use ruuter_on_rust::dsl::audit::{audit_tree, Severity};
+    use ruuter_on_rust::dsl::loader::DslLoader;
+
+    let mut cfg = AppConfig::default();
+    cfg.config_path = args.dsl_root.clone();
+    let loader = DslLoader::new(cfg, constants.clone());
+    let loaded = match loader.load_everything() {
+        Ok(l) => l,
+        Err(e) => {
+            report.file_error(
+                &args.dsl_root,
+                format!("--audit: DSL load failed, cannot run: {}", e),
+            );
+            return;
+        }
+    };
+    for f in audit_tree(&loaded.http) {
+        let synthetic = PathBuf::from(format!("{}/{}", f.project, f.dsl));
+        let msg = if f.fields.is_empty() {
+            format!("[{}] {}", f.code, f.message)
+        } else {
+            format!("[{}] {} fields: {:?}", f.code, f.message, f.fields)
+        };
+        match f.severity {
+            Severity::Error => report.file_error(&synthetic, msg),
+            // Warning + Info both route to warn-level in dsl-lint so
+            // the exit code only fails on `error` severities. CI jobs
+            // that want to fail on warn can grep the output.
+            Severity::Warning | Severity::Info => report.file_warning(&synthetic, msg),
         }
     }
 }

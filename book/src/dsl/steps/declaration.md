@@ -388,6 +388,31 @@ dsl:
   warn_on_missing_declaration: false
 ```
 
+## Auditing declaration drift (issue #146)
+
+Beyond the boot WARN, Ruuter ships a dedicated audit that surfaces
+drift between what the declaration promises and what the DSL body
+actually uses — fields in `allowlist.*` that are never read,
+`${incoming.*}` references the allowlist omits, posture gaps,
+missing `internal:`. Two surfaces for the same engine:
+
+- Admin-gated endpoint [`GET /_/audit/dsl`](../../framework/audit-dsl.md)
+  — reflects the LIVE loaded tree (hot-reload-aware).
+- CLI flag [`dsl-lint --audit`](../../testing/dsl-lint.md#--audit-issue-146)
+  — build-time CI against the filesystem.
+
+Both call the same code catalogue (A — completeness, B — drift,
+C — posture, E — internal). Full contract + stable code strings
+on the [Self-audit page](../../framework/audit-dsl.md).
+
+Two unambiguous DSL shapes are rejected at parse time (not audit
+findings — the DSL fails to load, previous hot-reload version
+stays in place):
+
+- `declaration.strict: true` with no `allowlist:` of any kind.
+- `declaration.allowlist.required_one_of` referencing a field not
+  in THIS DSL's own allowlist.
+
 ## Runnable example — typed spec generated from a declaration
 
 DSL:

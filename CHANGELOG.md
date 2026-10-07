@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Issue #146 — self-audit of production-readiness gaps:
+  `GET /_/audit/dsl` admin endpoint + `dsl-lint --audit` + four
+  parse-time error promotions.**
+
+  New admin-gated endpoint `GET /_/audit/dsl` reports declaration-
+  correctness gaps across the currently loaded DSL tree. Flat
+  findings list (not nested by project) so dashboards can filter /
+  group on any field; sorted by `(project, dsl, code)` so polls
+  across time produce stable diffs. The same engine
+  (`src/dsl/audit.rs::audit_tree`) runs behind a new
+  `dsl-lint --audit` flag for build-time CI.
+
+  Response shape:
+
+  ```json
+  {
+    "totals": { "projects": 3, "dsls": 42, "errors": 0, "warnings": 11, "info": 7 },
+    "findings": [
+      { "project": "ljvis", "dsl": "POST/users",
+        "severity": "warning",
+        "code": "declaration.body.over_declared",
+        "message": "...",
+        "fields": ["note"] }
+    ]
+  }
+  ```
+
+  Check catalogue (v1):
+
+  **Category A — Declaration completeness (OpenAPI quality)**:
+  `declaration.missing` (warning), `declaration.description_missing`
+  (info), `declaration.returns_missing` (info),
+  `declaration.legacy_flat_allowlist` (info),
+  `declaration.body.type_missing` (info).
+
+  **Category B — Allowlist drift (declared vs actually used)**:
+  `declaration.{body,params,headers}.{over,under}_declared`
+  (warning). Framework-level headers (`authorization`,
+  `traceparent`, `content-type`, `x-trace-id`) excluded from
+  over/under checks.
+
+  **Category C — Security posture (shipped in v1)**:
+  `declaration.required_but_unused` (warning).
+
+  **Category E — Internal + reachability**:
+  `declaration.internal_missing` (info; same signal as
+  `dsl-lint --require-internal-explicit` from issue #143).
+
+  **Deferred to v2 follow-up**: Category C's `unchecked_dereference`
+  and `untyped_arithmetic` (need expression AST walking), Category
+  D (cross-DSL guard contract), Category F (OpenAPI `returns:` vs
+  DSL `return:` status mismatch). Tracked in issue #146 thread.
+
+### Changed (behavior)
+
+- **Issue #146 — two parse-time error promotions.** Each of these
+  is unambiguously broken; the DSL fails to load, hot-reload keeps
+  the previous good version in place.
+
+  - `declaration.strict: true` without any allowlist (`allowlist.*`
+    or legacy `allowed_*`) now fails to load. The "strict reject
+    unknown keys" posture has no referent when there's no
+    allowlist, so every request trivially passed — almost
+    certainly not the operator's intent.
+  - `declaration.allowlist.required_one_of` referencing a field not
+    in THIS DSL's own allowlist now fails to load. Resolution is
+    purely local; guards' declarations do not contribute. A
+    reference to a non-existent field means the OR-group can never
+    match, so requests on the "wrong" branch silently 400'd.
+  - (Re-pinned under issue #146 for test coverage, previously
+    parser-caught in issue #75: `strict:` + `additive:` together.)
+
+  Deliberately NOT promoted: `allowed_body_on_bodyless_method`
+  (body allowlist on `GET` / `DELETE`). Issue #75 documents a
+  legitimate Java-parity pattern where body allowlist on GET
+  enforces presence of the same field name in the query string.
+  Downgraded to a soft audit finding (see v1 catalogue above) so
+  the Java-parity path keeps working.
+
+  Diagnostic text names the file + offending field(s). CHANGELOG
+  guidance for adopters: run `dsl-lint` locally against the DSL
+  tree before upgrading — any pre-existing DSL that trips one of
+  the two promoted checks was never functional at the wire.
+
 ## [0.12.0-rc] - 2026-10-07
 
 One new DSL field, one new operator config block, one new `dsl-lint`
