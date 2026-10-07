@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0-rc] - 2026-10-07
+
+One new DSL field, one new operator config block, one new `dsl-lint`
+flag — motivated by `kemit-ee/ljvis-2#515` (36 `ruuter-internal`
+DSLs externally reachable without authentication). No Rust public-
+API breaks, no wire-level behaviour change on upgrade. Baseline on
+`dev` 2026-10-07 at `618eaeb`: 859 tests passed / 0 failed / 4
+ignored; `dsl-lint DSL/samples` 67 files, 0 errors, 3 pre-existing
+warnings; `dsl-test DSL/DSL-tests` 107 scenarios all passing; mdbook
+clean; `cargo audit --deny warnings` clean.
+
 ### Added
 
 - **Issue #143 — `declaration.internal` flag + operator-level default
