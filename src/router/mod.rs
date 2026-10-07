@@ -294,6 +294,11 @@ impl DslRouter {
             // works with the cap-off store too but the response
             // notes `cap: null` and scans the map to count.
             .route("/_/state-stats", get(handle_state_stats))
+            // Issue #146 — self-audit of production-readiness gaps
+            // (declaration drift, missing fields, posture gaps).
+            // Runs the shared `dsl::audit::audit_tree` helper against
+            // the currently loaded tree so hot-reload is reflected.
+            .route("/_/audit/dsl", get(handle_audit_dsl))
             .with_state(self)
     }
 
@@ -641,6 +646,47 @@ async fn handle_state_stats(State(router): State<Arc<DslRouter>>) -> impl IntoRe
             "entries": total_entries,
         },
         "projects": projects,
+    }))
+}
+
+/// Issue #146 — admin-gated self-audit of the loaded DSL tree.
+/// Returns a flat findings list (not nested by project) so dashboards
+/// can `group_by` on any field. Severity split: `error` = unambiguously
+/// broken; `warning` = drift / posture gap; `info` = soft signal.
+/// See `book/src/framework/endpoints.md` for the stable contract.
+async fn handle_audit_dsl(State(router): State<Arc<DslRouter>>) -> impl IntoResponse {
+    let snapshot = router.dsls.load();
+    let findings = crate::dsl::audit::audit_tree(&snapshot);
+
+    // Count DSLs for the totals block. Walks the snapshot once; cheap
+    // even on large trees.
+    let dsl_count: usize = snapshot
+        .values()
+        .flat_map(|methods| methods.values())
+        .map(|dsls| dsls.len())
+        .sum();
+    let project_count = snapshot.len();
+
+    let mut errors = 0usize;
+    let mut warnings = 0usize;
+    let mut info = 0usize;
+    for f in &findings {
+        match f.severity {
+            crate::dsl::audit::Severity::Error => errors += 1,
+            crate::dsl::audit::Severity::Warning => warnings += 1,
+            crate::dsl::audit::Severity::Info => info += 1,
+        }
+    }
+
+    Json(json!({
+        "totals": {
+            "projects": project_count,
+            "dsls": dsl_count,
+            "errors": errors,
+            "warnings": warnings,
+            "info": info,
+        },
+        "findings": findings,
     }))
 }
 

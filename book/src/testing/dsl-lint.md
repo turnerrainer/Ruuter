@@ -103,6 +103,21 @@ dsl-lint: 15 file(s) scanned, 15 ok, 2 error(s), 0 warning(s)
 - **Combine with `--require-guard`** — the two audits are orthogonal (reachability vs authorization) and both are opt-in CI knobs.
 - **Full feature contract** at [Internal-only DSLs](../dsl/internal-dsls.md).
 
+## `--audit` (issue #146)
+
+Opt-in. Runs the shared declaration-correctness audit against the loaded tree. Reports findings for drift (declared fields not referenced in the DSL body), missing fields (OpenAPI gaps), and security-posture gaps. Same engine as the admin endpoint [`/_/audit/dsl`](../framework/audit-dsl.md); use `--audit` for build-time CI, the endpoint for live hot-reload-aware visibility.
+
+```bash
+$ dsl-lint --dsl DSL --audit
+warn  svc/POST/users: [declaration.body.over_declared] Field(s) declared in allowlist.body are never referenced via ${incoming.body.<field>} in the DSL body. ... fields: ["note"]
+warn  svc/GET/health: [declaration.internal_missing] No `declaration.internal` set. ...
+```
+
+- **Default off** — existing projects don't want the whole audit light up on day one.
+- **Severity → exit code:** `error` findings flip exit to 1; `warning` / `info` print but don't fail. CI jobs wanting strict-warn behaviour grep the output or parse `--json`.
+- **Combine freely** with `--require-guard` and `--require-internal-explicit` — orthogonal check modes.
+- **Full catalogue** at [Self-audit](../framework/audit-dsl.md).
+
 ## When to run
 
 - Pre-commit hook: catches typos in ~100 ms without spinning any harness.

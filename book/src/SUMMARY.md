@@ -62,6 +62,7 @@
 - [Request pipeline](./framework/pipeline.md)
 - [Response headers](./framework/response-headers.md)
 - [Built-in endpoints](./framework/endpoints.md)
+- [Self-audit (`/_/audit/dsl`)](./framework/audit-dsl.md)
 - [OpenAPI generation](./framework/openapi.md)
 - [CSRF](./framework/csrf.md)
 - [CORS](./framework/cors.md)

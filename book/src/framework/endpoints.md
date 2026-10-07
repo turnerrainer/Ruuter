@@ -113,3 +113,9 @@ curl -s http://ruuter:8080/_/unguarded | jq '.totals.unguarded'
 curl -s http://ruuter:8080/_/unguarded \
   | jq '.projects | to_entries[] | "\(.key): \(.value.unguarded | length) unguarded"'
 ```
+
+## `/_/audit/dsl`
+
+Admin-gated (`RUUTER_ADMIN_ENABLED=true`). Reports production-readiness gaps in the currently loaded DSL tree — declaration drift, missing fields, security-posture gaps, reachability-config gaps. Complements `/_/unguarded` (guard-chain coverage) with declaration-correctness checks.
+
+Full catalogue, severity model, and the stable `code` string list live on [Self-audit (`/_/audit/dsl`)](./audit-dsl.md). Same engine runs behind `dsl-lint --audit` for build-time CI.
