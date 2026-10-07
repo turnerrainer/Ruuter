@@ -3,36 +3,35 @@
 Rust implementation of Ruuter — a declarative REST/WebSocket router
 driven by YAML DSLs on disk.
 
-**Version:** 0.12.0-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
+**Version:** 0.12.1-rc (pre-release; v1.0.0 is the next stable target) · **License:** Apache-2.0 · **Author:** Rainer Türner
 
-> **Upgrading from v0.11.0-rc?** Minor RC — one new DSL primitive and
-> one new operator config block for not-HTTP-reachable DSLs (PR #144,
-> issue #143):
+> **Upgrading from v0.12.0-rc?** Patch RC — new self-audit endpoint
+> + CLI flag + two parse-time error promotions (PR #147, issue #146):
 >
-> - **`declaration.internal: true | false` per-DSL field.** A DSL
->   whose effective `internal` is `true` returns `404` on external
->   HTTP (not `403` — avoids leaking that the route exists);
->   `template:` sub-calls and self-call-shortcircuited `http.*` reach
->   the DSL via `DslRouter::execute_dsl` directly and bypass the gate.
-> - **`declarations: { default_internal, missing_internal_policy }`
->   operator-level config block.** Flip `default_internal: true` on
->   `ruuter-internal`-shaped instances where every DSL should be
->   private unless explicitly opted out. `missing_internal_policy`
->   controls boot-time diagnostics (`silent` default, `warn`,
->   `error`).
+> - **`GET /_/audit/dsl` admin-gated endpoint.** Reports production-
+>   readiness gaps across the loaded DSL tree — declaration drift
+>   (allowlist fields never read, `${incoming.*}` references the
+>   allowlist omits), missing OpenAPI metadata, security-posture
+>   gaps, reachability-config gaps. Flat findings list sorted by
+>   `(project, dsl, code)` for stable dashboard diffs. Admin-gated
+>   via `RUUTER_ADMIN_ENABLED=true`.
+> - **`dsl-lint --audit` CLI flag.** Same engine, build-time surface.
+>   Pairs with existing `--require-guard` (#45) and
+>   `--require-internal-explicit` (#143) — orthogonal check modes.
+> - **Two parse-time error promotions.** `declaration.strict: true`
+>   without any allowlist now fails to load (meaningless posture).
+>   `declaration.allowlist.required_one_of` referencing a field
+>   not in THIS DSL's own allowlist now fails to load (OR-group
+>   can never match). Each DSL that trips these was never
+>   functional at the wire; adopters run `dsl-lint` locally before
+>   upgrading.
 >
-> Three-level fallback for absent `declaration.internal`: per-DSL →
-> `declarations.default_internal` → framework-default `false` (public).
-> Upgrading without touching `ruuter.yaml` or any DSL keeps every
-> route public — zero wire change on upgrade.
+> **No API breaks.** New endpoint + new CLI flag + new Rust public
+> API (`dsl::audit::audit_tree`, `Finding`, `Severity`) are additive.
+> No wire-level behaviour change on upgrade for any DSL that was
+> actually working.
 >
-> **No API breaks.** New optional declaration field + new optional
-> config block + new Rust public API — existing DSLs run unchanged.
->
-> `dsl-lint --require-internal-explicit` CI flag added for projects
-> that want build-time enforcement; non-strict runs are unchanged.
->
-> Full detail in [CHANGELOG.md § 0.12.0-rc](CHANGELOG.md#0120-rc---2026-10-07).
+> Full detail in [CHANGELOG.md § 0.12.1-rc](CHANGELOG.md#0121-rc---2026-10-07).
 
 ## Try it in one command
 
@@ -40,7 +39,7 @@ Multi-arch image (linux/amd64 + linux/arm64) on Docker Hub and GHCR:
 
 ```bash
 docker run -d --name ruuter -p 8080:8080 \
-    turnerrainer/ruuter:0.12.0-rc
+    turnerrainer/ruuter:0.12.1-rc
 ```
 
 - Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`.
@@ -54,7 +53,7 @@ works out of the box. Mount your own tree to override:
 docker run -d --name ruuter -p 8080:8080 \
     -v $(pwd)/DSL:/app/DSL:ro \
     -v $(pwd)/constants.ini:/app/constants.ini:ro \
-    turnerrainer/ruuter:0.12.0-rc
+    turnerrainer/ruuter:0.12.1-rc
 ```
 
 Prefer a shorter pull recipe? While we're on release candidates,
@@ -77,12 +76,12 @@ version they'll be validating against:
 ```bash
 # Lint every DSL under ./DSL against constants.ini.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.12.0-rc \
+    turnerrainer/ruuter:0.12.1-rc \
     dsl-lint --dsl DSL --constants constants.ini
 
 # Run every DSL-test scenario under ./DSL-tests.
 docker run --rm -v "$PWD:/w" -w /w \
-    turnerrainer/ruuter:0.12.0-rc \
+    turnerrainer/ruuter:0.12.1-rc \
     dsl-test --dsl DSL --tests DSL-tests --constants constants.ini
 ```
 

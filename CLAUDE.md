@@ -35,14 +35,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-10-07 on `618eaeb`):
+Expected on a clean `dev` (verified 2026-10-07 on `58ee030`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 859 passed / 0 failed / 4 ignored across 101 test binaries |
+| `cargo test --no-fail-fast` | 877 passed / 0 failed / 4 ignored across 102 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 67 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 107 scenarios, 107 passed |
@@ -241,6 +241,113 @@ the recovery shape if it slips.
 For a new breaking change, copy the shape of the closest analog
 above — same CHANGELOG structure, same test-file naming, same
 PR-body template.
+
+## Behaviour-change surface as of v0.12.1-rc (self-audit: #146)
+
+Self-audit of DSL production-readiness gaps. Admin-gated runtime
+endpoint + build-time CLI counterpart + two parse-time error
+promotions. Shipped as PR #147 (issue #146). No wire-level
+behaviour change on upgrade for any DSL that was actually working.
+Full detail in
+[CHANGELOG.md § 0.12.1-rc](CHANGELOG.md#0121-rc---2026-10-07).
+
+### 1. `GET /_/audit/dsl` admin endpoint (issue #146, PR #147)
+
+**Additive admin endpoint.** Admin-gated (same posture as
+`/_/unguarded`, `/_/openapi.json`, `/_/sources`, `/_/state-stats`
+— requires `RUUTER_ADMIN_ENABLED=true`). Returns a flat findings
+list sorted by `(project, dsl, code)` so dashboards get stable
+diffs across polls. Severity split: `error` (unambiguously
+broken), `warning` (drift / posture gap), `info` (soft signal).
+
+Response shape:
+
+```json
+{
+  "totals": { "projects": 3, "dsls": 42, "errors": 0, "warnings": 11, "info": 7 },
+  "findings": [
+    { "project": "ljvis", "dsl": "POST/users",
+      "severity": "warning",
+      "code": "declaration.body.over_declared",
+      "message": "...",
+      "fields": ["note"] }
+  ]
+}
+```
+
+Hot-reload-aware: the endpoint reflects the LIVE loaded tree, so
+findings surface regressions that passed CI but were introduced
+by a filesystem edit after boot.
+
+### 2. `dsl-lint --audit` CLI flag (issue #146, PR #147)
+
+**Additive CLI flag.** Build-time surface for the same engine —
+runs against the filesystem instead of the loaded tree. Pairs
+with the existing `--require-guard` (#45) and
+`--require-internal-explicit` (#143) strict modes; orthogonal
+check modes, any combination works. Errors in the audit flip the
+process exit code; warnings and info findings print but don't
+fail the build.
+
+### 3. V1 check catalogue (`src/dsl/audit.rs`)
+
+Grouped by category from issue #146. Codes are stable string keys
+— adding one is minor-bump surface, renaming one is breaking.
+
+**Category A — Declaration completeness (OpenAPI quality)**:
+`declaration.missing` (warning), `declaration.description_missing`
+(info), `declaration.returns_missing` (info),
+`declaration.legacy_flat_allowlist` (info),
+`declaration.body.type_missing` (info).
+
+**Category B — Allowlist drift (declared vs actually used)**:
+`declaration.{body,params,headers}.{over,under}_declared`
+(warning). Framework-level headers (`authorization`,
+`traceparent`, `content-type`, `x-trace-id`) excluded from
+over/under checks.
+
+**Category C — Security posture (v1 subset)**:
+`declaration.required_but_unused` (warning).
+
+**Category E — Internal + reachability (ties to issue #143)**:
+`declaration.internal_missing` (info; same signal as
+`dsl-lint --require-internal-explicit`).
+
+**Deferred to v2 follow-up**: Category C's `unchecked_dereference`
+and `untyped_arithmetic` (need expression AST walking), Category
+D (cross-DSL guard contract), Category F (OpenAPI `returns:` vs
+DSL `return:` status mismatch). Tracked in issue #146 thread.
+
+### 4. Two parse-time error promotions
+
+**DSL load fails; hot-reload keeps previous good version.** Each
+of these is unambiguously broken; a DSL that trips one was never
+functional at the wire.
+
+- `declaration.strict: true` without any allowlist (`allowlist.*`
+  or legacy `allowed_*`). The "strict reject unknown keys"
+  posture has no referent — every request trivially passed. Now
+  rejected at parse time.
+- `declaration.allowlist.required_one_of` referencing a field not
+  in THIS DSL's own allowlist. Resolution is purely local;
+  guards' declarations do not contribute. A reference to a non-
+  existent field means the OR-group can never match, so requests
+  on the "wrong" branch silently 400'd.
+
+Deliberately NOT promoted: `allowed_body_on_bodyless_method`
+(body allowlist on `GET` / `DELETE`). Issue #75 documents a
+legitimate Java-parity pattern where body allowlist on GET
+enforces presence of the same field name in the query string.
+Downgraded to a soft audit finding only.
+
+### 5. New Rust public API
+
+- `src/dsl/audit.rs::audit_tree(http: &HttpDsls) -> Vec<Finding>`
+  — top-level entry point for both surfaces.
+- `pub struct Finding { project, dsl, severity, code, message, fields }`.
+- `pub enum Severity { Error, Warning, Info }`.
+
+Minor-API surface addition; no existing signature changed.
 
 ## Behaviour-change surface as of v0.12.0-rc (ljvis-2 batch: #143)
 
