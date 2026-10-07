@@ -35,14 +35,14 @@ cargo audit --deny warnings
 ( cd book && mdbook build )
 ```
 
-Expected on a clean `dev` (verified 2026-10-07 on `bdd8d0f`):
+Expected on a clean `dev` (verified 2026-10-07 on `618eaeb`):
 
 | Check | Baseline |
 |---|---|
 | `cargo fmt --check` | clean |
 | clippy (default features) | clean under `-D warnings` |
 | clippy (`--features scripting-quickjs` only) | clean under `-D warnings` |
-| `cargo test --no-fail-fast` | 852 passed / 0 failed / 4 ignored across 100 test binaries |
+| `cargo test --no-fail-fast` | 859 passed / 0 failed / 4 ignored across 101 test binaries |
 | `cargo audit --deny warnings` | 0 vulnerabilities, 0 warnings (advisory DB from RustSec) |
 | `dsl-lint DSL/samples` | 67 files, 0 errors, 3 warnings (unresolved `[#…]` for webhook keys intentionally omitted from `constants.ini`) |
 | `dsl-test DSL/DSL-tests` | 107 scenarios, 107 passed |
@@ -241,6 +241,92 @@ the recovery shape if it slips.
 For a new breaking change, copy the shape of the closest analog
 above — same CHANGELOG structure, same test-file naming, same
 PR-body template.
+
+## Behaviour-change surface as of v0.12.0-rc (ljvis-2 batch: #143)
+
+One new DSL field + one new config block + one new `dsl-lint` flag
+shipped as PR #144. Motivated by `kemit-ee/ljvis-2#515` — 36
+`ruuter-internal` DSLs externally reachable without authentication.
+No Rust public-API breaks, no wire-level behaviour change on
+upgrade. Full detail in
+[CHANGELOG.md § 0.12.0-rc](CHANGELOG.md#0120-rc---2026-10-07).
+
+### 1. `declaration.internal` + `declarations:` config (issue #143, PR #144)
+
+**Additive DSL field + additive config block. Zero wire change on
+upgrade.** A DSL whose effective `internal` is `true` returns 404
+(not 403 — avoids leaking that the route exists) for external HTTP.
+`template:` sub-calls and self-call-shortcircuited `http.*` reach
+the DSL via `DslRouter::execute_dsl` directly and bypass the gate.
+
+Three-level fallback for an absent `declaration.internal`:
+1. Per-DSL `declaration.internal` if set.
+2. Else `AppConfig.declarations.default_internal` if set in `ruuter.yaml`.
+3. Else framework-default `false` (public). Hard-coded fallback so
+   an upgrade without touching `ruuter.yaml` or any DSL keeps every
+   route public — the feature is strictly opt-in.
+
+New top-level config block in `AppConfig`:
+- `declarations.default_internal` (default `false`) — the fallback
+  value when `declaration.internal` is absent on a DSL. Flip to
+  `true` on `ruuter-internal`-shaped instances where every DSL
+  should be private unless explicitly opted out with
+  `declaration.internal: false`.
+- `declarations.missing_internal_policy` (default `Silent`) —
+  boot-time diagnostic policy when a DSL has no `declaration.internal`.
+  `Silent` keeps upgrade logs quiet; `Warn` emits one WARN per
+  DSL naming the file path; `Error` refuses to boot. The default
+  was chosen as `Silent` so pre-feature deployments see zero new
+  WARN output on upgrade.
+
+New Rust public API:
+- `pub struct DeclarationStep { ..., pub internal: Option<bool> }`
+  (serde `skip_serializing_if = "Option::is_none"`).
+- `pub struct DeclarationsConfig { default_internal: bool,
+  missing_internal_policy: MissingInternalPolicy }` with
+  `DeclarationsConfig::default()` matching pre-feature behaviour.
+- `pub enum MissingInternalPolicy { Silent, Warn, Error }` with
+  `Default = Silent`.
+- `impl Dsl { pub fn effective_internal(&self, default_internal: bool) -> bool }`
+  — resolves the three-level fallback.
+
+Observability surface:
+- `/_/openapi.json` emits `x-internal: true` on operations where
+  the DSL explicitly declares `internal: true`. Operator-level
+  fallback does NOT synthesize the extension — only explicit
+  per-DSL `true` is marked, so flipping `default_internal: true`
+  on an instance doesn't silently relabel every route.
+- `/_/unguarded` adds an `internal: bool` field alongside `guards`
+  on every audited route. Operators can distinguish "externally
+  reachable without a guard" (the actual risk surface) from
+  "internal and not reachable at all" (declared private). Filter
+  on `.internal == false` for the audit that matters.
+
+CI enforcement:
+- `dsl-lint --require-internal-explicit` — new strict mode that
+  errors on any HTTP DSL omitting `declaration.internal`. Opt-in;
+  default `dsl-lint` runs are unchanged. Pairs with
+  `missing_internal_policy: silent` at runtime so adopters can
+  catch the gap at build time without any boot WARN noise.
+
+Dispatch wiring:
+- Gate lives in `DslRouter::handle_request_inner` AFTER the
+  pass-through proxy early-dispatch (issue #134) but BEFORE the
+  16 MiB inbound Content-Length preflight. A flood of oversized
+  requests to an internal route never reads a byte off the socket.
+- `template:` and self-call-shortcircuit paths bypass the handler
+  entirely and reach `execute_dsl` directly, so internal DSLs
+  stay reachable in-process (the point of the feature).
+- Guards still run on internal DSLs reached via `template:` /
+  self-call — internal is reachability, not authorization.
+
+Known limitation shipped (documented in
+`book/src/dsl/internal-dsls.md`):
+- A `declaration.proxy:` route is NOT consulted by the internal
+  gate — the proxy early-dispatch happens first. Operators who
+  need a proxy route to be internal-only use a parent guard on
+  headers / mTLS DN instead. Tracked as a follow-up if real-world
+  usage demands it.
 
 ## Behaviour-change surface as of v0.11.0-rc (eFTI batch: #134, #135, #136, #137)
 
