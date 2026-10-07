@@ -46,6 +46,10 @@ Effect on the emitted operation:
 - `allowed_header` becomes header parameters.
 - `internal: true` (issue #143) adds an `x-internal: true` extension on the operation. Only explicit per-DSL `true` is marked — an operator-level `declarations.default_internal: true` fallback does NOT synthesize the extension, so flipping the per-instance default doesn't silently relabel every route as internal. See [Internal-only DSLs](../dsl/internal-dsls.md).
 
+## Auditing OpenAPI gaps (issue #146)
+
+The [self-audit endpoint `/_/audit/dsl`](./audit-dsl.md) flags declarations that produce poor OpenAPI output: `declaration.missing` (no block), `declaration.description_missing` (placeholder description), `declaration.returns_missing` (generic `object` response), `declaration.body.type_missing` (generic `string` body fields). Run `dsl-lint --audit` in CI to catch these before clients pull the spec.
+
 ## Validation
 
 The generated spec passes `redocly lint` cleanly (0 errors, 0 warnings on the sample corpus).

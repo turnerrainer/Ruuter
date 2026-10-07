@@ -47,6 +47,16 @@ Review before every partner-facing deploy.
 - [ ] No DSL uses `${incoming.body.url}` (or similar) as an `http` step URL without an SSRF allow-list.
 - [ ] Idempotency-Key semantics understood by clients writing to POST/PUT/PATCH/DELETE routes.
 
+## Declaration-correctness audit (issue #146)
+
+Reviewed on every deployment that has at least one DSL with a declaration block.
+See [Self-audit (`/_/audit/dsl`)](../framework/audit-dsl.md) for the full catalogue.
+
+- [ ] **CI runs `dsl-lint --audit`** on every pull request. Error-severity findings fail the build; warnings surface drift (declared body fields never read, `${incoming.*}` references the allowlist omits, `required: true` on unused fields, etc.).
+- [ ] **Post-deploy smoke check** curls `GET /_/audit/dsl` and alerts on `errors > 0` or `warnings > <baseline>`. The endpoint is hot-reload-aware, so this catches regressions a static CI pass can't see.
+- [ ] **`declaration.body.over_declared` findings reviewed** — clients forced to send dead data. Common false-positive: a `strict: true` DSL that documents its contract via OpenAPI without reading the body in steps. Legitimate; silence per-DSL once reviewed.
+- [ ] **`declaration.body.under_declared` findings reviewed** — the DSL reads a field the allowlist doesn't include. Under default filter the field is silently stripped (surprise behaviour); under `strict:` the request 400s (surprise 400s on paths meant to work).
+
 ## Internal-only DSLs (issue #143)
 
 Reviewed if any DSL in the tree is meant to be called only by other

@@ -242,3 +242,4 @@ For deployments adopting the feature:
 - [Security hardening checklist](../ops/security-checklist.md)
 - [`dsl-lint`](../testing/dsl-lint.md)
 - [Reserved subdirectories](../reference/reserved-subdirs.md)
+- [Self-audit (`/_/audit/dsl`)](../framework/audit-dsl.md) — the Category E `declaration.internal_missing` finding is the runtime equivalent of `dsl-lint --require-internal-explicit`.

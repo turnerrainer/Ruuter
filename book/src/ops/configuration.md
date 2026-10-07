@@ -167,6 +167,22 @@ out with `declaration.internal: false`. Full three-level fallback,
 OpenAPI integration, and CI enforcement details are on the
 [Internal-only DSLs page](../dsl/internal-dsls.md).
 
+## Self-audit endpoint (issue #146)
+
+Admin-gated `GET /_/audit/dsl` reports production-readiness gaps
+in the loaded DSL tree — declaration drift, missing fields,
+security-posture gaps. Same engine runs behind `dsl-lint --audit`
+for build-time CI. Enable the usual way:
+
+```yaml
+# docker-compose.yml
+environment:
+  - RUUTER_ADMIN_ENABLED=true
+```
+
+Full check catalogue, severity model, and stable `code` strings
+on the [Self-audit page](../framework/audit-dsl.md).
+
 ## Deep-dive tutorials
 
 The "Configuration deep dive" section documents each knob in

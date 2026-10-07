@@ -34,6 +34,7 @@ Rationale: separate trees keep `DSL/` clean (production surface), tests parallel
 | Layer | Tool | Cost | Catches |
 |---|---|---|---|
 | Static | `dsl-lint` | ~100 ms | Parse errors, unresolved `next:` refs, missing constants, broken template targets, unreachable steps, missing source `kind:` fields |
+| Static (opt-in) | `dsl-lint --audit` (issue #146) | ~100 ms | Declaration drift: fields in `allowlist.*` never read, `${incoming.*}` references the allowlist omits, missing `description:` / `returns:` / `internal:`, `required: true` on unused fields. Live hot-reload-aware equivalent: [`/_/audit/dsl`](../framework/audit-dsl.md). |
 | Rust unit / integration | `cargo test` | seconds | Engine invariants (state store isolation, guard prefix matching, ws source dispatch, iterate bounds, supervisor restart) |
 | Scenario | `dsl-test` | seconds | Per-DSL contract: HTTP status, response body, headers, state mutations, mock-upstream calls, WS frame exchange |
 

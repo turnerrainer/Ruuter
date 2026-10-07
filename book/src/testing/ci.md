@@ -44,6 +44,8 @@ jobs:
 
 Fail-fast is intentional: `dsl-lint` catching a typo is a better developer experience than `dsl-test` catching the same typo after building a router.
 
+**Opt-in strict modes** (issues #45, #143, #146): `dsl-lint --require-guard` fails on any route with zero applicable guards; `--require-internal-explicit` fails on any DSL missing `declaration.internal`; `--audit` runs the declaration-correctness catalogue (drift, missing fields, posture gaps). Any combination works — orthogonal check modes. For live hot-reload-aware equivalents, see admin endpoints [`/_/unguarded`](../framework/endpoints.md#_unguarded) and [`/_/audit/dsl`](../framework/audit-dsl.md).
+
 ## Local pre-push
 
 ```bash
