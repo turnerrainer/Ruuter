@@ -156,6 +156,18 @@ fn build_operation(project: &str, method: &str, dsl_key: &str, dsl: &Dsl) -> Val
     op.insert("description".to_string(), Value::String(description));
     op.insert("tags".to_string(), json!([project.to_string()]));
 
+    // Issue #143 — surface internal-only DSLs via the `x-internal`
+    // OpenAPI extension. True iff `declaration.internal` is explicitly
+    // `Some(true)` (per-DSL opt-in). The three-level fallback that
+    // resolves to-boolean at request time doesn't apply here: the spec
+    // is a documentation artifact, so we only mark what the DSL itself
+    // declares — otherwise an operator who flips `default_internal:
+    // true` would see every route re-labelled, which hides the
+    // specific override surface.
+    if decl.and_then(|d| d.internal) == Some(true) {
+        op.insert("x-internal".to_string(), Value::Bool(true));
+    }
+
     if let Some(params) = build_parameters(decl) {
         op.insert("parameters".to_string(), params);
     }

@@ -16,6 +16,24 @@ pub struct Dsl {
     pub declaration: Option<DeclarationStep>,
 }
 
+impl Dsl {
+    /// Issue #143 — resolve the effective internal classification for
+    /// this DSL via the three-level fallback chain. `default_internal`
+    /// comes from `AppConfig.declarations.default_internal`; the
+    /// framework-default `false` is applied by the caller when the
+    /// config block is absent (serde provides it via `DeclarationsConfig::default`).
+    ///
+    /// Returns `true` when external HTTP must be denied (gate with 404
+    /// at the dispatch handler); `false` when the DSL is publicly
+    /// routable.
+    pub fn effective_internal(&self, default_internal: bool) -> bool {
+        self.declaration
+            .as_ref()
+            .and_then(|d| d.internal)
+            .unwrap_or(default_internal)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeclarationStep {
     pub version: Option<String>,
@@ -76,6 +94,21 @@ pub struct DeclarationStep {
     /// connection is opened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyDeclaration>,
+    /// Issue #143 — when `Some(true)`, this DSL is NOT reachable via
+    /// external HTTP. The dispatcher returns 404 (not 403, to avoid
+    /// leaking that the route exists) for any request that didn't
+    /// originate from the in-process self-call handler. `template:`
+    /// sub-calls and self-call-shortcircuited `http.*` steps still
+    /// reach the DSL — the self-call handler sets a request-extension
+    /// marker the dispatcher checks before guard chain evaluation.
+    /// `Some(false)` keeps the DSL publicly reachable (useful to
+    /// opt out when the operator-level default is `true`). `None`
+    /// resolves via `AppConfig.declarations.default_internal` (which
+    /// itself defaults to `false` — hard-coded framework fallback so
+    /// an upgrade without `ruuter.yaml` changes keeps every route
+    /// public).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<bool>,
     /// Audit finding 01 — Declaration steps also carry the base
     /// fields so a bare `{ reload_dsl: true, next: end }` step can
     /// trigger a reload (see parser's control-flow-only fallback).

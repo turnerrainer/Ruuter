@@ -125,6 +125,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub detach: DetachConfig,
 
+    /// Issue #143 — operator-level defaults for `declaration.internal`.
+    /// Resolves the fallback chain when a DSL omits the per-DSL
+    /// `declaration.internal:` field. `default_internal` provides the
+    /// per-instance default; absent from `ruuter.yaml` means `false`
+    /// (hard-coded framework fallback — upgrading without touching
+    /// `ruuter.yaml` keeps every route public, zero wire change).
+    #[serde(default)]
+    pub declarations: DeclarationsConfig,
+
     /// Task 043 — outbound Unix-domain-socket transport aliases.
     ///
     /// Maps `http://<host>/...` URLs whose host matches a key to a
@@ -827,6 +836,52 @@ impl Default for DetachConfig {
     }
 }
 
+/// Issue #143 — operator-level defaults driving the three-level
+/// fallback chain for `declaration.internal`:
+///
+/// 1. Per-DSL `declaration.internal` if set.
+/// 2. Else `AppConfig.declarations.default_internal` (this field).
+/// 3. Else framework-default `false` (public). Hard-coded fallback so
+///    an upgrade without `ruuter.yaml` changes keeps every route
+///    public — the feature is strictly opt-in.
+///
+/// `missing_internal_policy` controls what to do when BOTH the per-
+/// DSL field and the per-instance default are absent. Default
+/// `silent` keeps upgrade-time log output quiet; adopters who want
+/// to surface the config gap flip to `warn`, and strict deployments
+/// (e.g. a locked-down `ruuter-internal`) use `error` to refuse
+/// boot until every DSL declares explicitly.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclarationsConfig {
+    #[serde(default = "default_declarations_default_internal")]
+    pub default_internal: bool,
+
+    #[serde(default)]
+    pub missing_internal_policy: MissingInternalPolicy,
+}
+
+fn default_declarations_default_internal() -> bool {
+    false
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MissingInternalPolicy {
+    #[default]
+    Silent,
+    Warn,
+    Error,
+}
+
+impl Default for DeclarationsConfig {
+    fn default() -> Self {
+        Self {
+            default_internal: default_declarations_default_internal(),
+            missing_internal_policy: MissingInternalPolicy::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InternalRequestsConfig {
     #[serde(default)]
@@ -967,6 +1022,7 @@ impl Default for AppConfig {
             optimistic_concurrency: OptimisticConcurrencyConfig::default(),
             state: StateConfig::default(),
             detach: DetachConfig::default(),
+            declarations: DeclarationsConfig::default(),
             unix_socket_map: HashMap::new(),
             uds_http_version: HttpVersion::Http1,
             listeners: Vec::new(),

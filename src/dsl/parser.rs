@@ -229,6 +229,11 @@ impl DslParser {
             // action. Routes with `proxy:` are header-only; the body
             // is forwarded by the router before StepEngine is reached.
             "proxy",
+            // Issue #143 — `internal:` is a declaration field. When
+            // `true`, the DSL is not reachable via external HTTP
+            // (dispatcher returns 404); `template:` / self-call still
+            // reach it.
+            "internal",
         ]
         .iter()
         .any(|k| key_present(k))

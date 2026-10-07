@@ -528,6 +528,27 @@ async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResp
     let audit =
         crate::dsl::guard_audit::audit_all_routes(&http, &guards, router.config.guards.mode);
 
+    // Issue #143 — look up each audited route's effective `internal`
+    // classification so operators can tell "externally reachable
+    // without a guard" (the actual risk) from "internal and not
+    // reachable at all" (declared private). Resolution is the same
+    // three-level fallback the dispatcher uses.
+    let dsls_snapshot = router.dsls.load();
+    let default_internal = router.config.declarations.default_internal;
+    let internal_for = |project: &str, method: &str, path: &str| -> bool {
+        let Some(by_method) = dsls_snapshot.get(project) else {
+            return false;
+        };
+        let Some(by_key) = by_method.get(method) else {
+            return false;
+        };
+        let key = format!("{}/{}", method, path);
+        by_key
+            .get(&key)
+            .map(|dsl| dsl.effective_internal(default_internal))
+            .unwrap_or(false)
+    };
+
     let mut projects: std::collections::BTreeMap<String, serde_json::Value> =
         std::collections::BTreeMap::new();
     let mut total_unguarded = 0usize;
@@ -536,18 +557,21 @@ async fn handle_unguarded(State(router): State<Arc<DslRouter>>) -> impl IntoResp
         let entry = projects
             .entry(route.project.clone())
             .or_insert_with(|| json!({ "unguarded": [], "guarded": [] }));
+        let internal = internal_for(&route.project, &route.method, &route.path);
         if route.is_unguarded() {
             total_unguarded += 1;
-            entry["unguarded"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({ "method": route.method, "path": route.path }));
+            entry["unguarded"].as_array_mut().unwrap().push(json!({
+                "method": route.method,
+                "path": route.path,
+                "internal": internal,
+            }));
         } else {
             total_guarded += 1;
             entry["guarded"].as_array_mut().unwrap().push(json!({
                 "method": route.method,
                 "path": route.path,
                 "guards": route.guards,
+                "internal": internal,
             }));
         }
     }
@@ -944,6 +968,25 @@ async fn handle_request_inner(router: Arc<DslRouter>, request: Request) -> Respo
                     .forward(&proxy_decl, &route_key, &traceparent, request)
                     .await;
             }
+        }
+    }
+
+    // Issue #143 — internal-DSL gate. A DSL whose effective internal
+    // classification is `true` is NOT reachable via external HTTP: the
+    // dispatcher returns 404 (not 403, to avoid leaking that the route
+    // exists). `template:` sub-calls and self-call-shortcircuited
+    // `http.*` reach the DSL via `DslRouter::execute_dsl` directly
+    // (either through the StepEngine's template step or through
+    // `SelfCallHandler::execute_by_url`), so they bypass this handler
+    // and are never gated. The effective classification follows the
+    // three-level fallback chain: per-DSL `declaration.internal` →
+    // `AppConfig.declarations.default_internal` → framework default
+    // `false`. Resolved via `Dsl::effective_internal`.
+    if let Some((target_dsl, _, _)) =
+        router.resolve_dsl_with_path_params(&project, &upper_method, &endpoint_path)
+    {
+        if target_dsl.effective_internal(router.config.declarations.default_internal) {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "Not Found" }))).into_response();
         }
     }
 

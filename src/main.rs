@@ -185,6 +185,59 @@ async fn main() {
                     missing_decl, http_total
                 );
             }
+            // Issue #143 — enforce declarations.missing_internal_policy.
+            // Counts DSLs where neither `declaration.internal` is set nor
+            // the per-DSL field inherits an explicit value. Silent =
+            // no output (default; keeps upgrade logs quiet). Warn =
+            // one WARN per DSL naming the key. Error = refuse to boot
+            // (fail-fast posture for strict deployments).
+            let missing_internal: Vec<String> = d
+                .http
+                .iter()
+                .flat_map(|(project, methods)| {
+                    methods.values().flat_map(move |dsls| {
+                        dsls.iter().filter_map(move |(key, dsl)| {
+                            let has_explicit = dsl
+                                .declaration
+                                .as_ref()
+                                .map(|d| d.internal.is_some())
+                                .unwrap_or(false);
+                            if has_explicit {
+                                None
+                            } else {
+                                Some(format!("{}/{}", project, key))
+                            }
+                        })
+                    })
+                })
+                .collect();
+            match config.declarations.missing_internal_policy {
+                ruuter_on_rust::config::MissingInternalPolicy::Silent => {}
+                ruuter_on_rust::config::MissingInternalPolicy::Warn => {
+                    for route in &missing_internal {
+                        tracing::warn!(
+                            "declaration.internal missing on {} — resolves via \
+                             declarations.default_internal={} (issue #143). Set \
+                             declaration.internal explicitly to pin the per-DSL \
+                             posture, or flip declarations.missing_internal_policy \
+                             to silent/error.",
+                            route,
+                            config.declarations.default_internal
+                        );
+                    }
+                }
+                ruuter_on_rust::config::MissingInternalPolicy::Error => {
+                    if !missing_internal.is_empty() {
+                        error!(
+                            "{} DSL(s) have no declaration.internal and declarations.\
+                             missing_internal_policy=error — refusing to boot. First few: {:?}",
+                            missing_internal.len(),
+                            missing_internal.iter().take(10).collect::<Vec<_>>()
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
             d
         }
         Err(e) => {
