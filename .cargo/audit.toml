@@ -24,4 +24,15 @@ ignore = [
     #
     # Review: 2026-10-01
     "RUSTSEC-2024-0436",
+
+    # `unsafe-libyaml` is unmaintained. Repository archived
+    # 2024-03-25; last release 0.2.11 (March 2024). Transitive
+    # via `serde_yaml_ng` (our YAML DSL + config parser). No
+    # known vulnerability — the advisory is "upstream read-only."
+    # Migration path is a safe-Rust YAML parser (candidates:
+    # `saphyr` / `serde-saphyr`); large surface change, tracked
+    # separately. Mirrored in `deny.toml`.
+    #
+    # Review: 2027-01-14
+    "RUSTSEC-2024-0449",
 ]

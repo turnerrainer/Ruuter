@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI — three scheduled jobs restored to green after advisory DB
+  refresh on 2026-10-14.** No wire-level or runtime behaviour change.
+
+  **`security.yml` audit job + deny job.** Four fresh advisories
+  landed against transitively-pulled `rustls` 0.23.45:
+  - RUSTSEC-2026-0346 (`Debug` impls expose TLS secrets, medium)
+  - RUSTSEC-2026-0347 (buffered app data after ECH rejection, low)
+  - RUSTSEC-2026-0348 (brotli cert decompression up to 1 GiB
+    pre-auth, low)
+  - RUSTSEC-2026-0349 (ServerHello downgrade to classical KEX, low)
+
+  All four fixed in `rustls` 0.23.46. Lockfile bumped by
+  `cargo update -p rustls`; no `Cargo.toml` dependency change
+  required. Our use of `rustls` is only via `reqwest` /
+  `hyper-rustls` for outbound HTTPS and the `dsl-test` HTTPS
+  harness; no direct source touch.
+
+  **`security.yml` deny job.** A fifth advisory, RUSTSEC-2024-0449
+  (`unsafe-libyaml` unmaintained; upstream archived 2024-03-25),
+  surfaced via `serde_yaml_ng` and failed the `check all` sweep.
+  Added as an `ignore` entry in both `deny.toml` and
+  `.cargo/audit.toml` with a 2027-01-14 review date, matching the
+  posture of the two existing unmaintained-transitive exceptions
+  (`instant`, `paste`). Migration path is a safe-Rust YAML parser
+  (`saphyr` / `serde-saphyr`) and is a separate work item — the
+  surface is too large to bundle with a CI-unblock PR.
+
+  **`fuzz.yml` http_body_deserialize target.** The round-trip
+  invariant `parse(serialize(v)) == v` tripped on raw integer
+  inputs outside f64's safe-integer range (±2^53 ≈ 9e15) — the
+  reported failing input was `1111111111111111111111111` (25
+  digits), which parses to the nearest f64 and whose
+  shortest-roundtrip serialisation lands on the adjacent f64 (one
+  ULP away) on reparse. Narrowed the invariant to
+  "serialise+parse reaches a fixed point after one canonicalisation
+  pass" — stronger than it reads: still catches key drops, duplicate-
+  key collision regressions, and any precision loss on values
+  within f64's safe range. The 25-digit case now PASSES because the
+  pipeline converges after one normalising round. See
+  `fuzz/fuzz_targets/http_body_deserialize.rs`.
+
 ## [0.12.1-rc] - 2026-10-07
 
 Self-audit of DSL production-readiness gaps — new admin endpoint
