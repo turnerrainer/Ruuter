@@ -47,6 +47,14 @@ ignore = [
     # 0.20 is the likely fix. Mirrors .cargo/audit.toml entry.
     # Review: 2026-10-01
     "RUSTSEC-2024-0436",
+
+    # `unsafe-libyaml` — unmaintained. Repository archived
+    # 2024-03-25; last release 0.2.11. Transitive via
+    # `serde_yaml_ng`. No known vuln; migration to a safe-Rust
+    # YAML parser (saphyr / serde-saphyr) is a separate work
+    # item. Mirrors .cargo/audit.toml entry.
+    # Review: 2027-01-14
+    "RUSTSEC-2024-0449",
 ]
 
 # -----------------------------------------------------------------
