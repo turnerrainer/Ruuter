@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI — two scheduled jobs restored to green after advisory DB
+  refresh on 2026-10-21.** No wire-level or runtime behaviour change.
+
+  **`security.yml` audit job.** RUSTSEC-2026-0382 landed against
+  transitively-pulled `rustls-webpki` 0.103.15 — certificate
+  verification may accept distrusted intermediates. Fixed in
+  `rustls-webpki` 0.103.16. Lockfile bumped by `cargo update -p
+  rustls-webpki`; no `Cargo.toml` dependency change required. Our
+  use of `rustls-webpki` is only transitive via `rustls` for
+  outbound HTTPS verification; no direct source touch.
+
+  **`fuzz.yml` http_body_deserialize target.** The one-pass
+  canonicalisation assumption introduced in the previous CI unblock
+  (see earlier Fixed entry below) was still too strict. A raw
+  integer input of
+  `20000000007000000000000000000000000000000000000000000000043243826`
+  (65 digits) parses to f64 `2.0000000007000003e+64`, whose
+  ryu-shortest-roundtrip serialisation reparses — via serde_json's
+  default fast float parser, which is NOT bit-exact at extreme
+  magnitudes — to the adjacent f64 `2.0000000007000006e+64`, one
+  ULP away. One canonicalisation pass is enough for 25-digit cases
+  but not for every input in f64's representable range. Replaced
+  the "exactly one canonicalisation pass" invariant with a bounded
+  iterate-to-fixed-point loop (`MAX_ROUND_TRIPS = 8`); the per-pass
+  guarantees (serialiser does not panic, serialiser emits parseable
+  JSON) fire on every iteration regardless of convergence. The
+  65-digit case now does not panic; its oscillation is accepted as
+  a serde_json fast-parser quirk rather than a Ruuter bug. Still
+  catches: key drops, duplicate-key collision regressions, and
+  precision loss on values inside f64's safe-integer range. Crash
+  input pinned as a seed in
+  `fuzz/corpus_seed/http_body_deserialize/f64-oscillating-large-int.json`.
+  See `fuzz/fuzz_targets/http_body_deserialize.rs`.
+
 - **CI — three scheduled jobs restored to green after advisory DB
   refresh on 2026-10-14.** No wire-level or runtime behaviour change.
 
