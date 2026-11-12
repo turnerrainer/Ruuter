@@ -138,8 +138,7 @@ fn bounded_round_trip_no_panic(data: &[u8]) -> bool {
     let mut current = v;
     for _ in 0..MAX_ROUND_TRIPS {
         let s = serde_json::to_vec(&current).expect("value → bytes must not fail");
-        let next: Value =
-            serde_json::from_slice(&s).expect("round-trip parse must not fail");
+        let next: Value = serde_json::from_slice(&s).expect("round-trip parse must not fail");
         if next == current {
             return true;
         }

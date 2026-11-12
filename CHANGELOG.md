@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI — `security` workflow (audit + deny) restored to green after
+  two new RustSec "unsound" advisories.** Red on every scheduled run
+  since 2026-11-01 (tokio) / 2026-11-11 (rustix). No wire-level or
+  runtime behaviour change; patch-RC classification (lockfile only).
+
+  Pre-fix: `cargo audit --deny warnings` failed on RUSTSEC-2026-0386
+  (tokio 1.52.3, `AsyncFd::new` and related constructors violate I/O
+  safety; fixed in >=1.51.6 <1.52.0 or >=1.53.3) and RUSTSEC-2026-0486
+  (rustix 1.1.4, xattr functions mark unwritten bytes initialised for
+  a zero-length buffer; fixed in >=1.1.6). The `deny` job failed on
+  the tokio advisory too.
+
+  Post-fix: `cargo update -p tokio -p rustix` -> tokio 1.54.1,
+  rustix 1.1.6. No `Cargo.toml` change, no `AsyncFd` or rustix xattr
+  usage in this repo, so no source change was needed. Also reflows one
+  `cargo fmt` diff in `tests/fuzz_json_invariant_fixed_point.rs` so the
+  documented `cargo fmt --check` release gate is clean again.
+
+  Migration: none for consumers of the binary. Library consumers
+  pinning their own `Cargo.lock` should run
+  `cargo update -p tokio -p rustix`.
+
+  ```diff
+  -name = "tokio"   version = "1.52.3"
+  +name = "tokio"   version = "1.54.1"
+  -name = "rustix"  version = "1.1.4"
+  +name = "rustix"  version = "1.1.6"
+  ```
+
+  Regression pin: the `security` workflow itself (`cargo audit
+  --deny warnings` + `cargo deny check`); no Rust test applies to a
+  lockfile-only change.
+
 - **CI — two scheduled jobs restored to green after advisory DB
   refresh on 2026-10-21.** No wire-level or runtime behaviour change.
 
