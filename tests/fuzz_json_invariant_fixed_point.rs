@@ -123,6 +123,20 @@ fn fuzz_invariant_holds_on_other_oversized_integers() {
     }
 }
 
+/// serde_json's reserved `raw_value` magic key. See the matching
+/// comment in `fuzz/fuzz_targets/http_body_deserialize.rs`.
+const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
+fn contains_reserved_key(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => {
+            m.contains_key(RAW_VALUE_TOKEN) || m.values().any(contains_reserved_key)
+        }
+        Value::Array(a) => a.iter().any(contains_reserved_key),
+        _ => false,
+    }
+}
+
 /// Mirror of the actual fuzz target loop: iterate parse(serialize(…))
 /// up to `MAX_ROUND_TRIPS` passes and return `true` if we either
 /// converge or run out of iterations without panicking. The guarantees
@@ -137,6 +151,9 @@ fn bounded_round_trip_no_panic(data: &[u8]) -> bool {
     };
     let mut current = v;
     for _ in 0..MAX_ROUND_TRIPS {
+        if contains_reserved_key(&current) {
+            return true; // reserved-token quirk is out of scope
+        }
         let s = serde_json::to_vec(&current).expect("value → bytes must not fail");
         let next: Value = serde_json::from_slice(&s).expect("round-trip parse must not fail");
         if next == current {
@@ -171,4 +188,59 @@ fn fuzz_crash_input_65_digit_integer_oscillates_but_does_not_panic() {
          loop and consider tightening the invariant back to a single \
          canonicalisation pass"
     );
+}
+
+#[test]
+fn fuzz_crash_input_reserved_raw_value_key_is_out_of_scope() {
+    // Scheduled fuzz runs of 2026-11-10 and 2026-11-11 crashed with
+    // `invalid type: floating point `-0.0`, expected raw value` at
+    // column 38. axum enables serde_json's `raw_value` feature via
+    // feature unification; with it on, an object whose FIRST key is
+    // `$serde_json::private::RawValue` is decoded as a RawValue
+    // wrapper. `Value::Object` is key-sorted, so a token that is not
+    // first in the input is hoisted to the front on serialise and
+    // the reparse fails. Not a Ruuter bug; out of scope for the
+    // round-trip invariant.
+    let input = br#"{"a":1,"$serde_json::private::RawValue":-0.0}"#;
+    assert!(bounded_round_trip_no_panic(input));
+    // Nested and in-array occurrences are covered too.
+    assert!(bounded_round_trip_no_panic(
+        br#"{"x":[{"b":2,"$serde_json::private::RawValue":-0.0}]}"#
+    ));
+}
+
+#[test]
+fn fuzz_reserved_key_quirk_still_exists_in_serde_json() {
+    // Pins the premise of the exemption above. If this starts
+    // failing, serde_json fixed the quirk (or `raw_value` is no
+    // longer unified into the build): drop `contains_reserved_key`
+    // from the fuzz target and `bounded_round_trip_no_panic`.
+    let v: Value = serde_json::from_slice(br#"{"a":1,"$serde_json::private::RawValue":-0.0}"#)
+        .expect("first parse succeeds: token is not the first key");
+    assert!(contains_reserved_key(&v));
+    let s = serde_json::to_vec(&v).unwrap();
+    assert!(
+        serde_json::from_slice::<Value>(&s).is_err(),
+        "reparse of {} unexpectedly succeeded",
+        String::from_utf8_lossy(&s)
+    );
+}
+
+#[test]
+fn fuzz_reserved_key_exemption_does_not_swallow_ordinary_values() {
+    // The exemption must stay narrow: ordinary look-alike keys still
+    // go through the real round-trip.
+    for input in [
+        br#"{"$serde_json::private::Other":1}"#.as_slice(),
+        br#"{"RawValue":-0.0}"#.as_slice(),
+        br#"{"a":"$serde_json::private::RawValue"}"#.as_slice(),
+    ] {
+        let v: Value = serde_json::from_slice(input).unwrap();
+        assert!(
+            !contains_reserved_key(&v),
+            "{}",
+            String::from_utf8_lossy(input)
+        );
+        assert!(canonical_fixed_point(input));
+    }
 }
