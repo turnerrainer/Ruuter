@@ -37,6 +37,28 @@ use libfuzzer_sys::fuzz_target;
 // every iteration regardless of convergence.
 const MAX_ROUND_TRIPS: usize = 8;
 
+/// serde_json's reserved `raw_value` magic key. The `raw_value`
+/// feature is switched on in our build by feature unification
+/// (axum -> serde_json/raw_value). With it on, `Value`'s deserialiser
+/// treats an object whose FIRST key is this token as a `RawValue`
+/// wrapper and rejects non-string payloads ("expected raw value").
+/// `Value::Object` is key-sorted, so an input where the token is not
+/// the first key (`{"a":1,"$serde_json::private::RawValue":-0.0}`)
+/// parses fine, then serialises with the token first and fails to
+/// reparse. That is a serde_json reserved-token quirk, not a Ruuter
+/// bug, so such values are out of scope for the round-trip invariant.
+const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
+fn contains_reserved_key(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Object(m) => {
+            m.contains_key(RAW_VALUE_TOKEN) || m.values().any(contains_reserved_key)
+        }
+        serde_json::Value::Array(a) => a.iter().any(contains_reserved_key),
+        _ => false,
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
     // First path: raw bytes → serde_json Value. Panics here are
     // regressions in serde_json itself or in a downstream crate
@@ -75,6 +97,9 @@ fuzz_target!(|data: &[u8]| {
         // cannot read back.
         let mut current = v;
         for _ in 0..MAX_ROUND_TRIPS {
+            if contains_reserved_key(&current) {
+                return; // serde_json reserved-token quirk; see above.
+            }
             let s = serde_json::to_vec(&current).expect("value → bytes must not fail");
             let next: serde_json::Value =
                 serde_json::from_slice(&s).expect("round-trip parse must not fail");

@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI — `security` workflow (audit + deny) restored to green after
+  two new RustSec "unsound" advisories.** Red on every scheduled run
+  since 2026-11-01 (tokio) / 2026-11-11 (rustix). No wire-level or
+  runtime behaviour change; patch-RC classification (lockfile only).
+
+  Pre-fix: `cargo audit --deny warnings` failed on RUSTSEC-2026-0386
+  (tokio 1.52.3, `AsyncFd::new` and related constructors violate I/O
+  safety; fixed in >=1.51.6 <1.52.0 or >=1.53.3) and RUSTSEC-2026-0486
+  (rustix 1.1.4, xattr functions mark unwritten bytes initialised for
+  a zero-length buffer; fixed in >=1.1.6). The `deny` job failed on
+  the tokio advisory too.
+
+  Post-fix: `cargo update -p tokio -p rustix` -> tokio 1.54.1,
+  rustix 1.1.6. No `Cargo.toml` change, no `AsyncFd` or rustix xattr
+  usage in this repo, so no source change was needed. Also reflows one
+  `cargo fmt` diff in `tests/fuzz_json_invariant_fixed_point.rs` so the
+  documented `cargo fmt --check` release gate is clean again.
+
+  Migration: none for consumers of the binary. Library consumers
+  pinning their own `Cargo.lock` should run
+  `cargo update -p tokio -p rustix`.
+
+  ```diff
+  -name = "tokio"   version = "1.52.3"
+  +name = "tokio"   version = "1.54.1"
+  -name = "rustix"  version = "1.1.4"
+  +name = "rustix"  version = "1.1.6"
+  ```
+
+  Regression pin: the `security` workflow itself (`cargo audit
+  --deny warnings` + `cargo deny check`); no Rust test applies to a
+  lockfile-only change.
+
+- **CI — `fuzz` workflow `http_body_deserialize` intermittent crash
+  (red 2026-11-10 and 2026-11-11, green in between).** No runtime
+  behaviour change; test/fuzz-harness only.
+
+  Pre-fix: the round-trip invariant panicked with
+  `invalid type: floating point `-0.0`, expected raw value` (line 1,
+  column 38). Root cause: axum enables `serde_json`'s `raw_value`
+  feature through Cargo feature unification. With it on, an object
+  whose FIRST key is the reserved token
+  `$serde_json::private::RawValue` is decoded as a `RawValue` wrapper
+  and rejects non-string payloads. `Value::Object` is key-sorted, so
+  `{"a":1,"$serde_json::private::RawValue":-0.0}` parses, serialises
+  with the token first, and then fails to reparse. The fuzzer only
+  trips on it when it happens to generate that key, hence the
+  intermittency (the fuzz crate has no committed lockfile, so it also
+  re-resolves deps on every run).
+
+  Post-fix: values containing the reserved key are out of scope for
+  the round-trip invariant, in both the fuzz target and its in-process
+  mirror. The exemption is narrow (exact key match, nested objects and
+  arrays included). Verified by running the real libFuzzer binary on
+  the crash input before (same panic, same column) and after (clean),
+  plus a 150 s campaign on each target.
+
+  Migration: none. Note for operators: a request body whose
+  first-sorted object key is exactly `$serde_json::private::RawValue`
+  with a non-string value is rejected by the JSON parser; this is
+  serde_json behaviour and is unchanged by this PR.
+
+  Regression pins: `tests/fuzz_json_invariant_fixed_point.rs`
+  (`fuzz_crash_input_reserved_raw_value_key_is_out_of_scope`,
+  `fuzz_reserved_key_quirk_still_exists_in_serde_json`,
+  `fuzz_reserved_key_exemption_does_not_swallow_ordinary_values`) and
+  seed `fuzz/corpus_seed/http_body_deserialize/reserved-raw-value-key.json`.
+
 - **CI — two scheduled jobs restored to green after advisory DB
   refresh on 2026-10-21.** No wire-level or runtime behaviour change.
 
