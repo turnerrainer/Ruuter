@@ -6,7 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-
+### Added
+- **OTLP trace export: W3C trace continuity, SERVER span fields,
+  TLS / OTLP-HTTP transport, export headers and resource attributes.**
+  Everything here is opt-in through the standard OpenTelemetry env vars
+  and only takes effect when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. With it
+  unset nothing changes: same spans, same log lines, and the inbound
+  `traceparent` is still propagated and echoed verbatim. Works with any
+  OTLP receiver (OpenTelemetry Collector, Jaeger, Tempo, a vendor
+  endpoint) and for any number of Ruuter instances side by side.
+  **Pre-fix (export on).** The exported `http_request` span always
+  started a NEW trace: `handle_request` adopted the inbound `traceparent`
+  into the DSL context but never set it as the OTel parent, so exported
+  trace ids matched neither `X-Trace-Id`, the log `trace_id` nor the
+  services Ruuter called. The span had kind INTERNAL, no
+  `http.response.status_code` and never an error status. The resource
+  was `service.name` only (`OTEL_RESOURCE_ATTRIBUTES` ignored), and the
+  exporter could only speak plaintext gRPC, so a TLS-terminated or
+  OTLP/HTTP receiver was unreachable.
+  **Post-fix (export on).**
+  - The request span is kind SERVER and a child of the inbound
+    `traceparent`; without one (or with an invalid one) it is a new root.
+  - The `traceparent` Ruuter propagates (DSL context, `http.*` steps,
+    response header) is the request span's own context: same trace id,
+    Ruuter's span id. Downstream services nest under Ruuter, and
+    `X-Trace-Id`, the log `trace_id` and the exported trace id are equal.
+  - `http.response.status_code` is recorded; 5xx sets the span status
+    to Error, 4xx does not.
+  - Resource = SDK defaults + `OTEL_RESOURCE_ATTRIBUTES`; `service.name`
+    (`OTEL_SERVICE_NAME`, default `ruuter-on-rust`) and `service.version`
+    take precedence.
+  - `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`
+    = `grpc` (default) | `http/protobuf` (POST `<endpoint>/v1/traces`);
+    other values warn and fall back to gRPC. `https://` gRPC endpoints
+    use TLS with bundled webpki roots. `OTEL_EXPORTER_OTLP_HEADERS` is
+    sent on every export (parsed by opentelemetry-otlp; never logged).
+  New Rust API (additive): `observability::{otel_active,
+  otlp_transport_from_env, OtlpTransport, otel_resource,
+  build_span_exporter, set_parent_from_traceparent, traceparent_of}`
+  and the `#[doc(hidden)]` test hook `set_otel_active_for_tests`.
+  Dependencies: `tonic` 0.12 added as a direct dependency
+  (`tls-webpki-roots`; already in the tree via opentelemetry-otlp);
+  `opentelemetry-otlp` gains the `tls-webpki-roots`, `http-proto` and
+  `reqwest-client` features.
+  Semver: minor RC (new env-var behaviour; no existing signature
+  changed). Migration: none required; new variables are optional.
+  ```diff
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+  +OTEL_SERVICE_NAME=my-gateway
+  +OTEL_RESOURCE_ATTRIBUTES=deployment.environment=staging,service.namespace=my-system
+  +# optional, for a TLS / OTLP-HTTP / authenticated receiver:
+  +# OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com:4317
+  +# OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+  +# OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20<token>
+  ```
+  Regression tests: `tests/issue_otel_export.rs` (4 of its 5 tests fail
+  on the pre-fix router). The export-off path stays covered by
+  `tests/security.rs::traceparent_adopted_from_request_and_echoed`.
 ### Fixed
 
 - **CI — `security` workflow (audit + deny) restored to green after

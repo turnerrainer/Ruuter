@@ -727,15 +727,63 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Reque
     // the client). Injected into the request headers so the DSL
     // execution context reads the same value downstream — one
     // trace id per request, no reallocation later.
-    let (traceparent_value, needed_injection) = match request
+    let inbound_traceparent = request
         .headers()
         .get("traceparent")
         .and_then(|v| v.to_str().ok())
-    {
-        Some(existing) => (existing.to_string(), false),
-        None => (generate_traceparent(), true),
+        .map(str::to_string);
+    let peer_ip_str = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_default();
+    let otel_active = crate::observability::otel_active();
+    // Request-scoped span. Every downstream `info!`/`warn!`/`error!`
+    // fired during this request inherits these fields when the JSON
+    // formatter (or an OTLP exporter) is active. Fields follow the
+    // OpenTelemetry HTTP semantic conventions where they exist.
+    //
+    // `trace_id` is recorded right after creation (still before any event)
+    // so the OTLP branch below can derive it from the span's own context.
+    // The `otel.*` / status fields stay empty unless OTLP export is wired,
+    // so log output is unchanged when it is not.
+    let request_span = tracing::info_span!(
+        "http_request",
+        otel.name = %format!("HTTP {} /{}", method_str, sanitize_log_value(&uri_path).trim_start_matches('/')),
+        otel.kind = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        http.request.method = %method_str,
+        http.route = %sanitize_log_value(&uri_path),
+        http.response.status_code = tracing::field::Empty,
+        dsl.project = %project_for_span,
+        client.address = %peer_ip_str,
+        trace_id = tracing::field::Empty,
+    );
+    // Adopt the inbound traceparent verbatim if present, else
+    // generate one now so every request-scoped log line carries a
+    // stable `trace_id` (and matches the `X-Trace-Id` returned to
+    // the client). Injected into the request headers so the DSL
+    // execution context reads the same value downstream — one
+    // trace id per request, no reallocation later.
+    //
+    // With OTLP export on, the request span is parented on the inbound
+    // context and the propagated traceparent becomes the span's own
+    // (same trace id, this span as parent), so exported spans, logs,
+    // `X-Trace-Id` and downstream services share one trace.
+    let traceparent_value = if otel_active {
+        request_span.record("otel.kind", "server");
+        if let Some(tp) = inbound_traceparent.as_deref() {
+            crate::observability::set_parent_from_traceparent(&request_span, tp);
+        }
+        crate::observability::traceparent_of(&request_span)
+            .or_else(|| inbound_traceparent.clone())
+            .unwrap_or_else(generate_traceparent)
+    } else {
+        inbound_traceparent
+            .clone()
+            .unwrap_or_else(generate_traceparent)
     };
-    if needed_injection {
+    if inbound_traceparent.as_deref() != Some(traceparent_value.as_str()) {
         if let Ok(hv) = HeaderValue::try_from(traceparent_value.as_str()) {
             request
                 .headers_mut()
@@ -745,32 +793,20 @@ async fn handle_request(State(router): State<Arc<DslRouter>>, mut request: Reque
     let trace_id_str = trace_id_from_traceparent(&traceparent_value)
         .unwrap_or("")
         .to_string();
-
-    let peer_ip_str = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip().to_string())
-        .unwrap_or_default();
-
-    // Request-scoped span. Every downstream `info!`/`warn!`/`error!`
-    // fired during this request inherits these fields when the JSON
-    // formatter (or an OTLP exporter) is active. Fields follow the
-    // OpenTelemetry HTTP semantic conventions where they exist.
-    let request_span = tracing::info_span!(
-        "http_request",
-        otel.name = %format!("HTTP {} /{}", method_str, sanitize_log_value(&uri_path).trim_start_matches('/')),
-        http.request.method = %method_str,
-        http.route = %sanitize_log_value(&uri_path),
-        dsl.project = %project_for_span,
-        client.address = %peer_ip_str,
-        trace_id = %trace_id_str,
-    );
+    request_span.record("trace_id", trace_id_str.as_str());
     let span_for_log = request_span.clone();
 
     let router_for_log = router.clone();
     let response = handle_request_inner(router, request)
         .instrument(request_span)
         .await;
+    if otel_active {
+        let status = response.status().as_u16();
+        span_for_log.record("http.response.status_code", status);
+        if status >= 500 {
+            span_for_log.record("otel.status_code", "ERROR");
+        }
+    }
 
     if router_for_log.config.logging.access_log {
         let status = response.status().as_u16();
