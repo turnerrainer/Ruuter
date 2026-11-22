@@ -42,7 +42,7 @@ indexmap = { version = "2.5", features = ["serde"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "url"] }
 url = "2.5"
 rand = "0.8"
-rquickjs = { version = "0.6", optional = true, features = ["parallel", "futures", "chrono"] }
+rquickjs = { version = "0.7", optional = true, features = ["parallel", "futures"] }
 sha2 = "0.10"
 # Audit finding 11 — inbound multipart/form-data parser (Java parity).
 multer = "3"
